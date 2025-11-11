@@ -37,6 +37,7 @@ impl PortIO for BiosPlatform {
         {
             // In user mode (Windows/Linux/macOS), port I/O requires kernel privileges
             // Return 0 as placeholder - actual implementation requires kernel driver
+            let _port = port; // Suppress unused variable warning
             0
         }
     }
