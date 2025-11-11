@@ -14,7 +14,6 @@ use alloc::vec::Vec;
 
 pub mod crc32;
 pub mod recovery;
-use crc32::crc32;
 use recovery::{verify_sector, ErrorRecovery, RetryStrategy, VerificationMethod};
 
 /// Repair operation result
