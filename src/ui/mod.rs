@@ -18,6 +18,9 @@ use alloc::vec::Vec;
 #[cfg(feature = "std")]
 extern crate std;
 
+pub mod input;
+use input::{InputHandler, KeyCode};
+
 /// UI color codes (for terminals that support ANSI)
 pub mod colors {
     pub const RESET: &str = "\x1b[0m";
@@ -90,9 +93,15 @@ impl UserInterface {
     #[cfg(feature = "std")]
     pub fn prompt_disk_selection(max_index: usize) -> Option<usize> {
         print!("Select drive to repair (0-{}): ", max_index);
-        // TODO: Implement input reading
-        // For now, return None
-        None
+        // Use input handler for reading
+        InputHandler::read_number(max_index)
+    }
+
+    /// Prompt for disk selection (no_std version)
+    #[cfg(not(feature = "std"))]
+    pub fn prompt_disk_selection(max_index: usize) -> Option<usize> {
+        // Use input handler for reading
+        InputHandler::read_number(max_index)
     }
 
     /// Display disk information

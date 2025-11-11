@@ -134,6 +134,8 @@ pub fn get_platform() -> Platform {
     Platform::Bios // Default to BIOS for bootable environments
 }
 
+pub mod bios;
+
 #[cfg(test)]
 mod tests {
     use super::*;
