@@ -27,6 +27,10 @@
 - ✅ BIOS menu integration for disk selection and repair options
 - ✅ UEFI repair engine integration workflow
 - ✅ BIOS repair engine integration workflow
+- ✅ UEFI disk wrapper implementing Disk trait
+- ✅ BIOS disk wrapper implementing Disk trait
+- ✅ UEFI keyboard input framework
+- ✅ BIOS keyboard input framework
 - ✅ Enhanced UEFI bootloader with disk enumeration structure
 - ✅ Enhanced BIOS bootloader with VGA text mode and INT 13h framework
 - ✅ Created input handler for keyboard input (BIOS/UEFI/std)
