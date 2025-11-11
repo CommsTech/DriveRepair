@@ -135,6 +135,9 @@ pub fn get_platform() -> Platform {
 }
 
 pub mod bios;
+pub mod uefi;
+#[cfg(target_os = "windows")]
+pub mod windows;
 
 #[cfg(test)]
 mod tests {
