@@ -26,13 +26,38 @@ fn efi_main(image: Handle, mut st: SystemTable<Boot>) -> Status {
     st.stdout().output_string("x86_64 and ARM64 architectures\n").unwrap();
     st.stdout().output_string("\n").unwrap();
     
-    // TODO: Initialize disk detection
-    // TODO: Enumerate disks
-    // TODO: Show disk list
-    // TODO: Prompt for disk selection
-    // TODO: Run repair
-    
-    // For now, just return success
-    Status::SUCCESS
+            // TODO: Initialize disk detection
+            // Steps:
+            // 1. Get boot services
+            // 2. Locate Block I/O protocol handles
+            // 3. Open each block device
+            // 4. Get media information (size, sector size, etc.)
+            // 5. Create disk list
+            
+            // TODO: Enumerate disks
+            // Use uefi::proto::block::BlockIO protocol
+            // Enumerate all block devices
+            // Filter for hard drives (not CD-ROM, floppy, etc.)
+            
+            // TODO: Show disk list
+            // Display detected drives with:
+            // - Drive number
+            // - Model/Serial (if available)
+            // - Size (formatted)
+            // - Interface type (ATA, SATA, NVMe, USB)
+            
+            // TODO: Prompt for disk selection
+            // Show menu with drive options
+            // Wait for user input
+            // Validate selection
+            
+            // TODO: Run repair
+            // Initialize repair engine with selected disk
+            // Run surface scan
+            // Display progress
+            // Handle errors and retries
+
+            // For now, just return success
+            Status::SUCCESS
 }
 
