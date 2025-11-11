@@ -175,15 +175,17 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(not(target_arch = "x86_64"), ignore)]
     fn test_detect_nvme_controllers() {
-        // This test will fail in non-BIOS environment
+        // This test requires x86_64 architecture and may fail in non-BIOS environment
         // But it validates the structure
         let _result = EnhancedDiskDetector::detect_nvme_controllers();
     }
 
     #[test]
+    #[cfg_attr(not(target_arch = "x86_64"), ignore)]
     fn test_detect_ahci_controllers() {
-        // This test will fail in non-BIOS environment
+        // This test requires x86_64 architecture and may fail in non-BIOS environment
         // But it validates the structure
         let _result = EnhancedDiskDetector::detect_ahci_controllers();
     }

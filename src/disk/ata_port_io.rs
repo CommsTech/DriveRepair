@@ -94,8 +94,19 @@ mod tests {
     fn test_ata_port_io_creation() {
         let port_io = AtaPortIO::new(true);
         assert_eq!(port_io.base_port, 0x1F0);
-
+        
         let port_io2 = AtaPortIO::new(false);
         assert_eq!(port_io2.base_port, 0x170);
+    }
+
+    #[test]
+    #[cfg_attr(not(target_arch = "x86_64"), ignore)]
+    #[cfg_attr(target_os = "windows", ignore)]
+    fn test_ata_port_io_read_register() {
+        // This test requires x86_64 architecture and BIOS environment
+        // Port I/O requires kernel privileges in Windows
+        let port_io = AtaPortIO::new(true);
+        // This will fail in user mode, but validates the structure
+        let _result = port_io.read_register(0);
     }
 }
