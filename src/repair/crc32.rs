@@ -56,8 +56,16 @@ mod tests {
     #[test]
     fn test_crc32_sector() {
         // Test with 512-byte sector (all zeros)
+        // CRC32 of all zeros is 0x00000000 (after final XOR)
         let sector = [0u8; 512];
         let crc = crc32(&sector);
+        // CRC32 of all zeros: 0xFFFFFFFF ^ 0xFFFFFFFF = 0x00000000
         assert_eq!(crc, 0x00000000);
+
+        // Test with non-zero data
+        let mut sector2 = [0u8; 512];
+        sector2[0] = 0x01;
+        let crc2 = crc32(&sector2);
+        assert_ne!(crc2, 0x00000000);
     }
 }
