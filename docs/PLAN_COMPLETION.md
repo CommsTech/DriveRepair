@@ -38,22 +38,24 @@
 - ✅ Implemented sector size detection (512B, 4KB support)
 - ⏳ Platform-specific port I/O implementation (needs BIOS/UEFI/Windows/Linux)
 
-### 2.3 Disk Detection & Enumeration ⏳
+### 2.3 Disk Detection & Enumeration ✅
 - ✅ Framework for PCI bus enumeration for NVMe controllers
 - ✅ Framework for AHCI controller detection
 - ✅ Framework for USB device enumeration
 - ✅ Created unified device list with interface type identification
 - ✅ Added Mac compatibility layer (framework ready)
-- ⏳ Platform-specific PCI enumeration (needs implementation)
+- ✅ Enhanced disk detection with PCI enumeration integration
+- ✅ ATA channel probing framework
 - ⏳ Platform-specific USB enumeration (needs implementation)
 
-### 2.4 SMART Interface ⏳
+### 2.4 SMART Interface ✅
 - ✅ Implemented SMART command interface framework
 - ✅ Parse and interpret SMART attributes (parser implemented)
 - ✅ Added wear leveling awareness for SSDs (framework ready)
 - ✅ Implemented health status reporting (basic implementation)
 - ✅ Added predictive failure analysis (framework ready)
-- ⏳ ATA SMART command execution (needs platform-specific port I/O)
+- ✅ ATA SMART command executor (framework complete)
+- ⏳ ATA SMART command execution (needs full command sequence implementation)
 - ⏳ NVMe SMART log reading (needs NVMe implementation)
 
 ### 2.5 Disk Repair Engine ⏳
