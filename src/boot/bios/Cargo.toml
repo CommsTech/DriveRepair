@@ -11,5 +11,4 @@ drive-repair = { path = "../../..", features = ["alloc"] }
 name = "drive-repair-bios"
 path = "main.rs"
 
-[workspace]
 
