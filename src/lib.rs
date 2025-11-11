@@ -10,6 +10,7 @@ extern crate alloc;
 extern crate std;
 
 pub mod disk;
+pub mod platform;
 pub mod repair;
 pub mod smart;
 pub mod ui;
