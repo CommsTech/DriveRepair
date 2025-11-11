@@ -1,12 +1,10 @@
 // Error recovery strategies
 // Implements various retry and recovery mechanisms for disk operations
 
-use crate::disk::DiskError;
 use core::result::Result;
-use core::time::Duration;
 
 /// Retry strategy for disk operations
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RetryStrategy {
     /// No retry
     None,

@@ -51,7 +51,7 @@ impl UsbDisk {
 
     /// Send SCSI command via USB
     #[allow(dead_code)]
-    fn send_scsi_command(&self, command: &[u8], data: &mut [u8]) -> Result<(), DiskError> {
+    fn send_scsi_command(&self, _command: &[u8], _data: &mut [u8]) -> Result<(), DiskError> {
         // TODO: Implement USB mass storage command
         // 1. Build USB bulk-only transport command block wrapper
         // 2. Send command via bulk-out endpoint
@@ -83,7 +83,7 @@ impl Disk for UsbDisk {
         })
     }
 
-    fn read_sectors(&self, lba: u64, count: u32, buffer: &mut [u8]) -> Result<(), DiskError> {
+    fn read_sectors(&self, lba: u64, count: u32, _buffer: &mut [u8]) -> Result<(), DiskError> {
         if !self.is_ready() {
             return Err(DiskError::NotReady);
         }
@@ -101,7 +101,7 @@ impl Disk for UsbDisk {
         Ok(())
     }
 
-    fn write_sectors(&self, lba: u64, count: u32, buffer: &[u8]) -> Result<(), DiskError> {
+    fn write_sectors(&self, lba: u64, count: u32, _buffer: &[u8]) -> Result<(), DiskError> {
         if !self.is_ready() {
             return Err(DiskError::NotReady);
         }

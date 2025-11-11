@@ -4,7 +4,6 @@
 #![allow(dead_code)]
 
 use crate::disk::{Disk, DiskError};
-use crate::smart::{SmartHealthStatus, SmartInterface};
 use core::result::Result;
 
 #[cfg(feature = "alloc")]
@@ -139,7 +138,7 @@ impl<D: Disk> RepairEngine<D> {
             }
         };
 
-        for (index, sector) in sectors.iter().enumerate() {
+        for (_index, sector) in sectors.iter().enumerate() {
             let result = self.repair_sector(*sector, &mut sector_buffer)?;
 
             match result {
@@ -231,7 +230,7 @@ impl<D: Disk> RepairEngine<D> {
     }
 
     /// Execute TRIM command for SSDs
-    pub fn trim_sectors(&self, lba: u64, count: u32) -> Result<(), DiskError> {
+    pub fn trim_sectors(&self, _lba: u64, _count: u32) -> Result<(), DiskError> {
         // TODO: Implement TRIM command
         // For ATA: DATA SET MANAGEMENT command (0x06)
         // For NVMe: DEALLOCATE command

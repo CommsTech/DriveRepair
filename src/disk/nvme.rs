@@ -83,7 +83,7 @@ impl NvmeDisk {
 
     /// Submit NVMe command
     #[allow(dead_code)]
-    fn submit_command(&self, opcode: u8, nsid: u32, data: &[u8]) -> Result<(), DiskError> {
+    fn submit_command(&self, _opcode: u8, _nsid: u32, _data: &[u8]) -> Result<(), DiskError> {
         // TODO: Implement NVMe command submission
         // 1. Build command in submission queue
         // 2. Update doorbell
@@ -115,7 +115,7 @@ impl Disk for NvmeDisk {
         })
     }
 
-    fn read_sectors(&self, lba: u64, count: u32, buffer: &mut [u8]) -> Result<(), DiskError> {
+    fn read_sectors(&self, lba: u64, count: u32, _buffer: &mut [u8]) -> Result<(), DiskError> {
         if !self.is_ready() {
             return Err(DiskError::NotReady);
         }
@@ -135,7 +135,7 @@ impl Disk for NvmeDisk {
         Ok(())
     }
 
-    fn write_sectors(&self, lba: u64, count: u32, buffer: &[u8]) -> Result<(), DiskError> {
+    fn write_sectors(&self, lba: u64, count: u32, _buffer: &[u8]) -> Result<(), DiskError> {
         if !self.is_ready() {
             return Err(DiskError::NotReady);
         }

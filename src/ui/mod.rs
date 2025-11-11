@@ -3,9 +3,9 @@
 
 #![allow(dead_code)]
 
-use crate::disk::{Disk, DiskInfo, DiskInterface};
+use crate::disk::{DiskInfo, DiskInterface};
 use crate::repair::{RepairConfig, RepairResult, RepairStats};
-use crate::smart::{SmartHealthStatus, SmartInterface};
+use crate::smart::SmartHealthStatus;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;

@@ -14,10 +14,7 @@ pub mod repair;
 pub mod smart;
 pub mod ui;
 
-#[cfg(feature = "alloc")]
-use alloc::string::String;
-#[cfg(feature = "alloc")]
-use alloc::vec::Vec;
+// Re-export commonly used types
 
 // Re-export commonly used types
 pub use disk::{Disk, DiskError, DiskInfo, DiskInterface};

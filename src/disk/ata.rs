@@ -54,17 +54,17 @@ impl AtaDisk {
 
     /// Read ATA register
     #[allow(dead_code)]
-    fn read_register(&self, offset: u16) -> u8 {
-        let base = if self.primary { 0x1F0 } else { 0x170 };
+    fn read_register(&self, _offset: u16) -> u8 {
+        let _base = if self.primary { 0x1F0 } else { 0x170 };
         // TODO: Implement actual port I/O
         // unsafe { inb(base + offset) }
         0
     }
-
+    
     /// Write ATA register
     #[allow(dead_code)]
-    fn write_register(&self, offset: u16, value: u8) {
-        let base = if self.primary { 0x1F0 } else { 0x170 };
+    fn write_register(&self, _offset: u16, _value: u8) {
+        let _base = if self.primary { 0x1F0 } else { 0x170 };
         // TODO: Implement actual port I/O
         // unsafe { outb(base + offset, value) }
     }
@@ -79,7 +79,7 @@ impl AtaDisk {
 
     /// Send ATA command
     #[allow(dead_code)]
-    fn send_command(&self, command: u8, lba: u64, count: u8) -> Result<(), DiskError> {
+    fn send_command(&self, _command: u8, _lba: u64, _count: u8) -> Result<(), DiskError> {
         // TODO: Implement ATA command sending
         // 1. Wait for drive ready
         // 2. Set LBA registers (48-bit LBA mode for large drives)
@@ -111,7 +111,7 @@ impl Disk for AtaDisk {
         })
     }
 
-    fn read_sectors(&self, lba: u64, count: u32, buffer: &mut [u8]) -> Result<(), DiskError> {
+    fn read_sectors(&self, lba: u64, count: u32, _buffer: &mut [u8]) -> Result<(), DiskError> {
         if !self.is_ready() {
             return Err(DiskError::NotReady);
         }
@@ -129,7 +129,7 @@ impl Disk for AtaDisk {
         Ok(())
     }
 
-    fn write_sectors(&self, lba: u64, count: u32, buffer: &[u8]) -> Result<(), DiskError> {
+    fn write_sectors(&self, lba: u64, count: u32, _buffer: &[u8]) -> Result<(), DiskError> {
         if !self.is_ready() {
             return Err(DiskError::NotReady);
         }

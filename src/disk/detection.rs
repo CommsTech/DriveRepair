@@ -5,7 +5,7 @@ use crate::disk::ata::AtaDisk;
 use crate::disk::nvme::{NvmeController, NvmeDisk};
 use crate::disk::sata::{AhciController, SataDisk};
 use crate::disk::usb::UsbDisk;
-use crate::disk::{Disk, DiskError, DiskInfo, DiskInterface};
+use crate::disk::{Disk, DiskError, DiskInfo};
 
 #[cfg(feature = "alloc")]
 extern crate alloc;

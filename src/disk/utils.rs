@@ -1,7 +1,7 @@
 // Utility functions for disk operations
 // Helper functions for common disk operations and conversions
 
-use crate::disk::{DiskError, SECTOR_SIZE_4096, SECTOR_SIZE_512};
+// Utility functions for disk operations
 
 /// Convert bytes to sectors
 pub fn bytes_to_sectors(bytes: u64, sector_size: u64) -> u64 {

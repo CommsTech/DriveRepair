@@ -83,7 +83,7 @@ impl SataDisk {
 
     /// Send ATA command via AHCI
     #[allow(dead_code)]
-    fn send_command(&self, command: u8, lba: u64, count: u16) -> Result<(), DiskError> {
+    fn send_command(&self, _command: u8, _lba: u64, _count: u16) -> Result<(), DiskError> {
         // TODO: Implement AHCI command submission
         // 1. Allocate command list and FIS
         // 2. Build command FIS
@@ -116,7 +116,7 @@ impl Disk for SataDisk {
         })
     }
 
-    fn read_sectors(&self, lba: u64, count: u32, buffer: &mut [u8]) -> Result<(), DiskError> {
+    fn read_sectors(&self, lba: u64, count: u32, _buffer: &mut [u8]) -> Result<(), DiskError> {
         if !self.is_ready() {
             return Err(DiskError::NotReady);
         }
@@ -134,7 +134,7 @@ impl Disk for SataDisk {
         Ok(())
     }
 
-    fn write_sectors(&self, lba: u64, count: u32, buffer: &[u8]) -> Result<(), DiskError> {
+    fn write_sectors(&self, lba: u64, count: u32, _buffer: &[u8]) -> Result<(), DiskError> {
         if !self.is_ready() {
             return Err(DiskError::NotReady);
         }

@@ -29,9 +29,8 @@ uefi = []
 [workspace]
 members = []
 
-# Build targets for 64-bit and ARM
-[build]
-target = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc", "x86_64-apple-darwin", "aarch64-apple-darwin"]
+# Note: Build targets are specified per build command
+# Supported targets: x86_64, aarch64 (ARM64)
 
 [profile.release]
 opt-level = "z"  # Optimize for size

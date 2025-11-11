@@ -3,7 +3,7 @@
 
 #![allow(dead_code)]
 
-use crate::disk::{Disk, DiskError};
+use crate::disk::DiskError;
 use core::result::Result;
 
 #[cfg(feature = "alloc")]
