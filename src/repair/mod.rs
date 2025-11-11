@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 
 use crate::disk::{Disk, DiskError};
-use crate::smart::{SmartInterface, SmartHealthStatus};
+use crate::smart::{SmartHealthStatus, SmartInterface};
 use core::result::Result;
 
 #[cfg(feature = "alloc")]
@@ -14,7 +14,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 pub mod recovery;
-use recovery::{ErrorRecovery, RetryStrategy, VerificationMethod, verify_sector};
+use recovery::{verify_sector, ErrorRecovery, RetryStrategy, VerificationMethod};
 
 /// Repair operation result
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,7 +86,7 @@ impl<D: Disk> RepairEngine<D> {
     pub fn new(disk: D, config: RepairConfig) -> Self {
         Self { disk, config }
     }
-    
+
     /// Scan and repair disk
     #[cfg(feature = "alloc")]
     pub fn scan_and_repair<F>(&mut self, progress_callback: F) -> Result<RepairStats, DiskError>
@@ -97,11 +97,11 @@ impl<D: Disk> RepairEngine<D> {
         let start = self.config.start_sector.min(total_sectors);
         let end = self.config.end_sector.min(total_sectors);
         let sectors_to_scan = end - start;
-        
+
         let mut stats = RepairStats::default();
         let mut sector_buffer = Vec::new();
         sector_buffer.resize(self.disk.sector_size() as usize, 0u8);
-        
+
         let sectors = match self.config.scan_pattern {
             ScanPattern::Sequential => (start..end).collect(),
             ScanPattern::Reverse => (start..end).rev().collect(),
@@ -122,7 +122,7 @@ impl<D: Disk> RepairEngine<D> {
                 let mut sectors: Vec<u64> = Vec::new();
                 let mut left = start;
                 let mut right = end - 1;
-                
+
                 while left <= right {
                     if left == right {
                         sectors.push(left);
@@ -138,23 +138,23 @@ impl<D: Disk> RepairEngine<D> {
                 sectors
             }
         };
-        
+
         for (index, sector) in sectors.iter().enumerate() {
             let result = self.repair_sector(*sector, &mut sector_buffer)?;
-            
+
             match result {
                 RepairResult::Repaired => stats.repaired += 1,
                 RepairResult::Recovered => stats.recovered += 1,
                 RepairResult::Failed => stats.failed += 1,
                 RepairResult::Skipped => stats.skipped += 1,
             }
-            
+
             progress_callback(*sector, sectors_to_scan, result);
         }
-        
+
         Ok(stats)
     }
-    
+
     /// Repair a single sector
     fn repair_sector(&self, lba: u64, buffer: &mut [u8]) -> Result<RepairResult, DiskError> {
         // Create error recovery with retry strategy
@@ -166,7 +166,7 @@ impl<D: Disk> RepairEngine<D> {
             },
             self.config.max_retries,
         );
-        
+
         // Try to read sector with retries
         match recovery.retry(|| self.disk.read_sectors(lba, 1, buffer)) {
             Ok(()) => {
@@ -176,7 +176,7 @@ impl<D: Disk> RepairEngine<D> {
                 } else {
                     VerificationMethod::Checksum
                 };
-                
+
                 if verify_sector(buffer, verification_method) {
                     Ok(RepairResult::Repaired)
                 } else {
@@ -197,7 +197,7 @@ impl<D: Disk> RepairEngine<D> {
             }
         }
     }
-    
+
     /// Read sector with retry logic
     pub fn read_sector_with_retry(&self, lba: u64, buffer: &mut [u8]) -> Result<(), DiskError> {
         let recovery = ErrorRecovery::new(
@@ -208,28 +208,28 @@ impl<D: Disk> RepairEngine<D> {
             },
             self.config.max_retries,
         );
-        
+
         recovery.retry(|| self.disk.read_sectors(lba, 1, buffer))
     }
-    
+
     /// Write sector with verification
     #[cfg(feature = "alloc")]
     pub fn write_sector_with_verify(&self, lba: u64, buffer: &[u8]) -> Result<(), DiskError> {
         // Write sector
         self.disk.write_sectors(lba, 1, buffer)?;
-        
+
         // Verify write
         let mut read_buffer = Vec::new();
         read_buffer.resize(buffer.len(), 0u8);
         self.disk.read_sectors(lba, 1, &mut read_buffer)?;
-        
+
         if read_buffer == buffer {
             Ok(())
         } else {
             Err(DiskError::WriteError)
         }
     }
-    
+
     /// Execute TRIM command for SSDs
     pub fn trim_sectors(&self, lba: u64, count: u32) -> Result<(), DiskError> {
         // TODO: Implement TRIM command
@@ -237,7 +237,7 @@ impl<D: Disk> RepairEngine<D> {
         // For NVMe: DEALLOCATE command
         Ok(())
     }
-    
+
     /// Secure erase (for SSDs)
     pub fn secure_erase(&self) -> Result<(), DiskError> {
         // TODO: Implement secure erase
@@ -261,7 +261,7 @@ impl RepairStats {
     pub fn total(&self) -> u64 {
         self.repaired + self.recovered + self.failed + self.skipped
     }
-    
+
     /// Get success rate (repaired + recovered)
     pub fn success_rate(&self) -> f64 {
         let total = self.total();
@@ -275,7 +275,7 @@ impl RepairStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_repair_stats() {
         let stats = RepairStats {
@@ -284,9 +284,8 @@ mod tests {
             failed: 10,
             skipped: 0,
         };
-        
+
         assert_eq!(stats.total(), 160);
         assert_eq!(stats.success_rate(), 150.0 / 160.0);
     }
 }
-

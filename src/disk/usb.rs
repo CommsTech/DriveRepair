@@ -25,7 +25,7 @@ pub struct UsbDisk {
 
 impl UsbDisk {
     /// Create new USB disk instance
-    /// 
+    ///
     /// # Arguments
     /// * `device_address` - USB device address
     pub fn new(device_address: u8) -> Result<Self, DiskError> {
@@ -35,7 +35,7 @@ impl UsbDisk {
         // 3. Get device descriptor
         // 4. Get capacity via SCSI READ CAPACITY
         // 5. Get inquiry data (model, serial, firmware)
-        
+
         Ok(Self {
             device_address,
             sector_size: SECTOR_SIZE_512,
@@ -48,7 +48,7 @@ impl UsbDisk {
             firmware: String::new(),
         })
     }
-    
+
     /// Send SCSI command via USB
     #[allow(dead_code)]
     fn send_scsi_command(&self, command: &[u8], data: &mut [u8]) -> Result<(), DiskError> {
@@ -82,59 +82,58 @@ impl Disk for UsbDisk {
             firmware: "",
         })
     }
-    
+
     fn read_sectors(&self, lba: u64, count: u32, buffer: &mut [u8]) -> Result<(), DiskError> {
         if !self.is_ready() {
             return Err(DiskError::NotReady);
         }
-        
+
         if lba + count as u64 > self.total_sectors {
             return Err(DiskError::InvalidSector);
         }
-        
+
         // TODO: Implement USB read
         // 1. Build SCSI READ(10) or READ(16) command
         // 2. Send via USB bulk-only transport
         // 3. Receive data
         // 4. Handle errors and retries
-        
+
         Ok(())
     }
-    
+
     fn write_sectors(&self, lba: u64, count: u32, buffer: &[u8]) -> Result<(), DiskError> {
         if !self.is_ready() {
             return Err(DiskError::NotReady);
         }
-        
+
         if lba + count as u64 > self.total_sectors {
             return Err(DiskError::InvalidSector);
         }
-        
+
         // TODO: Implement USB write
         // 1. Build SCSI WRITE(10) or WRITE(16) command
         // 2. Send data via USB bulk-only transport
         // 3. Wait for completion
         // 4. Handle errors and retries
-        
+
         Ok(())
     }
-    
+
     fn sector_size(&self) -> u64 {
         self.sector_size
     }
-    
+
     fn total_sectors(&self) -> u64 {
         self.total_sectors
     }
-    
+
     fn is_ready(&self) -> bool {
         // TODO: Check USB device status
         true
     }
-    
+
     fn flush(&self) -> Result<(), DiskError> {
         // TODO: Send SCSI SYNCHRONIZE CACHE command
         Ok(())
     }
 }
-

@@ -84,13 +84,13 @@ impl ErrorRecovery {
         E: Clone,
     {
         let mut last_error = None;
-        
+
         for attempt in 0..self.max_attempts {
             match operation() {
                 Ok(result) => return Ok(result),
                 Err(e) => {
                     last_error = Some(e.clone());
-                    
+
                     if attempt < self.max_attempts - 1 {
                         let delay = self.strategy.delay_for_attempt(attempt);
                         if delay > 0 {
@@ -101,7 +101,7 @@ impl ErrorRecovery {
                 }
             }
         }
-        
+
         Err(last_error.unwrap())
     }
 }
@@ -145,14 +145,14 @@ pub fn verify_sector(data: &[u8], method: VerificationMethod) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_retry_strategy_fixed_delay() {
         let strategy = RetryStrategy::FixedDelay(100);
         assert_eq!(strategy.delay_for_attempt(0), 100);
         assert_eq!(strategy.delay_for_attempt(5), 100);
     }
-    
+
     #[test]
     fn test_retry_strategy_exponential() {
         let strategy = RetryStrategy::ExponentialBackoff {
@@ -166,14 +166,13 @@ mod tests {
         assert_eq!(strategy.delay_for_attempt(3), 800);
         assert_eq!(strategy.delay_for_attempt(4), 1000); // Capped at max
     }
-    
+
     #[test]
     fn test_verify_sector_checksum() {
         let data = [0x01, 0x02, 0x03, 0x04];
         assert!(verify_sector(&data, VerificationMethod::Checksum));
-        
+
         let zeros = [0u8; 512];
         assert!(!verify_sector(&zeros, VerificationMethod::Checksum));
     }
 }
-

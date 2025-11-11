@@ -41,13 +41,13 @@ impl NvmeController {
         // 5. Initialize controller
         // 6. Identify controller
         // 7. Get namespace list
-        
+
         Ok(Self {
             base_address: 0,
             namespace_count: 0,
         })
     }
-    
+
     /// Get number of namespaces
     pub fn namespace_count(&self) -> u32 {
         self.namespace_count
@@ -56,7 +56,7 @@ impl NvmeController {
 
 impl NvmeDisk {
     /// Create new NVMe disk instance
-    /// 
+    ///
     /// # Arguments
     /// * `controller` - NVMe controller instance
     /// * `namespace_id` - Namespace ID (typically 1)
@@ -66,7 +66,7 @@ impl NvmeDisk {
         // 2. Get namespace capacity (64-bit LBA)
         // 3. Get sector size (LBA format)
         // 4. Get model, serial, firmware from identify controller
-        
+
         Ok(Self {
             controller,
             namespace_id,
@@ -80,7 +80,7 @@ impl NvmeDisk {
             firmware: String::new(),
         })
     }
-    
+
     /// Submit NVMe command
     #[allow(dead_code)]
     fn submit_command(&self, opcode: u8, nsid: u32, data: &[u8]) -> Result<(), DiskError> {
@@ -114,16 +114,16 @@ impl Disk for NvmeDisk {
             firmware: "",
         })
     }
-    
+
     fn read_sectors(&self, lba: u64, count: u32, buffer: &mut [u8]) -> Result<(), DiskError> {
         if !self.is_ready() {
             return Err(DiskError::NotReady);
         }
-        
+
         if lba + count as u64 > self.total_sectors {
             return Err(DiskError::InvalidSector);
         }
-        
+
         // TODO: Implement NVMe read
         // 1. Build READ command (opcode 0x02)
         // 2. Set starting LBA (64-bit)
@@ -131,19 +131,19 @@ impl Disk for NvmeDisk {
         // 4. Submit command
         // 5. Wait for completion
         // 6. Handle errors and retries
-        
+
         Ok(())
     }
-    
+
     fn write_sectors(&self, lba: u64, count: u32, buffer: &[u8]) -> Result<(), DiskError> {
         if !self.is_ready() {
             return Err(DiskError::NotReady);
         }
-        
+
         if lba + count as u64 > self.total_sectors {
             return Err(DiskError::InvalidSector);
         }
-        
+
         // TODO: Implement NVMe write
         // 1. Build WRITE command (opcode 0x01)
         // 2. Set starting LBA (64-bit)
@@ -151,26 +151,25 @@ impl Disk for NvmeDisk {
         // 4. Submit command
         // 5. Wait for completion
         // 6. Handle errors and retries
-        
+
         Ok(())
     }
-    
+
     fn sector_size(&self) -> u64 {
         self.sector_size
     }
-    
+
     fn total_sectors(&self) -> u64 {
         self.total_sectors
     }
-    
+
     fn is_ready(&self) -> bool {
         // TODO: Check controller status
         true
     }
-    
+
     fn flush(&self) -> Result<(), DiskError> {
         // TODO: Send FLUSH command (opcode 0x00)
         Ok(())
     }
 }
-

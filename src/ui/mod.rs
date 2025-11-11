@@ -11,9 +11,9 @@ use crate::smart::{SmartHealthStatus, SmartInterface};
 extern crate alloc;
 
 #[cfg(feature = "alloc")]
-use alloc::vec::Vec;
-#[cfg(feature = "alloc")]
 use alloc::string::String;
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
 
 #[cfg(feature = "std")]
 extern crate std;
@@ -46,21 +46,23 @@ impl UserInterface {
         println!("{}", "=".repeat(60));
         println!();
     }
-    
+
     #[cfg(not(feature = "std"))]
     pub fn show_welcome() {
         // No-op for no_std environment
     }
-    
+
     /// Display disk list
     #[cfg(all(feature = "alloc", feature = "std"))]
     pub fn show_disk_list(disks: &[DiskInfo]) {
         println!("Detected Drives:");
         println!("{}", "-".repeat(60));
-        println!("{:<4} {:<8} {:<20} {:<12} {:<10}", 
-                 "ID", "Type", "Model", "Size", "Status");
+        println!(
+            "{:<4} {:<8} {:<20} {:<12} {:<10}",
+            "ID", "Type", "Model", "Size", "Status"
+        );
         println!("{}", "-".repeat(60));
-        
+
         for (index, disk) in disks.iter().enumerate() {
             let interface_str = match disk.interface {
                 DiskInterface::ATA => "ATA",
@@ -68,18 +70,22 @@ impl UserInterface {
                 DiskInterface::NVMe => "NVMe",
                 DiskInterface::USB => "USB",
             };
-            
+
             let size_str = Self::format_size(disk.size_bytes);
             let status = "Ready"; // TODO: Get actual status
-            
-            println!("{:<4} {:<8} {:<20} {:<12} {:<10}",
-                     index, interface_str, 
-                     Self::truncate_string(&disk.model, 20),
-                     size_str, status);
+
+            println!(
+                "{:<4} {:<8} {:<20} {:<12} {:<10}",
+                index,
+                interface_str,
+                Self::truncate_string(&disk.model, 20),
+                size_str,
+                status
+            );
         }
         println!();
     }
-    
+
     /// Prompt for disk selection
     #[cfg(feature = "std")]
     pub fn prompt_disk_selection(max_index: usize) -> Option<usize> {
@@ -88,7 +94,7 @@ impl UserInterface {
         // For now, return None
         None
     }
-    
+
     /// Display disk information
     #[cfg(feature = "std")]
     pub fn show_disk_info(disk: &DiskInfo) {
@@ -103,7 +109,7 @@ impl UserInterface {
         println!("Total Sectors: {}", disk.total_sectors);
         println!();
     }
-    
+
     /// Display SMART health status
     #[cfg(feature = "std")]
     pub fn show_smart_status(status: SmartHealthStatus) {
@@ -123,7 +129,7 @@ impl UserInterface {
             }
         }
     }
-    
+
     /// Display repair progress
     #[cfg(feature = "std")]
     pub fn show_repair_progress(current: u64, total: u64, result: RepairResult) {
@@ -132,11 +138,11 @@ impl UserInterface {
         } else {
             0
         };
-        
+
         let bar_width = 50;
         let filled = (bar_width as f64 * percentage as f64 / 100.0) as usize;
         let bar = "=".repeat(filled) + &" ".repeat(bar_width - filled);
-        
+
         let status = match result {
             RepairResult::Repaired => {
                 let mut s = String::from(colors::GREEN);
@@ -158,11 +164,13 @@ impl UserInterface {
             }
             RepairResult::Skipped => String::from("Skipped"),
         };
-        
-        print!("\r[{}] {}% - Sector {} - {}    ", 
-               bar, percentage, current, status);
+
+        print!(
+            "\r[{}] {}% - Sector {} - {}    ",
+            bar, percentage, current, status
+        );
     }
-    
+
     /// Display repair statistics
     #[cfg(feature = "std")]
     pub fn show_repair_stats(stats: &RepairStats) {
@@ -177,7 +185,7 @@ impl UserInterface {
         println!("Success Rate: {:.2}%", stats.success_rate() * 100.0);
         println!();
     }
-    
+
     /// Display repair configuration
     #[cfg(feature = "std")]
     pub fn show_repair_config(config: &RepairConfig) {
@@ -192,31 +200,31 @@ impl UserInterface {
         println!("End Sector: {}", config.end_sector);
         println!();
     }
-    
+
     /// Clear screen
     #[cfg(feature = "std")]
     pub fn clear_screen() {
         // ANSI escape sequence to clear screen
         print!("\x1b[2J\x1b[H");
     }
-    
+
     #[cfg(not(feature = "std"))]
     pub fn clear_screen() {
         // No-op for no_std environment
     }
-    
+
     /// Format size for display
     #[cfg(feature = "alloc")]
     fn format_size(bytes: u64) -> String {
         const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB", "PB"];
         let mut size = bytes as f64;
         let mut unit_idx = 0;
-        
+
         while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
             size /= 1024.0;
             unit_idx += 1;
         }
-        
+
         {
             // Simple formatting without format! macro
             // For no_std, we'll use a simpler approach
@@ -260,7 +268,7 @@ impl UserInterface {
             s
         }
     }
-    
+
     /// Truncate string to specified length
     #[cfg(feature = "alloc")]
     fn truncate_string(s: &str, max_len: usize) -> String {
@@ -275,4 +283,3 @@ impl UserInterface {
         }
     }
 }
-

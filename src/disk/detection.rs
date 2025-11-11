@@ -1,21 +1,21 @@
 // Disk detection and enumeration
 // Discovers all connected drives via PCI, AHCI, and USB
 
-use crate::disk::{Disk, DiskError, DiskInfo, DiskInterface};
 use crate::disk::ata::AtaDisk;
-use crate::disk::sata::{AhciController, SataDisk};
 use crate::disk::nvme::{NvmeController, NvmeDisk};
+use crate::disk::sata::{AhciController, SataDisk};
 use crate::disk::usb::UsbDisk;
+use crate::disk::{Disk, DiskError, DiskInfo, DiskInterface};
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
 #[cfg(feature = "alloc")]
-use alloc::vec::Vec;
-#[cfg(feature = "alloc")]
 use alloc::boxed::Box;
 #[cfg(feature = "alloc")]
 use alloc::string::String;
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
 
 /// Disk enumerator
 pub struct DiskEnumerator;
@@ -25,7 +25,7 @@ impl DiskEnumerator {
     #[cfg(feature = "alloc")]
     pub fn enumerate() -> Result<Vec<Box<dyn Disk>>, DiskError> {
         let mut disks: Vec<Box<dyn Disk>> = Vec::new();
-        
+
         // Enumerate NVMe drives
         if let Ok(controller) = NvmeController::detect() {
             let namespace_count = controller.namespace_count();
@@ -38,7 +38,7 @@ impl DiskEnumerator {
                 }
             }
         }
-        
+
         // Enumerate SATA drives via AHCI
         if let Ok(controller) = AhciController::detect() {
             let port_count = controller.port_count();
@@ -51,7 +51,7 @@ impl DiskEnumerator {
                 }
             }
         }
-        
+
         // Enumerate ATA/IDE drives
         // Primary channel, master
         if let Ok(disk) = AtaDisk::new(true, true) {
@@ -77,7 +77,7 @@ impl DiskEnumerator {
                 disks.push(Box::new(disk));
             }
         }
-        
+
         // Enumerate USB drives
         // TODO: Implement USB enumeration
         // For now, try common device addresses
@@ -88,22 +88,22 @@ impl DiskEnumerator {
                 }
             }
         }
-        
+
         Ok(disks)
     }
-    
+
     /// Get disk information list
     #[cfg(feature = "alloc")]
     pub fn get_disk_list() -> Result<Vec<DiskInfo>, DiskError> {
         let disks = Self::enumerate()?;
         let mut info_list = Vec::new();
-        
+
         for disk in disks {
             if let Ok(info) = disk.info() {
                 info_list.push(info);
             }
         }
-        
+
         Ok(info_list)
     }
 }
@@ -114,12 +114,12 @@ pub fn format_size(bytes: u64) -> alloc::string::String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB", "PB"];
     let mut size = bytes as f64;
     let mut unit_idx = 0;
-    
+
     while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
         size /= 1024.0;
         unit_idx += 1;
     }
-    
+
     {
         // Simple formatting without format! macro
         let int_part = size as u64;
@@ -166,7 +166,7 @@ pub fn format_size(bytes: u64) -> alloc::string::String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_format_size() {
         assert_eq!(format_size(512), "512.00 B");
@@ -176,4 +176,3 @@ mod tests {
         assert_eq!(format_size(1024u64.pow(4)), "1.00 TB");
     }
 }
-

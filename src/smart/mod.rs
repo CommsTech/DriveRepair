@@ -53,22 +53,22 @@ pub trait SmartInterface {
     /// Read SMART attributes
     #[cfg(feature = "alloc")]
     fn read_attributes(&self) -> Result<Vec<SmartAttribute>, DiskError>;
-    
+
     /// Read specific SMART attribute
     fn read_attribute(&self, id: u8) -> Result<SmartAttribute, DiskError>;
-    
+
     /// Get SMART health status
     fn health_status(&self) -> Result<SmartHealthStatus, DiskError>;
-    
+
     /// Enable SMART
     fn enable(&self) -> Result<(), DiskError>;
-    
+
     /// Disable SMART
     fn disable(&self) -> Result<(), DiskError>;
-    
+
     /// Check if SMART is enabled
     fn is_enabled(&self) -> Result<bool, DiskError>;
-    
+
     /// Run SMART self-test
     fn run_self_test(&self, test_type: SmartTestType) -> Result<(), DiskError>;
 }
@@ -93,31 +93,30 @@ impl SmartParser {
         if data.len() < 12 {
             return None;
         }
-        
+
         Some(SmartAttribute {
             id: data[0],
             flags: u16::from_le_bytes([data[1], data[2]]),
             current: data[3],
             worst: data[4],
             raw_value: u64::from_le_bytes([
-                data[5], data[6], data[7], data[8],
-                data[9], data[10], data[11], 0,
+                data[5], data[6], data[7], data[8], data[9], data[10], data[11], 0,
             ]),
             threshold: data[12],
         })
     }
-    
+
     /// Interpret SMART health status from attributes
     pub fn interpret_health(attributes: &[SmartAttribute]) -> SmartHealthStatus {
         let mut has_warnings = false;
         let mut has_failures = false;
-        
+
         for attr in attributes {
             // Check if attribute is below threshold
             if attr.current < attr.threshold && attr.threshold > 0 {
                 has_failures = true;
             }
-            
+
             // Check critical attributes
             match attr.id {
                 SMART_ATTR_REALLOCATED_SECTORS => {
@@ -138,7 +137,7 @@ impl SmartParser {
                 _ => {}
             }
         }
-        
+
         if has_failures {
             SmartHealthStatus::Failing
         } else if has_warnings {
@@ -147,7 +146,7 @@ impl SmartParser {
             SmartHealthStatus::Healthy
         }
     }
-    
+
     /// Get wear leveling percentage for SSDs
     pub fn get_wear_leveling(attributes: &[SmartAttribute]) -> Option<u8> {
         for attr in attributes {
@@ -157,7 +156,7 @@ impl SmartParser {
         }
         None
     }
-    
+
     /// Get power-on hours
     pub fn get_power_on_hours(attributes: &[SmartAttribute]) -> Option<u64> {
         for attr in attributes {
@@ -172,7 +171,7 @@ impl SmartParser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_parse_attribute() {
         let data = [
@@ -183,7 +182,7 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Raw value
             0x00, // Threshold
         ];
-        
+
         if let Some(attr) = SmartParser::parse_attribute(&data) {
             assert_eq!(attr.id, 0x09);
             assert_eq!(attr.current, 0x64);
@@ -192,4 +191,3 @@ mod tests {
         }
     }
 }
-

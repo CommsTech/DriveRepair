@@ -9,10 +9,10 @@ fn main() {
     println!("DriveRepair by commstech v0.0.1");
     println!("Drive Repair Tool - Development Version");
     println!("========================================\n");
-    
+
     // Show welcome screen
     UserInterface::show_welcome();
-    
+
     // Enumerate disks
     #[cfg(feature = "alloc")]
     {
@@ -29,10 +29,9 @@ fn main() {
             }
         }
     }
-    
+
     #[cfg(not(feature = "alloc"))]
     {
         println!("Alloc feature not enabled. Disk enumeration requires alloc support.");
     }
 }
-

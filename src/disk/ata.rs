@@ -26,7 +26,7 @@ pub struct AtaDisk {
 
 impl AtaDisk {
     /// Create new ATA disk instance
-    /// 
+    ///
     /// # Arguments
     /// * `primary` - true for primary channel (0x1F0), false for secondary (0x170)
     /// * `master` - true for master drive, false for slave
@@ -37,7 +37,7 @@ impl AtaDisk {
         // 2. Send IDENTIFY DEVICE command (0xEC)
         // 3. Read identify data
         // 4. Parse model, serial, firmware, capacity
-        
+
         Ok(Self {
             primary,
             master,
@@ -51,7 +51,7 @@ impl AtaDisk {
             firmware: String::new(),
         })
     }
-    
+
     /// Read ATA register
     #[allow(dead_code)]
     fn read_register(&self, offset: u16) -> u8 {
@@ -60,7 +60,7 @@ impl AtaDisk {
         // unsafe { inb(base + offset) }
         0
     }
-    
+
     /// Write ATA register
     #[allow(dead_code)]
     fn write_register(&self, offset: u16, value: u8) {
@@ -68,7 +68,7 @@ impl AtaDisk {
         // TODO: Implement actual port I/O
         // unsafe { outb(base + offset, value) }
     }
-    
+
     /// Wait for drive to be ready
     #[allow(dead_code)]
     fn wait_ready(&self) -> Result<(), DiskError> {
@@ -76,7 +76,7 @@ impl AtaDisk {
         // Poll status register until BSY is clear and DRDY is set
         Ok(())
     }
-    
+
     /// Send ATA command
     #[allow(dead_code)]
     fn send_command(&self, command: u8, lba: u64, count: u8) -> Result<(), DiskError> {
@@ -110,60 +110,59 @@ impl Disk for AtaDisk {
             firmware: "",
         })
     }
-    
+
     fn read_sectors(&self, lba: u64, count: u32, buffer: &mut [u8]) -> Result<(), DiskError> {
         if !self.is_ready() {
             return Err(DiskError::NotReady);
         }
-        
+
         if lba + count as u64 > self.total_sectors {
             return Err(DiskError::InvalidSector);
         }
-        
+
         // TODO: Implement actual ATA read
         // 1. Send READ SECTORS EXT command (0x24 for 48-bit LBA)
         // 2. Wait for data ready
         // 3. Read data from data register (0x1F0 or 0x170)
         // 4. Handle errors and retries
-        
+
         Ok(())
     }
-    
+
     fn write_sectors(&self, lba: u64, count: u32, buffer: &[u8]) -> Result<(), DiskError> {
         if !self.is_ready() {
             return Err(DiskError::NotReady);
         }
-        
+
         if lba + count as u64 > self.total_sectors {
             return Err(DiskError::InvalidSector);
         }
-        
+
         // TODO: Implement actual ATA write
         // 1. Send WRITE SECTORS EXT command (0x34 for 48-bit LBA)
         // 2. Wait for data ready
         // 3. Write data to data register
         // 4. Send CACHE FLUSH command
         // 5. Handle errors and retries
-        
+
         Ok(())
     }
-    
+
     fn sector_size(&self) -> u64 {
         self.sector_size
     }
-    
+
     fn total_sectors(&self) -> u64 {
         self.total_sectors
     }
-    
+
     fn is_ready(&self) -> bool {
         // TODO: Check status register
         true
     }
-    
+
     fn flush(&self) -> Result<(), DiskError> {
         // TODO: Send FLUSH CACHE EXT command (0xEA)
         Ok(())
     }
 }
-

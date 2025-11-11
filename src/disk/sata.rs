@@ -40,13 +40,13 @@ impl AhciController {
         // 4. Map memory
         // 5. Initialize controller
         // 6. Enable AHCI mode
-        
+
         Ok(Self {
             base_address: 0,
             port_count: 0,
         })
     }
-    
+
     /// Get number of ports
     pub fn port_count(&self) -> u32 {
         self.port_count
@@ -55,7 +55,7 @@ impl AhciController {
 
 impl SataDisk {
     /// Create new SATA disk instance
-    /// 
+    ///
     /// # Arguments
     /// * `controller` - AHCI controller instance
     /// * `port` - Port number (0-based)
@@ -66,7 +66,7 @@ impl SataDisk {
         // 3. Send IDENTIFY DEVICE command
         // 4. Parse identify data
         // 5. Get capacity (48-bit LBA)
-        
+
         Ok(Self {
             controller,
             port,
@@ -80,7 +80,7 @@ impl SataDisk {
             firmware: String::new(),
         })
     }
-    
+
     /// Send ATA command via AHCI
     #[allow(dead_code)]
     fn send_command(&self, command: u8, lba: u64, count: u16) -> Result<(), DiskError> {
@@ -115,59 +115,58 @@ impl Disk for SataDisk {
             firmware: "",
         })
     }
-    
+
     fn read_sectors(&self, lba: u64, count: u32, buffer: &mut [u8]) -> Result<(), DiskError> {
         if !self.is_ready() {
             return Err(DiskError::NotReady);
         }
-        
+
         if lba + count as u64 > self.total_sectors {
             return Err(DiskError::InvalidSector);
         }
-        
+
         // TODO: Implement AHCI read
         // 1. Build READ FPDMA QUEUED command (NCQ) or READ DMA EXT
         // 2. Submit command via AHCI
         // 3. Wait for completion
         // 4. Handle errors and retries
-        
+
         Ok(())
     }
-    
+
     fn write_sectors(&self, lba: u64, count: u32, buffer: &[u8]) -> Result<(), DiskError> {
         if !self.is_ready() {
             return Err(DiskError::NotReady);
         }
-        
+
         if lba + count as u64 > self.total_sectors {
             return Err(DiskError::InvalidSector);
         }
-        
+
         // TODO: Implement AHCI write
         // 1. Build WRITE FPDMA QUEUED command (NCQ) or WRITE DMA EXT
         // 2. Submit command via AHCI
         // 3. Wait for completion
         // 4. Handle errors and retries
-        
+
         Ok(())
     }
-    
+
     fn sector_size(&self) -> u64 {
         self.sector_size
     }
-    
+
     fn total_sectors(&self) -> u64 {
         self.total_sectors
     }
-    
+
     fn is_ready(&self) -> bool {
         // TODO: Check port status
         true
     }
-    
+
     fn flush(&self) -> Result<(), DiskError> {
         // TODO: Send FLUSH CACHE EXT via AHCI
         Ok(())
     }
 }
-

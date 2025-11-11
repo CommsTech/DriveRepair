@@ -15,12 +15,11 @@ pub mod smart;
 pub mod ui;
 
 #[cfg(feature = "alloc")]
-use alloc::vec::Vec;
-#[cfg(feature = "alloc")]
 use alloc::string::String;
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
 
 // Re-export commonly used types
 pub use disk::{Disk, DiskError, DiskInfo, DiskInterface};
 pub use repair::{RepairConfig, RepairEngine, RepairResult, RepairStats};
-pub use smart::{SmartInterface, SmartHealthStatus};
-
+pub use smart::{SmartHealthStatus, SmartInterface};
