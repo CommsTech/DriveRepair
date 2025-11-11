@@ -13,4 +13,5 @@ uefi-services = "0.22"
 name = "drive-repair-uefi"
 path = "main.rs"
 
+[workspace]
 

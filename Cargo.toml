@@ -28,6 +28,10 @@ uefi = []
 
 [workspace]
 members = []
+exclude = [
+    "src/boot/uefi",
+    "src/boot/bios"
+]
 
 # Note: Build targets are specified per build command
 # Supported targets: x86_64, aarch64 (ARM64)
