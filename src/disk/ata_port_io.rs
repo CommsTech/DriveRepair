@@ -94,7 +94,7 @@ mod tests {
     fn test_ata_port_io_creation() {
         let port_io = AtaPortIO::new(true);
         assert_eq!(port_io.base_port, 0x1F0);
-        
+
         let port_io2 = AtaPortIO::new(false);
         assert_eq!(port_io2.base_port, 0x170);
     }
