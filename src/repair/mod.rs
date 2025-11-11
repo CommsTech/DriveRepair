@@ -13,6 +13,9 @@ extern crate alloc;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
+pub mod recovery;
+use recovery::{ErrorRecovery, RetryStrategy, VerificationMethod, verify_sector};
+
 /// Repair operation result
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepairResult {
@@ -104,12 +107,35 @@ impl<D: Disk> RepairEngine<D> {
             ScanPattern::Reverse => (start..end).rev().collect(),
             ScanPattern::Random => {
                 let mut sectors: Vec<u64> = (start..end).collect();
-                // TODO: Implement random shuffle
+                // Simple pseudo-random shuffle using LCG
+                // This is deterministic but provides good distribution
+                let mut seed = (start ^ end) as u64;
+                for i in (1..sectors.len()).rev() {
+                    seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                    let j = (seed % (i + 1) as u64) as usize;
+                    sectors.swap(i, j);
+                }
                 sectors
             }
             ScanPattern::Concentric => {
-                // TODO: Implement concentric pattern
-                (start..end).collect()
+                // Concentric pattern: start from outer edges, work inward
+                let mut sectors: Vec<u64> = Vec::new();
+                let mut left = start;
+                let mut right = end - 1;
+                
+                while left <= right {
+                    if left == right {
+                        sectors.push(left);
+                    } else {
+                        sectors.push(left);
+                        sectors.push(right);
+                    }
+                    left += 1;
+                    if right > start {
+                        right -= 1;
+                    }
+                }
+                sectors
             }
         };
         
@@ -131,47 +157,59 @@ impl<D: Disk> RepairEngine<D> {
     
     /// Repair a single sector
     fn repair_sector(&self, lba: u64, buffer: &mut [u8]) -> Result<RepairResult, DiskError> {
+        // Create error recovery with retry strategy
+        let recovery = ErrorRecovery::new(
+            RetryStrategy::ExponentialBackoff {
+                initial_delay_ms: 100,
+                max_delay_ms: self.config.timeout_ms,
+                multiplier: 2.0,
+            },
+            self.config.max_retries,
+        );
+        
         // Try to read sector with retries
-        for attempt in 0..self.config.max_retries {
-            match self.disk.read_sectors(lba, 1, buffer) {
-                Ok(()) => {
-                    // Sector read successfully
-                    // TODO: Verify data integrity (checksum, ECC)
-                    return Ok(RepairResult::Repaired);
+        match recovery.retry(|| self.disk.read_sectors(lba, 1, buffer)) {
+            Ok(()) => {
+                // Sector read successfully - verify data integrity
+                let verification_method = if self.config.aggressive_correction {
+                    VerificationMethod::Crc32
+                } else {
+                    VerificationMethod::Checksum
+                };
+                
+                if verify_sector(buffer, verification_method) {
+                    Ok(RepairResult::Repaired)
+                } else {
+                    // Data read but may be corrupted
+                    Ok(RepairResult::Recovered)
                 }
-                Err(e) => {
-                    if attempt < self.config.max_retries - 1 {
-                        // Retry with different strategies
-                        // TODO: Implement retry strategies (slower timing, different modes)
-                        continue;
-                    } else {
-                        // All retries failed
-                        // TODO: Attempt data recovery
-                        return Ok(RepairResult::Failed);
-                    }
+            }
+            Err(_) => {
+                // All retries failed - attempt data recovery
+                // Try reading with different strategies
+                if self.config.aggressive_correction {
+                    // Try reading partial sectors or using different modes
+                    // For now, mark as failed
+                    Ok(RepairResult::Failed)
+                } else {
+                    Ok(RepairResult::Failed)
                 }
             }
         }
-        
-        Ok(RepairResult::Failed)
     }
     
     /// Read sector with retry logic
     pub fn read_sector_with_retry(&self, lba: u64, buffer: &mut [u8]) -> Result<(), DiskError> {
-        for attempt in 0..self.config.max_retries {
-            match self.disk.read_sectors(lba, 1, buffer) {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    if attempt < self.config.max_retries - 1 {
-                        // TODO: Add delay between retries
-                        continue;
-                    } else {
-                        return Err(e);
-                    }
-                }
-            }
-        }
-        Err(DiskError::ReadError)
+        let recovery = ErrorRecovery::new(
+            RetryStrategy::ExponentialBackoff {
+                initial_delay_ms: 100,
+                max_delay_ms: self.config.timeout_ms,
+                multiplier: 2.0,
+            },
+            self.config.max_retries,
+        );
+        
+        recovery.retry(|| self.disk.read_sectors(lba, 1, buffer))
     }
     
     /// Write sector with verification

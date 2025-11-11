@@ -13,6 +13,7 @@ pub mod sata;
 pub mod nvme;
 pub mod usb;
 pub mod detection;
+pub mod utils;
 
 /// Sector size constants
 pub const SECTOR_SIZE_512: u64 = 512;
