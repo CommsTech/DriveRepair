@@ -20,7 +20,28 @@ use alloc::vec::Vec;
 use crate::boot::bios::disk_detection::BiosDiskDetector;
 use crate::disk::DiskInfo;
 use crate::ui::menu::RepairOption;
-use crate::boot::bios::enhanced::VgaTextMode;
+// VGA text mode helper - defined inline for now
+mod vga {
+    /// VGA text buffer address (0xB8000)
+    const VGA_BUFFER: *mut u16 = 0xB8000 as *mut u16;
+    
+    /// Print string to VGA buffer
+    pub fn print_string(s: &str) {
+        unsafe {
+            let mut offset = 0;
+            for &byte in s.as_bytes() {
+                if offset >= 80 * 25 {
+                    break;
+                }
+                core::ptr::write_volatile(
+                    VGA_BUFFER.add(offset),
+                    (0x07 as u16) << 8 | byte as u16, // Light gray on black
+                );
+                offset += 1;
+            }
+        }
+    }
+}
 
 /// BIOS menu integration
 pub struct BiosMenuIntegration;
