@@ -5,7 +5,7 @@
 
 /// Convert bytes to sectors
 pub fn bytes_to_sectors(bytes: u64, sector_size: u64) -> u64 {
-    (bytes + sector_size - 1) / sector_size
+    bytes.div_ceil(sector_size)
 }
 
 /// Convert sectors to bytes

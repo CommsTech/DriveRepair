@@ -98,8 +98,7 @@ impl<D: Disk> RepairEngine<D> {
         let sectors_to_scan = end - start;
 
         let mut stats = RepairStats::default();
-        let mut sector_buffer = Vec::new();
-        sector_buffer.resize(self.disk.sector_size() as usize, 0u8);
+        let mut sector_buffer = vec![0u8; self.disk.sector_size() as usize];
 
         let sectors = match self.config.scan_pattern {
             ScanPattern::Sequential => (start..end).collect(),
@@ -108,7 +107,7 @@ impl<D: Disk> RepairEngine<D> {
                 let mut sectors: Vec<u64> = (start..end).collect();
                 // Simple pseudo-random shuffle using LCG
                 // This is deterministic but provides good distribution
-                let mut seed = (start ^ end) as u64;
+                let mut seed = start ^ end;
                 for i in (1..sectors.len()).rev() {
                     seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
                     let j = (seed % (i + 1) as u64) as usize;
@@ -138,7 +137,7 @@ impl<D: Disk> RepairEngine<D> {
             }
         };
 
-        for (_index, sector) in sectors.iter().enumerate() {
+        for sector in sectors.iter() {
             let result = self.repair_sector(*sector, &mut sector_buffer)?;
 
             match result {
@@ -218,8 +217,7 @@ impl<D: Disk> RepairEngine<D> {
         self.disk.write_sectors(lba, 1, buffer)?;
 
         // Verify write
-        let mut read_buffer = Vec::new();
-        read_buffer.resize(buffer.len(), 0u8);
+        let mut read_buffer = vec![0u8; buffer.len()];
         self.disk.read_sectors(lba, 1, &mut read_buffer)?;
 
         if read_buffer == buffer {
