@@ -52,26 +52,43 @@ if ($confirm -ne "yes") {
 Write-Host ""
 Write-Host "Creating bootable USB drive..." -ForegroundColor Green
 
-# Step 1: Clean the disk
-Write-Host "Step 1: Cleaning disk..." -ForegroundColor Cyan
-# Remove all partitions first
-$partitions = Get-Partition -DiskNumber $diskNumber -ErrorAction SilentlyContinue
-if ($partitions) {
-    $partitions | Remove-Partition -Confirm:$false -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
-}
-# Clear the disk completely
-Clear-Disk -Number $diskNumber -RemoveData -Confirm:$false -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 2
-
-# Step 2: Initialize disk with GPT
-Write-Host "Step 2: Initializing GPT partition table..." -ForegroundColor Cyan
+# Step 1: Clean the disk and convert to GPT
+Write-Host "Step 1: Cleaning disk and converting to GPT..." -ForegroundColor Cyan
 # Check current partition style
 $currentStyle = (Get-Disk -Number $diskNumber).PartitionStyle
-if ($currentStyle -ne "GPT") {
-    Initialize-Disk -Number $diskNumber -PartitionStyle GPT -Confirm:$false
+Write-Host "  Current partition style: $currentStyle" -ForegroundColor Yellow
+
+if ($currentStyle -eq "MBR") {
+    Write-Host "  Converting MBR to GPT..." -ForegroundColor Yellow
+    # Remove all partitions first
+    $partitions = Get-Partition -DiskNumber $diskNumber -ErrorAction SilentlyContinue
+    if ($partitions) {
+        foreach ($partition in $partitions) {
+            Remove-Partition -InputObject $partition -Confirm:$false -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Seconds 1
+    }
+    # Clear the disk completely
+    Clear-Disk -Number $diskNumber -RemoveData -Confirm:$false -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    # Convert to GPT
+    ConvertTo-Gpt -InputObject (Get-Disk -Number $diskNumber) -ErrorAction Stop
+    Write-Host "  Disk converted to GPT" -ForegroundColor Green
+} elseif ($currentStyle -eq "GPT") {
+    Write-Host "  Disk is already GPT, cleaning partitions..." -ForegroundColor Yellow
+    # Remove all partitions
+    $partitions = Get-Partition -DiskNumber $diskNumber -ErrorAction SilentlyContinue
+    if ($partitions) {
+        foreach ($partition in $partitions) {
+            Remove-Partition -InputObject $partition -Confirm:$false -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Seconds 1
+    }
+    Write-Host "  Disk cleaned" -ForegroundColor Green
 } else {
-    Write-Host "  Disk is already GPT" -ForegroundColor Green
+    Write-Host "  Disk is raw, initializing as GPT..." -ForegroundColor Yellow
+    Initialize-Disk -Number $diskNumber -PartitionStyle GPT -Confirm:$false
+    Write-Host "  Disk initialized as GPT" -ForegroundColor Green
 }
 
 # Step 3: Create EFI System Partition (ESP)
