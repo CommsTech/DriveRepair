@@ -6,7 +6,6 @@
 use crate::disk::{DiskInfo, DiskInterface};
 use crate::repair::{RepairConfig, RepairResult, RepairStats};
 use crate::smart::SmartHealthStatus;
-use core::convert::From;
 use core::iter::Iterator;
 use core::option::Option;
 
