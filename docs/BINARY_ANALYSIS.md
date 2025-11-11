@@ -4,22 +4,23 @@
 ## File Header Analysis
 
 ### DOS Header (MZ)
-- **Signature**: 4D 5A (MZ)
-- **Last Page Size**: To be determined
-- **Pages**: To be determined
-- **Relocations**: To be determined
-- **Header Size**: To be determined
-- **Min/Max Alloc**: To be determined
-- **Initial SS:SP**: To be determined
-- **Initial IP**: To be determined
-- **Initial CS**: To be determined
-- **Relocation Table Offset**: To be determined
+- **Signature**: 4D 5A (MZ) ✅ Confirmed
+- **Last Page Size**: 0x00C0 (192 bytes)
+- **Pages**: 0x0079 (121 pages = ~24KB)
+- **Relocations**: 0x0004 (4 relocations)
+- **Header Size**: 0x0018 (24 paragraphs = 384 bytes)
+- **Min/Max Alloc**: 0xFFFF / 0xFFFF
+- **Initial SS:SP**: 0x27BA:0xFFFF
+- **Initial IP**: 0x0000
+- **Initial CS**: 0x0040
+- **Relocation Table Offset**: 0x0018
 
-### PE Header (If Present)
-- **PE Offset**: To be determined
-- **PE Signature**: To be determined
-- **Machine Type**: To be determined
+### PE Header
+- **PE Offset**: 0xF110 (61,712 bytes from start)
+- **PE Signature**: "PE\0\0" ✅ Confirmed
+- **Machine Type**: To be determined (likely x86)
 - **Number of Sections**: To be determined
+- **Note**: This is a DOS executable with PE header (likely DOS extender)
 
 ## String Analysis
 

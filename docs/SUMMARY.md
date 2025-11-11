@@ -44,12 +44,14 @@ Modern drive repair utility built in Rust, reverse-engineered from SPINRITE.EXE,
 
 ### Key Findings
 - File: SPINRITE.EXE (173,144 bytes, dated 2004)
-- ✅ Confirmed: MZ DOS executable header
-- ✅ Architecture: Likely 16-bit DOS executable with DOS extender
-- ✅ Expected: 32-bit LBA limitation (1TB max)
-- ✅ Expected: Uses INT 13h BIOS calls and direct hardware access
-- ⏳ Pattern search: INT 13h and port I/O patterns being analyzed
-- ⏳ Disassembler: Ghidra setup in progress
+- ✅ Confirmed: MZ DOS executable header with PE header at 0xF110
+- ✅ Architecture: x86 DOS executable with DOS extender
+- ✅ Author: SGibson (from copyright string)
+- ✅ INT 13h calls: Found 3 locations (0x142FA, 0x18478, 0x259DE)
+- ✅ Port I/O (0x1F0): Found 3 locations (0x23E, 0x1CBFC)
+- ✅ Expected: 32-bit LBA limitation (1TB max) - to be confirmed
+- ✅ Expected: Uses INT 13h BIOS calls and direct hardware access - confirmed
+- ⏳ Disassembler: Ghidra available, ready for analysis
 
 ### Architecture Decisions
 - 64-bit LBA throughout (fixes 1TB limitation)
@@ -66,7 +68,8 @@ Modern drive repair utility built in Rust, reverse-engineered from SPINRITE.EXE,
 ### Repository
 - Remote: https://git.commsnet.org/commstech/DriveRepair.git
 - Branch: main
-- CI/CD: Configured and working
+- CI/CD: Gitea Actions configured (`.gitea/workflows/ci.yml`)
+- Tools: Ghidra available in `tools/` directory (excluded from git)
 
 ### Notes
 - Most disk interface functions are stubs (marked with TODO)

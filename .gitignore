@@ -26,3 +26,17 @@ Thumbs.db
 
 # Test artifacts
 *.test
+
+# Reverse engineering tools (large binaries)
+tools/
+*.zip
+ghidra*/
+r2/
+radare2/
+
+# Ghidra project files
+*.gpr
+*.rep
+*.ghidra
+*.log
+*.bak

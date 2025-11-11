@@ -14,34 +14,45 @@
 - **SHA256**: 230BE922979B19338C7395D318317C23A003E50EC949EEDB3B8F7E7A9A6531...
 
 #### Binary Header Analysis
-- **DOS Header**: MZ signature (0x4D5A) - Confirmed DOS executable
-- **PE Header**: To be analyzed with disassembler
-- **Architecture**: Likely x86 16-bit or 32-bit
+- **DOS Header**: MZ signature (0x4D5A) ✅ Confirmed DOS executable
+- **PE Header**: Found at offset 0xF110 (61,712 bytes) ✅ Confirmed
+- **Architecture**: x86 (16-bit or 32-bit, to be determined)
+- **Type**: DOS executable with DOS extender (likely DOS/4GW or similar)
 
 #### Initial Observations
-1. File size suggests DOS-era utility (not modern Windows PE)
-2. Date (2004) indicates older version of SpinRite
-3. Size (~169 KB) is consistent with DOS executable with extender
+1. ✅ File is DOS executable with PE header (DOS extender)
+2. ✅ Date (2004) indicates older version of SpinRite
+3. ✅ Size (~169 KB) is consistent with DOS executable with extender
+4. ✅ Contains copyright string: "(c) 2004 by SGibson"
+
+#### Pattern Search Results
+- **INT 13h calls**: Found 3 locations (0x142FA, 0x18478, 0x259DE)
+- **Port I/O (0x1F0)**: Found 2 locations (0x23E, 0x1CBFC)
+- **Port I/O (0x170)**: Found 2 locations (0x103A1, 0x21F19)
+- **Strings**: Found "SGibson" (author), "AMAB", "ZDMA" (possible function names)
 
 ### Session 2: Disassembler Setup
 **Date**: 2024-11-11
-**Tool**: Ghidra (downloading)
-
-#### Tools Status
-- ✅ Ghidra: Downloading/Installing
-- ⏳ radare2: To be installed if needed
-- ⏳ Analysis: Pending tool installation
-
-### Session 3: Disassembly Analysis
-**Date**: TBD
 **Tool**: Ghidra
 
-#### Findings (To Be Updated)
-- Entry point: TBD
-- Main functions: TBD
-- Disk access methods: TBD
-- LBA implementation: TBD
-- Error recovery: TBD
+#### Tools Status
+- ✅ Ghidra: Found installed at C:\Program Files\Ghidra
+- ⏳ Ghidra: Downloading latest version (11.4.2) to tools directory
+- ⏳ radare2: To be installed if needed
+- ⏳ Analysis: Pending tool installation/verification
+
+### Session 3: Disassembly Analysis
+**Date**: 2024-11-11
+**Tool**: Ghidra (pending)
+
+#### Findings (Initial Pattern Search)
+- ✅ INT 13h calls: 3 locations identified
+- ✅ Port I/O (0x1F0): 3 locations identified
+- ⏳ Entry point: To be determined with disassembler
+- ⏳ Main functions: To be determined with disassembler
+- ⏳ Disk access methods: INT 13h and port I/O confirmed
+- ⏳ LBA implementation: To be analyzed
+- ⏳ Error recovery: To be analyzed
 
 ## Key Analysis Targets
 
