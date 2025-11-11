@@ -1,0 +1,154 @@
+# PowerShell script to create bootable USB drive
+# Creates hybrid UEFI/BIOS bootable USB with GPT partition table
+
+param(
+    [Parameter(Mandatory=$false)]
+    [string]$UsbDrive = "F:",
+    
+    [Parameter(Mandatory=$false)]
+    [string]$UefiBootloaderX64 = "target\x86_64-unknown-uefi\release\drive-repair-uefi.efi",
+    
+    [Parameter(Mandatory=$false)]
+    [string]$UefiBootloaderARM64 = "target\aarch64-unknown-uefi\release\drive-repair-uefi.efi",
+    
+    [Parameter(Mandatory=$false)]
+    [string]$BiosBootloader = "target\x86_64-unknown-none\release\drive-repair-bios"
+)
+
+Write-Host "Drive Repair Tool - USB Creation Script" -ForegroundColor Cyan
+Write-Host "=========================================" -ForegroundColor Cyan
+Write-Host ""
+
+# Check if running as administrator
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Write-Host "ERROR: This script must be run as Administrator" -ForegroundColor Red
+    exit 1
+}
+
+# Validate USB drive
+if (-not (Test-Path $UsbDrive)) {
+    Write-Host "ERROR: USB drive not found: $UsbDrive" -ForegroundColor Red
+    exit 1
+}
+
+# Get disk number from drive letter
+$diskNumber = (Get-Partition -DriveLetter $UsbDrive[0]).DiskNumber
+$disk = Get-Disk -Number $diskNumber
+
+Write-Host "Target USB Drive:" -ForegroundColor Yellow
+Write-Host "  Drive Letter: $UsbDrive"
+Write-Host "  Disk Number: $diskNumber"
+Write-Host "  Size: $($disk.Size / 1GB) GB"
+Write-Host ""
+
+# Confirm before proceeding
+$confirm = Read-Host "WARNING: This will erase all data on the USB drive. Continue? (yes/no)"
+if ($confirm -ne "yes") {
+    Write-Host "Operation cancelled." -ForegroundColor Yellow
+    exit 0
+}
+
+Write-Host ""
+Write-Host "Creating bootable USB drive..." -ForegroundColor Green
+
+# Step 1: Clean the disk
+Write-Host "Step 1: Cleaning disk..." -ForegroundColor Cyan
+Clear-Disk -Number $diskNumber -RemoveData -Confirm:$false
+Start-Sleep -Seconds 2
+
+# Step 2: Initialize disk with GPT
+Write-Host "Step 2: Initializing GPT partition table..." -ForegroundColor Cyan
+Initialize-Disk -Number $diskNumber -PartitionStyle GPT
+
+# Step 3: Create EFI System Partition (ESP)
+Write-Host "Step 3: Creating EFI System Partition..." -ForegroundColor Cyan
+$espSize = 100MB
+$esp = New-Partition -DiskNumber $diskNumber -Size $espSize -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' -AssignDriveLetter
+Format-Volume -Partition $esp -FileSystem FAT32 -NewFileSystemLabel "EFI" -Confirm:$false
+
+# Step 4: Create BIOS Boot Partition (for legacy boot)
+Write-Host "Step 4: Creating BIOS Boot Partition..." -ForegroundColor Cyan
+$biosSize = 1MB
+$bios = New-Partition -DiskNumber $diskNumber -Size $biosSize -GptType '{21686148-6449-6e6f-744e-656564454649}' -AssignDriveLetter
+
+# Step 5: Create data partition (optional, for logs/reports)
+Write-Host "Step 5: Creating data partition..." -ForegroundColor Cyan
+$dataSize = $disk.Size - $espSize - $biosSize
+$data = New-Partition -DiskNumber $diskNumber -Size $dataSize -GptType '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}' -AssignDriveLetter
+Format-Volume -Partition $data -FileSystem NTFS -NewFileSystemLabel "DriveRepair" -Confirm:$false
+
+# Step 6: Copy bootloaders
+Write-Host "Step 6: Copying bootloaders..." -ForegroundColor Cyan
+
+# Get ESP drive letter
+$espDrive = (Get-Partition -DiskNumber $diskNumber | Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' }).DriveLetter
+$espPath = "$($espDrive):"
+
+# Create EFI directory structure
+New-Item -ItemType Directory -Path "$espPath\EFI\BOOT" -Force | Out-Null
+New-Item -ItemType Directory -Path "$espPath\EFI\DriveRepair" -Force | Out-Null
+
+# Copy UEFI bootloaders (x64 and ARM64)
+if (Test-Path $UefiBootloaderX64) {
+    Copy-Item -Path $UefiBootloaderX64 -Destination "$espPath\EFI\BOOT\BOOTX64.EFI" -Force
+    Copy-Item -Path $UefiBootloaderX64 -Destination "$espPath\EFI\DriveRepair\DRIVEREPAIRX64.EFI" -Force
+    Write-Host "  UEFI x64 bootloader copied" -ForegroundColor Green
+} else {
+    Write-Host "  WARNING: UEFI x64 bootloader not found: $UefiBootloaderX64" -ForegroundColor Yellow
+}
+
+if (Test-Path $UefiBootloaderARM64) {
+    Copy-Item -Path $UefiBootloaderARM64 -Destination "$espPath\EFI\BOOT\BOOTAA64.EFI" -Force
+    Copy-Item -Path $UefiBootloaderARM64 -Destination "$espPath\EFI\DriveRepair\DRIVEREPAIRAA64.EFI" -Force
+    Write-Host "  UEFI ARM64 bootloader copied" -ForegroundColor Green
+} else {
+    Write-Host "  WARNING: UEFI ARM64 bootloader not found: $UefiBootloaderARM64" -ForegroundColor Yellow
+}
+
+# Copy BIOS bootloader (if available)
+if (Test-Path $BiosBootloader) {
+    # TODO: Install BIOS bootloader to BIOS Boot Partition
+    # This requires writing to the partition directly
+    Write-Host "  BIOS bootloader found (manual installation may be required)" -ForegroundColor Yellow
+} else {
+    Write-Host "  WARNING: BIOS bootloader not found: $BiosBootloader" -ForegroundColor Yellow
+}
+
+# Step 7: Create boot configuration
+Write-Host "Step 7: Creating boot configuration..." -ForegroundColor Cyan
+$configContent = @"
+# Drive Repair Tool Configuration
+# Bootable USB created on $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+"@
+Set-Content -Path "$espPath\EFI\DriveRepair\config.txt" -Value $configContent
+
+# Step 8: Verify installation
+Write-Host "Step 8: Verifying installation..." -ForegroundColor Cyan
+if (Test-Path "$espPath\EFI\BOOT\BOOTX64.EFI") {
+    Write-Host "  UEFI x64 bootloader verified" -ForegroundColor Green
+} else {
+    Write-Host "  WARNING: UEFI x64 bootloader not found" -ForegroundColor Yellow
+}
+if (Test-Path "$espPath\EFI\BOOT\BOOTAA64.EFI") {
+    Write-Host "  UEFI ARM64 bootloader verified" -ForegroundColor Green
+} else {
+    Write-Host "  WARNING: UEFI ARM64 bootloader not found" -ForegroundColor Yellow
+}
+
+Write-Host ""
+Write-Host "Bootable USB drive created successfully!" -ForegroundColor Green
+Write-Host ""
+Write-Host "USB Drive Layout:" -ForegroundColor Yellow
+Write-Host "  EFI System Partition: $espPath (FAT32)"
+Write-Host "  BIOS Boot Partition: (hidden)"
+Write-Host "  Data Partition: $((Get-Partition -DiskNumber $diskNumber | Where-Object { $_.GptType -eq '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}' }).DriveLetter): (NTFS)"
+Write-Host ""
+Write-Host "Boot Methods:" -ForegroundColor Yellow
+Write-Host "  UEFI x64: Boot from EFI System Partition (BOOTX64.EFI)"
+Write-Host "  UEFI ARM64: Boot from EFI System Partition (BOOTAA64.EFI)"
+Write-Host "  BIOS: Boot from BIOS Boot Partition (if configured)"
+Write-Host ""
+Write-Host "Note: You may need to configure your system's boot order to boot from USB." -ForegroundColor Cyan
+Write-Host "DriveRepair by commstech v0.0.1" -ForegroundColor Cyan
+

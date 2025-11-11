@@ -1,0 +1,15 @@
+[package]
+name = "drive-repair-uefi"
+version = "0.1.0"
+edition = "2021"
+authors = ["DriveRepair Team"]
+
+[dependencies]
+drive-repair = { path = ".." }
+uefi = "0.30"
+uefi-services = "0.22"
+
+[lib]
+name = "drive_repair_uefi"
+crate-type = ["cdylib"]
+

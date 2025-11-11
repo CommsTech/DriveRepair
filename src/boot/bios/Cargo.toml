@@ -1,0 +1,13 @@
+[package]
+name = "drive-repair-bios"
+version = "0.1.0"
+edition = "2021"
+authors = ["DriveRepair Team"]
+
+[dependencies]
+drive-repair = { path = ".." }
+
+[lib]
+name = "drive_repair_bios"
+crate-type = ["cdylib"]
+

@@ -1,0 +1,45 @@
+[package]
+name = "drive-repair"
+version = "0.0.1"
+edition = "2021"
+authors = ["commstech"]
+description = "DriveRepair by commstech v0.0.1 - Modern drive repair utility supporting drives from 64GB to 20TB"
+license = "MIT"
+repository = "https://git.commsnet.org/commstech/DriveRepair.git"
+
+[lib]
+name = "drive_repair"
+crate-type = ["lib"]
+
+[dependencies]
+# Low-level system access
+raw-cpuid = "11.1"
+bitflags = "2.5"
+
+# Utilities
+log = "0.4"
+
+# Alloc support for no_std
+[features]
+default = ["alloc", "std"]
+alloc = []
+std = []
+uefi = []
+
+[workspace]
+members = []
+
+# Build targets for 64-bit and ARM
+[build]
+target = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc", "x86_64-apple-darwin", "aarch64-apple-darwin"]
+
+[profile.release]
+opt-level = "z"  # Optimize for size
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# Note: UEFI and BIOS bootloaders are separate binaries
+# They should be built with their respective targets:
+# cargo build --target x86_64-unknown-uefi --release
+# cargo build --target x86_64-unknown-none --release

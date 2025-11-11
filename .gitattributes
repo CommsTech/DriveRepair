@@ -1,0 +1,13 @@
+# Rust
+*.rs text eol=lf
+
+# Documentation
+*.md text eol=lf
+
+# Scripts
+*.ps1 text eol=crlf
+*.sh text eol=lf
+
+# Git
+.gitattributes text eol=lf
+.gitignore text eol=lf

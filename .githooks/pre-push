@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Pre-push git hook to prevent pushing bad code
+# Install with: ln -s ../../.githooks/pre-push .git/hooks/pre-push
+
+set -e
+
+echo "Running pre-push checks..."
+
+# Check if cargo is available
+if ! command -v cargo &> /dev/null; then
+    echo "Error: cargo not found. Please install Rust."
+    exit 1
+fi
+
+# Format check
+echo "Checking code formatting..."
+cargo fmt -- --check || {
+    echo "Error: Code is not formatted. Run 'cargo fmt' to fix."
+    exit 1
+}
+
+# Clippy check
+echo "Running clippy..."
+cargo clippy --all-targets --all-features -- -D warnings || {
+    echo "Error: Clippy found issues. Please fix them."
+    exit 1
+}
+
+# Build check
+echo "Checking build..."
+cargo check --all-targets --all-features || {
+    echo "Error: Build check failed."
+    exit 1
+}
+
+# Run tests
+echo "Running tests..."
+cargo test --features "std,alloc" || {
+    echo "Error: Tests failed."
+    exit 1
+}
+
+echo "All pre-push checks passed!"
+exit 0
+
