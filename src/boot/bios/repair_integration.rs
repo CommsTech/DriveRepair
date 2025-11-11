@@ -89,12 +89,16 @@ impl BiosRepairIntegration {
                 max_retries: 3,
                 timeout_ms: 5000,
                 aggressive_correction: false,
+                start_sector: 0,
+                end_sector: selected_disk.total_sectors,
             },
             RepairOption::FullScan => RepairConfig {
                 scan_pattern: ScanPattern::Random,
                 max_retries: 5,
                 timeout_ms: 10000,
                 aggressive_correction: true,
+                start_sector: 0,
+                end_sector: selected_disk.total_sectors,
             },
             RepairOption::SmartCheck => {
                 // TODO: Implement SMART check

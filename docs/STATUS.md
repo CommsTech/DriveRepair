@@ -31,6 +31,10 @@
 - ✅ BIOS disk wrapper implementing Disk trait
 - ✅ UEFI keyboard input framework
 - ✅ BIOS keyboard input framework
+- ✅ Fixed Disk trait signatures (read_sectors, write_sectors, flush use &mut self)
+- ✅ Added missing DiskError variants (InvalidParameter, ReadOnly)
+- ✅ Integrated disk wrappers with repair engine in both UEFI and BIOS bootloaders
+- ✅ Fixed RepairConfig initialization with start_sector and end_sector
 - ✅ Enhanced UEFI bootloader with disk enumeration structure
 - ✅ Enhanced BIOS bootloader with VGA text mode and INT 13h framework
 - ✅ Created input handler for keyboard input (BIOS/UEFI/std)

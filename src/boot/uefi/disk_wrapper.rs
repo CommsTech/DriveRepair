@@ -83,7 +83,7 @@ impl<'a> Disk for UefiDisk<'a> {
         // Read sectors
         for sector_offset in 0..count {
             let current_lba = lba + sector_offset as u64;
-            let buffer_offset = sector_offset * sector_size;
+            let buffer_offset = (sector_offset as usize) * sector_size;
             let sector_buffer = &mut buffer[buffer_offset..buffer_offset + sector_size];
 
             block_io
@@ -121,7 +121,7 @@ impl<'a> Disk for UefiDisk<'a> {
         // Write sectors
         for sector_offset in 0..count {
             let current_lba = lba + sector_offset as u64;
-            let buffer_offset = sector_offset * sector_size;
+            let buffer_offset = (sector_offset as usize) * sector_size;
             let sector_buffer = &buffer[buffer_offset..buffer_offset + sector_size];
 
             block_io
