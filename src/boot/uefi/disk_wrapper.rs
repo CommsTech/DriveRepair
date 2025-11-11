@@ -9,7 +9,7 @@ use uefi::table::boot::BootServices;
 use uefi::proto::block::BlockIO;
 use uefi::Result;
 
-use crate::disk::{Disk, DiskError, DiskInfo, DiskInterface, SECTOR_SIZE_512};
+use drive_repair::disk::{Disk, DiskError, DiskInfo, DiskInterface, SECTOR_SIZE_512};
 
 #[cfg(feature = "alloc")]
 extern crate alloc;

@@ -9,6 +9,11 @@ use uefi::table::boot::BootServices;
 use uefi::table::SystemTable;
 use uefi::Result;
 
+mod disk_enumeration;
+mod disk_wrapper;
+mod menu_integration;
+mod repair_integration;
+
 #[entry]
 fn efi_main(image: Handle, mut st: SystemTable<Boot>) -> Status {
     // Initialize UEFI services
@@ -30,7 +35,7 @@ fn efi_main(image: Handle, mut st: SystemTable<Boot>) -> Status {
     let bs = st.boot_services();
     
     // Run repair workflow
-    use crate::boot::uefi::repair_integration::UefiRepairIntegration;
+    use repair_integration::UefiRepairIntegration;
     let repair = UefiRepairIntegration::new(bs, &st);
     match repair.run_repair_workflow() {
         Ok(()) => {

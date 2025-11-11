@@ -19,7 +19,7 @@ use alloc::vec::Vec;
 #[cfg(feature = "alloc")]
 use alloc::string::String;
 
-use crate::disk::{DiskError, DiskInfo, DiskInterface};
+use drive_repair::disk::{DiskError, DiskInfo, DiskInterface};
 
 /// UEFI disk enumerator
 pub struct UefiDiskEnumerator<'a> {

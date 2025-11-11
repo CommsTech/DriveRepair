@@ -15,9 +15,9 @@ extern crate alloc;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-use crate::boot::uefi::disk_enumeration::UefiDiskEnumerator;
-use crate::disk::DiskInfo;
-use crate::ui::menu::{Menu, RepairOption};
+use crate::disk_enumeration::UefiDiskEnumerator;
+use drive_repair::disk::DiskInfo;
+use drive_repair::ui::menu::{Menu, RepairOption};
 
 /// UEFI menu integration
 pub struct UefiMenuIntegration<'a> {

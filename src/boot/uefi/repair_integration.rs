@@ -12,11 +12,11 @@ use uefi::Result;
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
-use crate::boot::uefi::disk_enumeration::UefiDiskEnumerator;
-use crate::boot::uefi::disk_wrapper::UefiDisk;
-use crate::boot::uefi::menu_integration::UefiMenuIntegration;
-use crate::ui::menu::RepairOption;
-use crate::repair::{RepairEngine, RepairConfig, ScanPattern};
+use crate::disk_enumeration::UefiDiskEnumerator;
+use crate::disk_wrapper::UefiDisk;
+use crate::menu_integration::UefiMenuIntegration;
+use drive_repair::ui::menu::RepairOption;
+use drive_repair::repair::{RepairEngine, RepairConfig, ScanPattern};
 
 /// UEFI repair integration
 pub struct UefiRepairIntegration<'a> {
@@ -143,7 +143,7 @@ impl<'a> UefiRepairIntegration<'a> {
         ))?;
 
         // Run scan and repair with progress callback
-        let progress_callback = |current: u64, total: u64, result: crate::repair::RepairResult| {
+        let progress_callback = |current: u64, total: u64, result: drive_repair::repair::RepairResult| {
             // TODO: Display progress via UEFI output
             // For now, this is a placeholder
             let _ = (current, total, result);
