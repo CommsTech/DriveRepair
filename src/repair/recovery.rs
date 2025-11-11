@@ -1,5 +1,6 @@
 // Error recovery strategies
 // Implements various retry and recovery mechanisms for disk operations
+// Based on SpinRite analysis: exponential backoff, multiple retry strategies
 
 use core::result::Result;
 
