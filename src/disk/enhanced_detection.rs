@@ -70,10 +70,10 @@ impl EnhancedDiskDetector {
     }
 
     /// Probe ATA channel for drive
-    fn probe_ata_channel(primary: bool, master: bool) -> Result<DiskInfo, DiskError> {
+    fn probe_ata_channel(primary: bool, _master: bool) -> Result<DiskInfo, DiskError> {
         use crate::disk::ata_port_io::AtaPortIO;
 
-        let port_io = AtaPortIO::new(primary);
+        let _port_io = AtaPortIO::new(primary);
 
         // Send IDENTIFY DEVICE command (0xEC)
         // TODO: Implement full IDENTIFY DEVICE command sequence
@@ -143,7 +143,7 @@ impl EnhancedDiskDetector {
 
         // Enumerate AHCI/SATA drives via PCI
         if let Ok(ahci_controllers) = Self::detect_ahci_controllers() {
-            for controller in ahci_controllers {
+            for _controller in ahci_controllers {
                 // TODO: Initialize AHCI controller and enumerate ports
                 // For now, create placeholder disk info
                 disks.push(DiskInfo {

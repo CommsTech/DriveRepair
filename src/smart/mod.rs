@@ -10,6 +10,9 @@ use core::result::Result;
 extern crate alloc;
 
 #[cfg(feature = "alloc")]
+pub mod ata_smart;
+
+#[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
 /// SMART attribute ID constants
