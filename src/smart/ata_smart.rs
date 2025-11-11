@@ -126,8 +126,7 @@ mod tests {
 
     #[test]
     fn test_ata_smart_executor_creation() {
-        let executor = AtaSmartExecutor::new(true);
+        let _executor = AtaSmartExecutor::new(true);
         // Just verify it can be created
-        assert!(true);
     }
 }
