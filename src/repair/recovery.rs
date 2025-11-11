@@ -5,7 +5,6 @@
 use core::clone::Clone;
 use core::default::Default;
 use core::ops::FnMut;
-use core::option::Option;
 use core::result::Result;
 
 /// Retry strategy for disk operations
