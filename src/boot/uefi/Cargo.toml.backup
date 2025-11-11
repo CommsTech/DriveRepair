@@ -1,0 +1,22 @@
+# Standalone minimal UEFI bootloader - NO library dependencies
+# DriveRepair by commstech v0.0.1
+
+[package]
+name = "drive-repair-uefi-standalone"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+uefi = "0.30"
+uefi-services = "0.22"
+
+[[bin]]
+name = "drive-repair-uefi-standalone"
+path = "standalone_minimal.rs"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+

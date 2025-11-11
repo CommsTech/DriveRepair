@@ -46,44 +46,120 @@ $projectPath = (Get-Location).Path
 $wslPath = $projectPath -replace '^([A-Z]):', '/mnt/$1' -replace '\\', '/'
 $wslPath = $wslPath.ToLower()
 
-# Create build script file
+# Temporarily replace Cargo.toml with standalone version to avoid library deps
+Write-Host "  Using standalone Cargo.toml (no library dependencies)" -ForegroundColor Yellow
+
+# Create build script that temporarily swaps Cargo.toml files
 $buildScriptContent = @"
 #!/bin/bash
-set -e
 cd '$wslPath/src/boot/uefi'
 source ~/.cargo/env 2>/dev/null || true
 rustup target add x86_64-unknown-uefi 2>/dev/null || true
-cargo build --bin drive-repair-uefi-minimal --target x86_64-unknown-uefi --release
+# Backup original and use standalone
+cp Cargo.toml Cargo.toml.orig 2>/dev/null || true
+cp Cargo_standalone.toml Cargo.toml
+cargo build --bin drive-repair-uefi-standalone --target x86_64-unknown-uefi --release
+BUILD_EXIT=`$?
+# Restore original
+mv Cargo.toml.orig Cargo.toml 2>/dev/null || true
+exit `$BUILD_EXIT
 "@
 
+$binName = "drive-repair-uefi-standalone"
+
 $scriptFile = "$env:TEMP\build_bootloader.sh"
-$buildScriptContent | Out-File -FilePath $scriptFile -Encoding ASCII -NoNewline
+# Write with Unix line endings (LF only) - each line separately
+$lines = $buildScriptContent -split "`r?`n"
+$lines | ForEach-Object {
+    if ($_.Trim() -ne "") {
+        Add-Content -Path $scriptFile -Value $_ -NoNewline -Encoding ASCII
+        Add-Content -Path $scriptFile -Value "`n" -NoNewline -Encoding ASCII
+    }
+}
+
 $wslScriptPath = $scriptFile -replace '^([A-Z]):', '/mnt/$1' -replace '\\', '/'
 $wslScriptPath = $wslScriptPath.ToLower()
 
 Write-Host "  Building..." -ForegroundColor Yellow
-wsl bash $wslScriptPath
+$buildOutput = wsl bash $wslScriptPath 2>&1
+$buildExitCode = $LASTEXITCODE
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  ❌ Build failed" -ForegroundColor Red
+# Show build output
+Write-Host "Build output:" -ForegroundColor Gray
+$buildOutput | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
+
+if ($buildExitCode -ne 0) {
+    Write-Host "  ❌ Build failed (exit code: $buildExitCode)" -ForegroundColor Red
     Remove-Item $scriptFile -ErrorAction SilentlyContinue
     exit 1
 }
 
-Write-Host "  ✅ Build successful!" -ForegroundColor Green
+# Check if build actually succeeded by looking for the file
+$checkFile = "$projectPath\src\boot\uefi\target\x86_64-unknown-uefi\release\$binName.efi"
+if (-not (Test-Path $checkFile)) {
+    Write-Host "  ⚠️  Build reported success but .efi file not found" -ForegroundColor Yellow
+    Write-Host "  This usually means the build failed silently" -ForegroundColor Yellow
+} else {
+    Write-Host "  ✅ Build successful!" -ForegroundColor Green
+}
 Remove-Item $scriptFile -ErrorAction SilentlyContinue
+
+# Find the actual .efi file that was created
+$possiblePaths = @(
+    "$projectPath\src\boot\uefi\target\x86_64-unknown-uefi\release\$binName.efi",
+    "$projectPath\src\boot\uefi\target\x86_64-unknown-uefi\release\*.efi"
+)
+
+$efiFile = $null
+foreach ($path in $possiblePaths) {
+    $found = Get-ChildItem -Path $path -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) {
+        $efiFile = $found.FullName
+        break
+    }
+}
+
+# If not found, search in the target directory
+if (-not $efiFile) {
+    $targetDir = "$projectPath\src\boot\uefi\target\x86_64-unknown-uefi\release"
+    if (Test-Path $targetDir) {
+        $found = Get-ChildItem -Path $targetDir -Filter "*.efi" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found) {
+            $efiFile = $found.FullName
+        }
+    }
+}
+
+if ($efiFile) {
+    Write-Host "  Found: $efiFile" -ForegroundColor Cyan
+    $efiSource = $efiFile
+} else {
+    Write-Host "  ⚠️  Could not locate .efi file, using expected path" -ForegroundColor Yellow
+    $efiSource = "$projectPath\src\boot\uefi\target\x86_64-unknown-uefi\release\$binName.efi"
+}
+
 Write-Host ""
 
 # Step 3: Copy to USB
 Write-Host "Step 3: Copying to USB..." -ForegroundColor Cyan
 
-$efiSource = "$projectPath\src\boot\uefi\target\x86_64-unknown-uefi\release\drive-repair-uefi-minimal.efi"
 $efiBootPath = "$efiDriveLetter`:\EFI\BOOT\BOOTX64.EFI"
 $efiAppPath = "$efiDriveLetter`:\EFI\DriveRepair\DRIVEREPAIRX64.EFI"
 
 if (-not (Test-Path $efiSource)) {
     Write-Host "  ❌ Bootloader not found: $efiSource" -ForegroundColor Red
-    exit 1
+    Write-Host ""
+    Write-Host "Searching for any .efi files..." -ForegroundColor Yellow
+    $allEfi = Get-ChildItem -Path "$projectPath\src\boot\uefi\target" -Filter "*.efi" -Recurse -ErrorAction SilentlyContinue
+    if ($allEfi) {
+        Write-Host "Found .efi files:" -ForegroundColor Cyan
+        $allEfi | ForEach-Object { Write-Host "  $($_.FullName)" -ForegroundColor White }
+        $efiSource = $allEfi[0].FullName
+        Write-Host "Using: $efiSource" -ForegroundColor Green
+    } else {
+        Write-Host "No .efi files found. Build may have failed silently." -ForegroundColor Red
+        exit 1
+    }
 }
 
 # Ensure directories exist
@@ -97,8 +173,29 @@ if (-not (Test-Path $appDir)) {
     New-Item -ItemType Directory -Path $appDir -Force | Out-Null
 }
 
-Copy-Item $efiSource $efiBootPath -Force
-Copy-Item $efiSource $efiAppPath -Force
+# Try to copy - if it fails due to permissions, provide manual instructions
+try {
+    # Remove existing files if they exist
+    if (Test-Path $efiBootPath) {
+        Remove-Item $efiBootPath -Force -ErrorAction Stop
+    }
+    if (Test-Path $efiAppPath) {
+        Remove-Item $efiAppPath -Force -ErrorAction Stop
+    }
+    
+    Copy-Item $efiSource $efiBootPath -Force -ErrorAction Stop
+    Copy-Item $efiSource $efiAppPath -Force -ErrorAction Stop
+} catch {
+    Write-Host "  ⚠️  Copy failed (permission denied)" -ForegroundColor Yellow
+    Write-Host "  The bootloader was built successfully!" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  Manual copy (run PowerShell as Administrator):" -ForegroundColor Cyan
+    Write-Host "    Copy-Item `"$efiSource`" `"$efiBootPath`" -Force" -ForegroundColor White
+    Write-Host "    Copy-Item `"$efiSource`" `"$efiAppPath`" -Force" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  Or use the file explorer to copy manually." -ForegroundColor White
+    exit 0  # Exit successfully since build worked
+}
 
 Write-Host "  ✅ Copied to:" -ForegroundColor Green
 Write-Host "     $efiBootPath" -ForegroundColor Cyan

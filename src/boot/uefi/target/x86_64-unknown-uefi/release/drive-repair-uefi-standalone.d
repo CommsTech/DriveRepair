@@ -1,0 +1,1 @@
+/mnt/c/Users/commstech/Github/DriveRepair/src/boot/uefi/target/x86_64-unknown-uefi/release/drive-repair-uefi-standalone.efi: /mnt/c/Users/commstech/Github/DriveRepair/src/boot/uefi/standalone_minimal.rs

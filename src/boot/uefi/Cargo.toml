@@ -1,23 +1,18 @@
+# Standalone minimal UEFI bootloader - NO library dependencies
+# DriveRepair by commstech v0.0.1
+
 [package]
-name = "drive-repair-uefi"
+name = "drive-repair-uefi-standalone"
 version = "0.1.0"
 edition = "2021"
-authors = ["DriveRepair Team"]
 
 [dependencies]
-drive-repair = { path = "../../..", features = ["alloc"] }
 uefi = "0.30"
 uefi-services = "0.22"
 
 [[bin]]
-name = "drive-repair-uefi"
-path = "main.rs"
-
-[[bin]]
-name = "drive-repair-uefi-minimal"
-path = "minimal.rs"
-
-[workspace]
+name = "drive-repair-uefi-standalone"
+path = "standalone_minimal.rs"
 
 [profile.release]
 opt-level = "z"
