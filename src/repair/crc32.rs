@@ -63,7 +63,7 @@ mod tests {
         let crc = crc32(&sector);
         // Verified: CRC32 of 512 zeros = 0xB2D02E18 (2997515640)
         assert_eq!(crc, 0xB2D02E18);
-        
+
         // Test with non-zero data
         let mut sector2 = [0u8; 512];
         sector2[0] = 0x01;
