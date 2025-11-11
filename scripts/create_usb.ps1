@@ -68,11 +68,18 @@ if ($currentStyle -eq "MBR") {
         }
         Start-Sleep -Seconds 1
     }
-    # Clear the disk completely
+    # Clear the disk completely - this removes all data and partitions
     Clear-Disk -Number $diskNumber -RemoveData -Confirm:$false -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
-    # Convert to GPT
-    ConvertTo-Gpt -InputObject (Get-Disk -Number $diskNumber) -ErrorAction Stop
+    # Use diskpart to convert MBR to GPT (more reliable)
+    $diskpartScript = @"
+select disk $diskNumber
+clean
+convert gpt
+exit
+"@
+    $diskpartScript | diskpart | Out-Null
+    Start-Sleep -Seconds 1
     Write-Host "  Disk converted to GPT" -ForegroundColor Green
 } elseif ($currentStyle -eq "GPT") {
     Write-Host "  Disk is already GPT, cleaning partitions..." -ForegroundColor Yellow
