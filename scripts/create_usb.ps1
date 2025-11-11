@@ -54,35 +54,76 @@ Write-Host "Creating bootable USB drive..." -ForegroundColor Green
 
 # Step 1: Clean the disk
 Write-Host "Step 1: Cleaning disk..." -ForegroundColor Cyan
-Clear-Disk -Number $diskNumber -RemoveData -Confirm:$false
+# Remove all partitions first
+$partitions = Get-Partition -DiskNumber $diskNumber -ErrorAction SilentlyContinue
+if ($partitions) {
+    $partitions | Remove-Partition -Confirm:$false -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+}
+# Clear the disk completely
+Clear-Disk -Number $diskNumber -RemoveData -Confirm:$false -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 
 # Step 2: Initialize disk with GPT
 Write-Host "Step 2: Initializing GPT partition table..." -ForegroundColor Cyan
-Initialize-Disk -Number $diskNumber -PartitionStyle GPT
+# Check current partition style
+$currentStyle = (Get-Disk -Number $diskNumber).PartitionStyle
+if ($currentStyle -ne "GPT") {
+    Initialize-Disk -Number $diskNumber -PartitionStyle GPT -Confirm:$false
+} else {
+    Write-Host "  Disk is already GPT" -ForegroundColor Green
+}
 
 # Step 3: Create EFI System Partition (ESP)
 Write-Host "Step 3: Creating EFI System Partition..." -ForegroundColor Cyan
 $espSize = 100MB
-$esp = New-Partition -DiskNumber $diskNumber -Size $espSize -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' -AssignDriveLetter
-Format-Volume -Partition $esp -FileSystem FAT32 -NewFileSystemLabel "EFI" -Confirm:$false
+try {
+    $esp = New-Partition -DiskNumber $diskNumber -Size $espSize -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' -AssignDriveLetter -ErrorAction Stop
+    Start-Sleep -Seconds 1
+    Format-Volume -Partition $esp -FileSystem FAT32 -NewFileSystemLabel "EFI" -Confirm:$false
+    Write-Host "  EFI System Partition created" -ForegroundColor Green
+} catch {
+    Write-Host "  ERROR: Failed to create EFI System Partition: $_" -ForegroundColor Red
+    exit 1
+}
 
 # Step 4: Create BIOS Boot Partition (for legacy boot)
 Write-Host "Step 4: Creating BIOS Boot Partition..." -ForegroundColor Cyan
 $biosSize = 1MB
-$bios = New-Partition -DiskNumber $diskNumber -Size $biosSize -GptType '{21686148-6449-6e6f-744e-656564454649}' -AssignDriveLetter
+try {
+    $bios = New-Partition -DiskNumber $diskNumber -Size $biosSize -GptType '{21686148-6449-6e6f-744e-656564454649}' -ErrorAction Stop
+    Write-Host "  BIOS Boot Partition created" -ForegroundColor Green
+} catch {
+    Write-Host "  WARNING: Failed to create BIOS Boot Partition: $_" -ForegroundColor Yellow
+    Write-Host "  Continuing without BIOS boot partition..." -ForegroundColor Yellow
+    $bios = $null
+}
 
 # Step 5: Create data partition (optional, for logs/reports)
 Write-Host "Step 5: Creating data partition..." -ForegroundColor Cyan
-$dataSize = $disk.Size - $espSize - $biosSize
-$data = New-Partition -DiskNumber $diskNumber -Size $dataSize -GptType '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}' -AssignDriveLetter
-Format-Volume -Partition $data -FileSystem NTFS -NewFileSystemLabel "DriveRepair" -Confirm:$false
+$biosSizeUsed = if ($bios) { $biosSize } else { 0 }
+$dataSize = $disk.Size - $espSize - $biosSizeUsed
+try {
+    $data = New-Partition -DiskNumber $diskNumber -Size $dataSize -GptType '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}' -AssignDriveLetter -ErrorAction Stop
+    Start-Sleep -Seconds 1
+    Format-Volume -Partition $data -FileSystem NTFS -NewFileSystemLabel "DriveRepair" -Confirm:$false
+    Write-Host "  Data partition created" -ForegroundColor Green
+} catch {
+    Write-Host "  WARNING: Failed to create data partition: $_" -ForegroundColor Yellow
+    Write-Host "  Continuing without data partition..." -ForegroundColor Yellow
+    $data = $null
+}
 
 # Step 6: Copy bootloaders
 Write-Host "Step 6: Copying bootloaders..." -ForegroundColor Cyan
 
 # Get ESP drive letter
-$espDrive = (Get-Partition -DiskNumber $diskNumber | Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' }).DriveLetter
+$espPartition = Get-Partition -DiskNumber $diskNumber | Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' } | Select-Object -First 1
+if (-not $espPartition -or -not $espPartition.DriveLetter) {
+    Write-Host "  ERROR: Could not find EFI System Partition with drive letter" -ForegroundColor Red
+    exit 1
+}
+$espDrive = $espPartition.DriveLetter
 $espPath = "$($espDrive):"
 
 # Create EFI directory structure
@@ -141,8 +182,17 @@ Write-Host "Bootable USB drive created successfully!" -ForegroundColor Green
 Write-Host ""
 Write-Host "USB Drive Layout:" -ForegroundColor Yellow
 Write-Host "  EFI System Partition: $espPath (FAT32)"
-Write-Host "  BIOS Boot Partition: (hidden)"
-Write-Host "  Data Partition: $((Get-Partition -DiskNumber $diskNumber | Where-Object { $_.GptType -eq '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}' }).DriveLetter): (NTFS)"
+if ($bios) {
+    Write-Host "  BIOS Boot Partition: (hidden)"
+} else {
+    Write-Host "  BIOS Boot Partition: (not created)"
+}
+$dataPartition = Get-Partition -DiskNumber $diskNumber | Where-Object { $_.GptType -eq '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}' } | Select-Object -First 1
+if ($dataPartition -and $dataPartition.DriveLetter) {
+    Write-Host "  Data Partition: $($dataPartition.DriveLetter): (NTFS)"
+} else {
+    Write-Host "  Data Partition: (not created)"
+}
 Write-Host ""
 Write-Host "Boot Methods:" -ForegroundColor Yellow
 Write-Host "  UEFI x64: Boot from EFI System Partition (BOOTX64.EFI)"
