@@ -6,6 +6,9 @@
 
 use core::panic::PanicInfo;
 
+pub mod disk_detection;
+use disk_detection::BiosDiskDetector;
+
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     loop {}

@@ -10,6 +10,9 @@ use uefi::table::SystemTable;
 use uefi::Result;
 use uefi::proto::block::BlockIO;
 
+pub mod disk_enumeration;
+use disk_enumeration::UefiDiskEnumerator;
+
 #[entry]
 fn efi_main(image: Handle, mut st: SystemTable<Boot>) -> Status {
     // Initialize UEFI services
