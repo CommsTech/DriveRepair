@@ -3,8 +3,6 @@
 
 #![allow(dead_code)]
 
-use crate::disk::DiskInfo;
-
 /// Input handler for bootable environment
 pub struct InputHandler;
 
