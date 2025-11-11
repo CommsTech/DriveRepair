@@ -1,0 +1,18 @@
+# Cargo configuration for UEFI and BIOS bootloader builds
+# DriveRepair by commstech v0.0.1
+
+[build]
+# Default target (can be overridden with --target)
+# target = "x86_64-unknown-uefi"
+
+[target.x86_64-unknown-uefi]
+# UEFI target configuration
+# Note: UEFI targets use their own linker, no special configuration needed
+
+[target.aarch64-unknown-uefi]
+# UEFI ARM64 target configuration
+
+[target.x86_64-unknown-none]
+# BIOS target configuration
+# Note: BIOS targets may need a custom linker script
+
