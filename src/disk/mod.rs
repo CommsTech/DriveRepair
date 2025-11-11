@@ -9,7 +9,6 @@ use core::result::Result;
 extern crate alloc;
 
 pub mod ata;
-#[cfg(feature = "platform")]
 pub mod ata_port_io;
 pub mod detection;
 pub mod nvme;
