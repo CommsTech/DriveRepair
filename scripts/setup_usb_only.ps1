@@ -20,15 +20,41 @@ Write-Host "Bootloaders can be copied manually later." -ForegroundColor Cyan
 Write-Host ""
 
 # Validate drive
-$driveLetter = $UsbDrive.TrimEnd('\', ':')
-$disk = Get-Disk | Where-Object { $_.PartitionStyle -ne $null -and (Get-Partition -DiskNumber $_.Number -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter -eq $driveLetter }) } | Select-Object -First 1
+$driveLetter = $UsbDrive.TrimEnd('\', ':').ToUpper()
 
-if (-not $disk) {
-    Write-Host "ERROR: Could not find disk for drive $driveLetter" -ForegroundColor Red
-    exit 1
+# Try to find the disk by drive letter
+$partition = Get-Partition -DriveLetter $driveLetter -ErrorAction SilentlyContinue
+if ($partition) {
+    $diskNumber = $partition.DiskNumber
+    $disk = Get-Disk -Number $diskNumber
+} else {
+    # Try alternative method - check all disks for the drive letter
+    $allDisks = Get-Disk
+    $found = $false
+    foreach ($d in $allDisks) {
+        $parts = Get-Partition -DiskNumber $d.Number -ErrorAction SilentlyContinue
+        foreach ($p in $parts) {
+            if ($p.DriveLetter -eq $driveLetter) {
+                $diskNumber = $d.Number
+                $disk = $d
+                $found = $true
+                break
+            }
+        }
+        if ($found) { break }
+    }
+    
+    if (-not $found) {
+        Write-Host "ERROR: Could not find disk for drive $driveLetter`:" -ForegroundColor Red
+        Write-Host "Available drives:" -ForegroundColor Yellow
+        Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -gt 0 } | ForEach-Object {
+            Write-Host "  $($_.Name):" -ForegroundColor White
+        }
+        exit 1
+    }
 }
 
-$diskNumber = $disk.Number
+# $diskNumber is already set above
 
 Write-Host "Target USB Drive:" -ForegroundColor Cyan
 Write-Host "  Drive Letter: $driveLetter`:" -ForegroundColor White
