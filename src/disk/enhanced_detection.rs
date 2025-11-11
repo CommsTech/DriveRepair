@@ -117,7 +117,7 @@ impl EnhancedDiskDetector {
 
         // Enumerate NVMe drives via PCI
         if let Ok(nvme_controllers) = Self::detect_nvme_controllers() {
-            for controller in nvme_controllers {
+            for _controller in nvme_controllers {
                 // TODO: Initialize NVMe controller and enumerate namespaces
                 // For now, create placeholder disk info
                 disks.push(DiskInfo {

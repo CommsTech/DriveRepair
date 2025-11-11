@@ -85,7 +85,7 @@ impl AtaSmartExecutor {
     /// Get SMART health status
     #[cfg(feature = "alloc")]
     pub fn health_status(&self) -> Result<SmartHealthStatus, DiskError> {
-        use crate::smart::{SmartParser, SmartHealthStatus};
+        use crate::smart::{SmartHealthStatus, SmartParser};
 
         let attributes = self.read_attributes()?;
         Ok(SmartParser::interpret_health(&attributes))
@@ -131,4 +131,3 @@ mod tests {
         assert!(true);
     }
 }
-
