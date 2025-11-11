@@ -119,6 +119,8 @@
 - ✅ ATA implementation guide (`docs/ATA_IMPLEMENTATION.md`)
 - ✅ Comparable tools analysis (`docs/COMPARABLE_TOOLS.md`)
 - ✅ Reverse engineering findings (`docs/FINDINGS.md`)
+- ✅ Bootloader implementation guide (`docs/BOOTLOADER_IMPLEMENTATION.md`)
+- ✅ Disk detection guide (`docs/DISK_DETECTION.md`)
 
 ## Next Steps
 
