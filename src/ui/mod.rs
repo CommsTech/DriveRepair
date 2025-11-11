@@ -19,6 +19,7 @@ use alloc::vec::Vec;
 extern crate std;
 
 pub mod input;
+pub mod menu;
 use input::InputHandler;
 
 /// UI color codes (for terminals that support ANSI)
