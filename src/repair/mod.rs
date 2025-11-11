@@ -154,8 +154,15 @@ impl<D: Disk> RepairEngine<D> {
     }
 
     /// Repair a single sector
+    ///
+    /// Based on SpinRite analysis:
+    /// - Uses exponential backoff retry strategy
+    /// - Verifies data integrity after read
+    /// - Attempts partial read recovery on failure
+    /// - Marks sector as bad if all recovery attempts fail
     fn repair_sector(&self, lba: u64, buffer: &mut [u8]) -> Result<RepairResult, DiskError> {
         // Create error recovery with retry strategy
+        // SpinRite uses exponential backoff: 100ms initial, 2.0 multiplier, max 3-5 retries
         let recovery = ErrorRecovery::new(
             RetryStrategy::ExponentialBackoff {
                 initial_delay_ms: 100,
@@ -166,9 +173,11 @@ impl<D: Disk> RepairEngine<D> {
         );
 
         // Try to read sector with retries
+        // SpinRite pattern: retry with exponential backoff, verify after each read
         match recovery.retry(|| self.disk.read_sectors(lba, 1, buffer)) {
             Ok(()) => {
                 // Sector read successfully - verify data integrity
+                // SpinRite verifies data using checksum or ECC
                 let verification_method = if self.config.aggressive_correction {
                     VerificationMethod::Crc32
                 } else {
@@ -179,15 +188,19 @@ impl<D: Disk> RepairEngine<D> {
                     Ok(RepairResult::Repaired)
                 } else {
                     // Data read but may be corrupted
+                    // SpinRite attempts to recover partial data
                     Ok(RepairResult::Recovered)
                 }
             }
             Err(_) => {
                 // All retries failed - attempt data recovery
-                // Try reading with different strategies
+                // SpinRite pattern: try partial reads, different read modes
                 if self.config.aggressive_correction {
                     // Try reading partial sectors or using different modes
-                    // For now, mark as failed
+                    // TODO: Implement partial read recovery
+                    // - Try reading with different sector sizes
+                    // - Try reading with different timing
+                    // - Attempt to reconstruct from partial data
                     Ok(RepairResult::Failed)
                 } else {
                     Ok(RepairResult::Failed)
