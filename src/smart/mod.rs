@@ -4,8 +4,8 @@
 #![allow(dead_code)]
 
 use crate::disk::DiskError;
-use core::result::Result;
 use core::option::Option;
+use core::result::Result;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;

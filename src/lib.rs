@@ -12,14 +12,14 @@ extern crate std;
 // Prelude for no_std compatibility
 #[cfg(not(feature = "std"))]
 pub mod prelude {
-    pub use core::result::Result::{self, Ok, Err};
-    pub use core::option::Option::{self, Some, None};
-    pub use core::marker::{Send, Sync};
-    pub use core::default::Default;
     pub use core::clone::Clone;
-    pub use core::ops::{Fn, FnMut};
-    pub use core::iter::Iterator;
     pub use core::convert::From;
+    pub use core::default::Default;
+    pub use core::iter::Iterator;
+    pub use core::marker::{Send, Sync};
+    pub use core::ops::{Fn, FnMut};
+    pub use core::option::Option::{self, None, Some};
+    pub use core::result::Result::{self, Err, Ok};
 }
 
 pub mod disk;

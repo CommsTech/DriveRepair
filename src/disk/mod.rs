@@ -3,8 +3,8 @@
 
 #![allow(dead_code)]
 
-use core::result::Result;
 use core::marker::{Send, Sync};
+use core::result::Result;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;

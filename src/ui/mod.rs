@@ -6,9 +6,9 @@
 use crate::disk::{DiskInfo, DiskInterface};
 use crate::repair::{RepairConfig, RepairResult, RepairStats};
 use crate::smart::SmartHealthStatus;
-use core::option::Option;
 use core::convert::From;
 use core::iter::Iterator;
+use core::option::Option;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -182,7 +182,7 @@ impl UserInterface {
                 let mut s = String::new();
                 s.push_str("Skipped");
                 s
-            },
+            }
         };
 
         print!(
