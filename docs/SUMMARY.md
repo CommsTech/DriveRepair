@@ -42,11 +42,14 @@ Modern drive repair utility built in Rust, reverse-engineered from SPINRITE.EXE,
 5. Implement low-level disk access based on findings
 6. Complete bootloader implementations
 
-### Key Findings (To Be Updated)
+### Key Findings
 - File: SPINRITE.EXE (173,144 bytes, dated 2004)
-- Likely 16-bit DOS executable with DOS extender
-- Expected 32-bit LBA limitation (1TB max)
-- Uses INT 13h BIOS calls and direct hardware access
+- ✅ Confirmed: MZ DOS executable header
+- ✅ Architecture: Likely 16-bit DOS executable with DOS extender
+- ✅ Expected: 32-bit LBA limitation (1TB max)
+- ✅ Expected: Uses INT 13h BIOS calls and direct hardware access
+- ⏳ Pattern search: INT 13h and port I/O patterns being analyzed
+- ⏳ Disassembler: Ghidra setup in progress
 
 ### Architecture Decisions
 - 64-bit LBA throughout (fixes 1TB limitation)
