@@ -12,8 +12,12 @@ pub struct BiosPlatform;
 
 impl PortIO for BiosPlatform {
     /// Read byte from I/O port (inline assembly)
+    /// Note: This requires kernel privileges in Windows/Linux user mode
     fn inb(port: u16) -> u8 {
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(
+            target_arch = "x86_64",
+            not(any(target_os = "windows", target_os = "linux", target_os = "macos"))
+        ))]
         {
             let value: u8;
             unsafe {
@@ -26,9 +30,14 @@ impl PortIO for BiosPlatform {
             }
             value
         }
-        #[cfg(not(target_arch = "x86_64"))]
+        #[cfg(not(all(
+            target_arch = "x86_64",
+            not(any(target_os = "windows", target_os = "linux", target_os = "macos"))
+        )))]
         {
-            0 // Placeholder for non-x86_64
+            // In user mode (Windows/Linux/macOS), port I/O requires kernel privileges
+            // Return 0 as placeholder - actual implementation requires kernel driver
+            0
         }
     }
 
