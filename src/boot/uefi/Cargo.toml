@@ -5,11 +5,13 @@ edition = "2021"
 authors = ["DriveRepair Team"]
 
 [dependencies]
-drive-repair = { path = ".." }
+drive-repair = { path = "../../..", features = ["alloc"] }
 uefi = "0.30"
 uefi-services = "0.22"
 
-[lib]
-name = "drive_repair_uefi"
-crate-type = ["cdylib"]
+[[bin]]
+name = "drive-repair-uefi"
+path = "main.rs"
+
+[workspace]
 

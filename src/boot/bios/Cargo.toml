@@ -5,9 +5,11 @@ edition = "2021"
 authors = ["DriveRepair Team"]
 
 [dependencies]
-drive-repair = { path = ".." }
+drive-repair = { path = "../../..", features = ["alloc"] }
 
-[lib]
-name = "drive_repair_bios"
-crate-type = ["cdylib"]
+[[bin]]
+name = "drive-repair-bios"
+path = "main.rs"
+
+[workspace]
 
