@@ -115,7 +115,7 @@ pub enum KeyCode {
 impl InputHandler {
     /// Read input from stdin (for std environment)
     pub fn read_from_stdin() -> Option<String> {
-        use std::io::{self, Read};
+        use std::io;
         let mut buffer = String::new();
         io::stdin().read_line(&mut buffer).ok()?;
         Some(buffer.trim().to_string())

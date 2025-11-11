@@ -19,7 +19,7 @@ use alloc::vec::Vec;
 extern crate std;
 
 pub mod input;
-use input::{InputHandler, KeyCode};
+use input::InputHandler;
 
 /// UI color codes (for terminals that support ANSI)
 pub mod colors {

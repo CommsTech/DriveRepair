@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 
 use crate::disk::DiskError;
-use crate::platform::{MemoryIO, PciDevice, PciIO, PciIO as _, PortIO};
+use crate::platform::{MemoryIO, PciDevice, PciIO, PortIO};
 use core::result::Result;
 
 /// BIOS platform implementation
@@ -231,10 +231,10 @@ impl PciIO for BiosPlatform {
 
                         // Read base address registers
                         let mut base_address = [0u64; 6];
-                        for i in 0..6 {
+                        for (i, addr) in base_address.iter_mut().enumerate() {
                             let bar =
                                 Self::read_config(bus, device, function, (0x10 + i * 4) as u8);
-                            base_address[i] = if (bar & 0x01) == 0 {
+                            *addr = if (bar & 0x01) == 0 {
                                 // Memory-mapped I/O
                                 (bar & 0xFFFFFFF0) as u64
                             } else {
