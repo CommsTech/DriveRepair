@@ -56,15 +56,14 @@ mod tests {
     #[test]
     fn test_crc32_sector() {
         // Test with 512-byte sector (all zeros)
-        // CRC32 of all zeros with IEEE 802.3 polynomial is 0xB2D02E18
-        // This is because processing 512 zero bytes through the CRC32 algorithm
-        // produces this specific value (not 0x00000000)
+        // CRC32 of all zeros with IEEE 802.3 polynomial produces a specific value
+        // This verifies that the CRC32 algorithm works correctly for large sectors
         let sector = [0u8; 512];
         let crc = crc32(&sector);
-        // Verified: CRC32 of 512 zeros = 0xB2D02E18 (2997515640)
+        // The actual calculated value for 512 zeros
         assert_eq!(crc, 0xB2D02E18);
 
-        // Test with non-zero data
+        // Test with non-zero data to ensure CRC32 changes
         let mut sector2 = [0u8; 512];
         sector2[0] = 0x01;
         let crc2 = crc32(&sector2);
