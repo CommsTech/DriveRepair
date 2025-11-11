@@ -51,7 +51,11 @@ impl BiosMenuIntegration {
     #[cfg(feature = "alloc")]
     pub fn show_disk_selection() -> Result<Option<usize>, crate::disk::DiskError> {
         // Detect disks
-        let disks = BiosDiskDetector::detect_via_ata_ports()?;
+        // Try INT 13h first, then fall back to ATA port I/O
+        let disks = match BiosDiskDetector::detect_via_int13h() {
+            Ok(d) if !d.is_empty() => d,
+            _ => BiosDiskDetector::detect_via_ata_ports()?,
+        };
 
         if disks.is_empty() {
             VgaTextMode::print_string("No disks found.\n");

@@ -26,39 +26,21 @@ fn efi_main(image: Handle, mut st: SystemTable<Boot>) -> Status {
     st.stdout().output_string("x86_64 and ARM64 architectures\n").unwrap();
     st.stdout().output_string("\n").unwrap();
     
-            // TODO: Initialize disk detection
-            // Steps:
-            // 1. Get boot services
-            // 2. Locate Block I/O protocol handles
-            // 3. Open each block device
-            // 4. Get media information (size, sector size, etc.)
-            // 5. Create disk list
-            
-            // TODO: Enumerate disks
-            // Use uefi::proto::block::BlockIO protocol
-            // Enumerate all block devices
-            // Filter for hard drives (not CD-ROM, floppy, etc.)
-            
-            // TODO: Show disk list
-            // Display detected drives with:
-            // - Drive number
-            // - Model/Serial (if available)
-            // - Size (formatted)
-            // - Interface type (ATA, SATA, NVMe, USB)
-            
-            // TODO: Prompt for disk selection
-            // Show menu with drive options
-            // Wait for user input
-            // Validate selection
-            
-            // Run repair workflow
-            use crate::boot::uefi::repair_integration::UefiRepairIntegration;
-            let repair = UefiRepairIntegration::new(bs, &st);
-            if let Err(e) = repair.run_repair_workflow() {
-                st.stdout().output_string(&format!("ERROR: Repair failed: {:?}\n", e)).unwrap();
-                return e;
-            }
-
+    // Get boot services
+    let bs = st.boot_services();
+    
+    // Run repair workflow
+    use crate::boot::uefi::repair_integration::UefiRepairIntegration;
+    let repair = UefiRepairIntegration::new(bs, &st);
+    match repair.run_repair_workflow() {
+        Ok(()) => {
+            st.stdout().output_string("\nRepair workflow completed successfully.\n").unwrap();
             Status::SUCCESS
+        }
+        Err(e) => {
+            st.stdout().output_string(&format!("ERROR: Repair failed: {:?}\n", e)).unwrap();
+            e
+        }
+    }
 }
 

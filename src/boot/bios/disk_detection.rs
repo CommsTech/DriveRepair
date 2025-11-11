@@ -69,7 +69,7 @@ impl BiosDiskDetector {
         use crate::disk::enhanced_detection::EnhancedDiskDetector;
 
         // Use enhanced detection which uses PCI enumeration and ATA port probing
-        EnhancedDiskDetector::enumerate_all()
+        EnhancedDiskDetector::enumerate_all_disks()
     }
 
     /// Read sectors using INT 13h, AH=0x02

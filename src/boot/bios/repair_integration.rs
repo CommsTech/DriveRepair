@@ -50,7 +50,11 @@ impl BiosRepairIntegration {
     #[cfg(feature = "alloc")]
     pub fn run_repair_workflow() -> Result<(), DiskError> {
         // 1. Detect disks
-        let disks = BiosDiskDetector::detect_via_ata_ports()?;
+        // Try INT 13h first, then fall back to ATA port I/O
+        let disks = match BiosDiskDetector::detect_via_int13h() {
+            Ok(d) if !d.is_empty() => d,
+            _ => BiosDiskDetector::detect_via_ata_ports()?,
+        };
 
         if disks.is_empty() {
             vga::print_string("No disks found.\n");
