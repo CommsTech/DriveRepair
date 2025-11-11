@@ -6,13 +6,13 @@ param(
     [string]$UsbDrive = "F:",
     
     [Parameter(Mandatory=$false)]
-    [string]$UefiBootloaderX64 = "target\x86_64-unknown-uefi\release\drive-repair-uefi.efi",
+    [string]$UefiBootloaderX64 = "src\boot\uefi\target\x86_64-unknown-uefi\release\drive-repair-uefi.efi",
     
     [Parameter(Mandatory=$false)]
-    [string]$UefiBootloaderARM64 = "target\aarch64-unknown-uefi\release\drive-repair-uefi.efi",
+    [string]$UefiBootloaderARM64 = "src\boot\uefi\target\aarch64-unknown-uefi\release\drive-repair-uefi.efi",
     
     [Parameter(Mandatory=$false)]
-    [string]$BiosBootloader = "target\x86_64-unknown-none\release\drive-repair-bios"
+    [string]$BiosBootloader = "src\boot\bios\target\x86_64-unknown-none\release\drive-repair-bios"
 )
 
 Write-Host "Drive Repair Tool - USB Creation Script" -ForegroundColor Cyan
