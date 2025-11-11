@@ -3,6 +3,16 @@
 
 #![allow(dead_code)]
 
+use core::option::Option;
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
+#[cfg(feature = "alloc")]
+use alloc::string::String;
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
+
 /// Input handler for bootable environment
 pub struct InputHandler;
 

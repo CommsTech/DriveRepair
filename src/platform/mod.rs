@@ -6,6 +6,12 @@
 use crate::disk::DiskError;
 use core::result::Result;
 
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
+
 /// Platform-specific port I/O operations
 pub trait PortIO {
     /// Read byte from I/O port

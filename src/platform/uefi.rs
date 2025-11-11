@@ -7,6 +7,12 @@ use crate::disk::DiskError;
 use crate::platform::{MemoryIO, PciDevice, PciIO, PortIO};
 use core::result::Result;
 
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
+
 /// UEFI platform implementation
 pub struct UefiPlatform;
 

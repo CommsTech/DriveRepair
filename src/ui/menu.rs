@@ -5,12 +5,13 @@
 
 use crate::disk::DiskInfo;
 use crate::ui::input::{InputHandler, KeyCode};
+use core::option::Option;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
 #[cfg(feature = "alloc")]
-use alloc::string::String;
+use alloc::string::{String, ToString};
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 

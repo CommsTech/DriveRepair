@@ -6,6 +6,9 @@
 use crate::disk::{DiskInfo, DiskInterface};
 use crate::repair::{RepairConfig, RepairResult, RepairStats};
 use crate::smart::SmartHealthStatus;
+use core::option::Option;
+use core::convert::From;
+use core::iter::Iterator;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -155,24 +158,31 @@ impl UserInterface {
 
         let status = match result {
             RepairResult::Repaired => {
-                let mut s = String::from(colors::GREEN);
+                let mut s = String::new();
+                s.push_str(colors::GREEN);
                 s.push_str("Repaired");
                 s.push_str(colors::RESET);
                 s
             }
             RepairResult::Recovered => {
-                let mut s = String::from(colors::YELLOW);
+                let mut s = String::new();
+                s.push_str(colors::YELLOW);
                 s.push_str("Recovered");
                 s.push_str(colors::RESET);
                 s
             }
             RepairResult::Failed => {
-                let mut s = String::from(colors::RED);
+                let mut s = String::new();
+                s.push_str(colors::RED);
                 s.push_str("Failed");
                 s.push_str(colors::RESET);
                 s
             }
-            RepairResult::Skipped => String::from("Skipped"),
+            RepairResult::Skipped => {
+                let mut s = String::new();
+                s.push_str("Skipped");
+                s
+            },
         };
 
         print!(
@@ -283,10 +293,15 @@ impl UserInterface {
     #[cfg(feature = "alloc")]
     fn truncate_string(s: &str, max_len: usize) -> String {
         if s.len() <= max_len {
-            String::from(s)
+            {
+                let mut result = String::new();
+                result.push_str(s);
+                result
+            }
         } else {
             {
-                let mut result = String::from(&s[..max_len - 3]);
+                let mut result = String::new();
+                result.push_str(&s[..max_len - 3]);
                 result.push_str("...");
                 result
             }

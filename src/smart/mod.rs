@@ -5,6 +5,7 @@
 
 use crate::disk::DiskError;
 use core::result::Result;
+use core::option::Option;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;

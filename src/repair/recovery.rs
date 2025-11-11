@@ -3,6 +3,10 @@
 // Based on SpinRite analysis: exponential backoff, multiple retry strategies
 
 use core::result::Result;
+use core::default::Default;
+use core::ops::FnMut;
+use core::clone::Clone;
+use core::option::Option;
 
 /// Retry strategy for disk operations
 #[derive(Debug, Clone, Copy, PartialEq)]
