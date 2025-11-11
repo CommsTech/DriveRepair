@@ -1,0 +1,18 @@
+[package]
+name = "drive-repair-uefi-minimal"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+uefi = "0.30"
+uefi-services = "0.22"
+
+[[bin]]
+name = "drive-repair-uefi-minimal"
+path = "minimal.rs"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
