@@ -42,21 +42,21 @@ impl AtaPortIO {
     pub fn wait_ready(&self, _timeout_ms: u32) -> Result<(), DiskError> {
         let _start_time = 0; // TODO: Get current time
         let _timeout = _timeout_ms;
-        
+
         loop {
             let status = self.read_register(7)?; // Status register
-            
+
             // Check if BSY (bit 7) is clear and DRDY (bit 6) is set
             if (status & 0x80) == 0 && (status & 0x40) != 0 {
                 return Ok(());
             }
-            
+
             // Check for error
             if (status & 0x01) != 0 {
                 let _error = self.read_register(1)?; // Error register
                 return Err(DiskError::HardwareError);
             }
-            
+
             // Check timeout
             // TODO: Implement actual timeout check
             BiosPlatform::delay_us(100); // 100 microseconds delay
