@@ -67,11 +67,11 @@ impl Disk for BiosDisk {
         self.info.size_bytes
     }
 
-    fn read_sectors(&mut self, lba: u64, count: u16, buffer: &mut [u8]) -> Result<(), DiskError> {
+    fn read_sectors(&mut self, lba: u64, count: u32, buffer: &mut [u8]) -> Result<(), DiskError> {
         if let Some(ref port_io) = self.port_io {
             // Use ATA port I/O
             use crate::boot::bios::disk_detection::BiosDiskDetector;
-            BiosDiskDetector::read_sectors_ata(self.primary, self.master, lba, count, buffer)
+            BiosDiskDetector::read_sectors_ata(self.primary, self.master, lba, count as u16, buffer)
         } else {
             // Use INT 13h
             // TODO: Implement INT 13h read
@@ -79,11 +79,11 @@ impl Disk for BiosDisk {
         }
     }
 
-    fn write_sectors(&mut self, lba: u64, count: u16, buffer: &[u8]) -> Result<(), DiskError> {
+    fn write_sectors(&mut self, lba: u64, count: u32, buffer: &[u8]) -> Result<(), DiskError> {
         if let Some(ref port_io) = self.port_io {
             // Use ATA port I/O
             use crate::boot::bios::disk_detection::BiosDiskDetector;
-            BiosDiskDetector::write_sectors_ata(self.primary, self.master, lba, count, buffer)
+            BiosDiskDetector::write_sectors_ata(self.primary, self.master, lba, count as u16, buffer)
         } else {
             // Use INT 13h
             // TODO: Implement INT 13h write

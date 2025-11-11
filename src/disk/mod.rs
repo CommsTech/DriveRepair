@@ -61,6 +61,8 @@ pub enum DiskError {
     WriteError,
     /// Invalid sector address
     InvalidSector,
+    /// Invalid parameter
+    InvalidParameter,
     /// Drive not ready
     NotReady,
     /// Timeout
@@ -69,6 +71,8 @@ pub enum DiskError {
     Unsupported,
     /// Hardware error
     HardwareError,
+    /// Read-only media
+    ReadOnly,
 }
 
 /// Unified disk trait for all interface types

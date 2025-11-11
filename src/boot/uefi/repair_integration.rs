@@ -13,6 +13,7 @@ use uefi::Result;
 extern crate alloc;
 
 use crate::boot::uefi::disk_enumeration::UefiDiskEnumerator;
+use crate::boot::uefi::disk_wrapper::UefiDisk;
 use crate::boot::uefi::menu_integration::UefiMenuIntegration;
 use crate::ui::menu::RepairOption;
 use crate::repair::{RepairEngine, RepairConfig, ScanPattern};
@@ -106,23 +107,58 @@ impl<'a> UefiRepairIntegration<'a> {
         };
 
         // 5. Initialize repair engine
-        // TODO: Create disk interface wrapper for UEFI Block I/O
-        // For now, just display message
+        // Get handle for selected disk
+        let enumerator = UefiDiskEnumerator::new(self.boot_services);
+        let handles = self
+            .boot_services
+            .locate_handle_buffer(uefi::table::boot::SearchType::ByProtocol(
+                &uefi::proto::block::BlockIO::GUID,
+            ))
+            .map_err(|_| Status::UNSUPPORTED)?;
+
+        if selected_disk_index >= handles.len() {
+            self.system_table
+                .stdout()
+                .output_string("Invalid disk handle.\n")?;
+            return Err(Status::INVALID_PARAMETER);
+        }
+
+        let handle = handles[selected_disk_index];
+
+        // Create UEFI disk wrapper
+        let mut disk = UefiDisk::new(self.boot_services, handle, selected_disk.clone())
+            .map_err(|_| Status::UNSUPPORTED)?;
+
+        // Initialize repair engine
+        let mut repair_engine = RepairEngine::new(disk, config);
+
         self.system_table.stdout().output_string(&format!(
             "Starting repair on disk: {} ({})\n",
             selected_disk.model,
             format_size(selected_disk.size_bytes)
         ))?;
 
-        // TODO: Create UEFI disk wrapper implementing Disk trait
-        // TODO: Initialize RepairEngine with disk
-        // TODO: Run scan_and_repair
-        // TODO: Display progress
-        // TODO: Display results
+        // Run scan and repair with progress callback
+        let progress_callback = |current: u64, total: u64, result: crate::repair::RepairResult| {
+            // TODO: Display progress via UEFI output
+            // For now, this is a placeholder
+            let _ = (current, total, result);
+        };
 
-        self.system_table
-            .stdout()
-            .output_string("Repair engine integration pending.\n")?;
+        match repair_engine.scan_and_repair(progress_callback) {
+            Ok(stats) => {
+                self.system_table.stdout().output_string(&format!(
+                    "Repair completed. Sectors repaired: {}, recovered: {}, failed: {}\n",
+                    stats.sectors_repaired, stats.sectors_recovered, stats.sectors_failed
+                ))?;
+            }
+            Err(e) => {
+                self.system_table
+                    .stdout()
+                    .output_string(&format!("Repair failed: {:?}\n", e))?;
+                return Err(Status::ABORTED);
+            }
+        }
 
         Ok(())
     }

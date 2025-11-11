@@ -15,10 +15,11 @@ fn panic(_info: &PanicInfo) -> ! {
 extern crate alloc;
 
 use crate::boot::bios::disk_detection::BiosDiskDetector;
+use crate::boot::bios::disk_wrapper::BiosDisk;
 use crate::boot::bios::menu_integration::BiosMenuIntegration;
 use crate::disk::DiskError;
 use crate::ui::menu::RepairOption;
-use crate::repair::{RepairConfig, ScanPattern};
+use crate::repair::{RepairEngine, RepairConfig, ScanPattern};
 
 // VGA text mode helper
 mod vga {
@@ -103,8 +104,20 @@ impl BiosRepairIntegration {
         };
 
         // 5. Initialize repair engine
-        // TODO: Create disk interface wrapper for BIOS disk access
-        // For now, just display message
+        // Create BIOS disk wrapper
+        // Determine if this is an ATA disk or INT 13h disk
+        let mut disk = if selected_disk.interface == crate::disk::DiskInterface::ATA {
+            // ATA disk - need to determine primary/master from detection
+            // For now, assume primary/master
+            BiosDisk::new_ata(true, true, selected_disk.clone())
+        } else {
+            // INT 13h disk - use drive number 0x80
+            BiosDisk::new_int13h(0x80, selected_disk.clone())
+        };
+
+        // Initialize repair engine
+        let mut repair_engine = RepairEngine::new(disk, config);
+
         let info = format!(
             "Starting repair on disk: {} ({})\n",
             selected_disk.model,
@@ -112,13 +125,27 @@ impl BiosRepairIntegration {
         );
         vga::print_string(&info);
 
-        // TODO: Create BIOS disk wrapper implementing Disk trait
-        // TODO: Initialize RepairEngine with disk
-        // TODO: Run scan_and_repair
-        // TODO: Display progress
-        // TODO: Display results
+        // Run scan and repair with progress callback
+        let progress_callback = |current: u64, total: u64, result: crate::repair::RepairResult| {
+            // TODO: Display progress via VGA
+            // For now, this is a placeholder
+            let _ = (current, total, result);
+        };
 
-        vga::print_string("Repair engine integration pending.\n");
+        match repair_engine.scan_and_repair(progress_callback) {
+            Ok(stats) => {
+                let result = format!(
+                    "Repair completed. Sectors repaired: {}, recovered: {}, failed: {}\n",
+                    stats.sectors_repaired, stats.sectors_recovered, stats.sectors_failed
+                );
+                vga::print_string(&result);
+            }
+            Err(e) => {
+                let error_msg = format!("Repair failed: {:?}\n", e);
+                vga::print_string(&error_msg);
+                return Err(e);
+            }
+        }
 
         Ok(())
     }

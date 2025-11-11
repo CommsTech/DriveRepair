@@ -61,7 +61,7 @@ impl<'a> Disk for UefiDisk<'a> {
         self.info.size_bytes
     }
 
-    fn read_sectors(&mut self, lba: u64, count: u16, buffer: &mut [u8]) -> Result<(), DiskError> {
+    fn read_sectors(&mut self, lba: u64, count: u32, buffer: &mut [u8]) -> Result<(), DiskError> {
         // Open Block I/O protocol
         let block_io = self
             .boot_services
@@ -81,7 +81,7 @@ impl<'a> Disk for UefiDisk<'a> {
         }
 
         // Read sectors
-        for sector_offset in 0..count as usize {
+        for sector_offset in 0..count {
             let current_lba = lba + sector_offset as u64;
             let buffer_offset = sector_offset * sector_size;
             let sector_buffer = &mut buffer[buffer_offset..buffer_offset + sector_size];
@@ -94,7 +94,7 @@ impl<'a> Disk for UefiDisk<'a> {
         Ok(())
     }
 
-    fn write_sectors(&mut self, lba: u64, count: u16, buffer: &[u8]) -> Result<(), DiskError> {
+    fn write_sectors(&mut self, lba: u64, count: u32, buffer: &[u8]) -> Result<(), DiskError> {
         // Open Block I/O protocol
         let block_io = self
             .boot_services
@@ -119,7 +119,7 @@ impl<'a> Disk for UefiDisk<'a> {
         }
 
         // Write sectors
-        for sector_offset in 0..count as usize {
+        for sector_offset in 0..count {
             let current_lba = lba + sector_offset as u64;
             let buffer_offset = sector_offset * sector_size;
             let sector_buffer = &buffer[buffer_offset..buffer_offset + sector_size];
