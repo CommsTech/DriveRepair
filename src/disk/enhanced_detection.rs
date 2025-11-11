@@ -1,7 +1,6 @@
 // Enhanced disk detection using platform-specific implementations
 // Integrates PCI enumeration with disk detection
 
-use crate::disk::detection::DiskEnumerator;
 use crate::disk::{DiskError, DiskInfo, DiskInterface};
 use crate::platform::{bios::BiosPlatform, PciDevice, PciIO};
 
