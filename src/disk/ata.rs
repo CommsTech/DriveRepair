@@ -60,7 +60,7 @@ impl AtaDisk {
         // unsafe { inb(base + offset) }
         0
     }
-    
+
     /// Write ATA register
     #[allow(dead_code)]
     fn write_register(&self, _offset: u16, _value: u8) {
