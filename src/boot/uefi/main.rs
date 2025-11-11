@@ -51,13 +51,14 @@ fn efi_main(image: Handle, mut st: SystemTable<Boot>) -> Status {
             // Wait for user input
             // Validate selection
             
-            // TODO: Run repair
-            // Initialize repair engine with selected disk
-            // Run surface scan
-            // Display progress
-            // Handle errors and retries
+            // Run repair workflow
+            use crate::boot::uefi::repair_integration::UefiRepairIntegration;
+            let repair = UefiRepairIntegration::new(bs, &st);
+            if let Err(e) = repair.run_repair_workflow() {
+                st.stdout().output_string(&format!("ERROR: Repair failed: {:?}\n", e)).unwrap();
+                return e;
+            }
 
-            // For now, just return success
             Status::SUCCESS
 }
 

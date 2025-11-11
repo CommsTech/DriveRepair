@@ -25,6 +25,8 @@
 - ✅ Complete BIOS disk detection implementation (INT 13h and ATA ports)
 - ✅ UEFI menu integration for disk selection and repair options
 - ✅ BIOS menu integration for disk selection and repair options
+- ✅ UEFI repair engine integration workflow
+- ✅ BIOS repair engine integration workflow
 - ✅ Enhanced UEFI bootloader with disk enumeration structure
 - ✅ Enhanced BIOS bootloader with VGA text mode and INT 13h framework
 - ✅ Created input handler for keyboard input (BIOS/UEFI/std)

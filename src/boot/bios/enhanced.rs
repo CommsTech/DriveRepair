@@ -55,11 +55,11 @@ pub extern "C" fn _start() -> ! {
     //    - Create disk interface for selected drive
     //    - Initialize repair engine with disk
     //    - Set up repair configuration
-    // 10. Run repair
-    //    - Start surface scan
-    //    - Display progress (percentage, sectors scanned)
-    //    - Handle errors and retries
-    //    - Display results
+    // 10. Run repair workflow
+    use crate::boot::bios::repair_integration::BiosRepairIntegration;
+    if let Err(_e) = BiosRepairIntegration::run_repair_workflow() {
+        // Error already displayed
+    }
 
     loop {}
 }
