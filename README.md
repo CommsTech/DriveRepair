@@ -1,70 +1,117 @@
 # DriveRepair
 
-DriveRepair is an experimental storage diagnostic and repair research project. Its **desktop external-disk scanner** can operate on Windows, macOS and Linux **without rebooting**. A separate experimental Rust BIOS/UEFI boot environment remains in the repository but is **not ready for real-disk repairs or public release**.
+**Cross-platform, read-only external disk surface scanner** for Windows, macOS, and Linux.
 
-## Run a read-only external USB / portable drive scan
+DriveRepair helps you discover eligible **external whole disks** and measure whether the operating system can return requested bytes—without writing to the source disk, without rebooting, and without pretending that a successful read means the data is healthy or repaired.
 
-The current desktop utility uses **Python 3.10+** and the operating system's existing storage drivers. No Python packages are needed; raw physical-drive reads often require elevated privileges.
+| | |
+|---|---|
+| **Status** | Public experimental (`v0.0.1`) |
+| **Product path** | `desktop/` Python 3.10+ CLI |
+| **License** | [MIT](LICENSE) |
+| **Writes to source disks** | Never (desktop scanner) |
+
+## What it does today
+
+- Lists external / removable whole disks using OS tools (`lsblk`, `diskutil`, PowerShell `Get-Disk`)
+- Runs **sample** or **full** read-only surface scans with bounded chunk size and error limits
+- Emits human or **JSON** results (readable bytes, attempted ranges, OS read errors)
+- Re-checks device identity before and after a scan
+- Runs offline unit tests without touching physical disks
+
+## What it does *not* do
+
+- Does **not** repair, remap, TRIM, format, or wipe disks
+- Does **not** recover files or reconstruct unreadable data
+- Does **not** prove data integrity (a successful read ≠ correct original content)
+- Does **not** ship a production BIOS/UEFI “repair USB” (those prototypes are experimental and disabled for destructive media writing)
+
+If you need a clone of a failing drive, use a dedicated imaging tool on sacrificial or already-backed-up media. Reading a dying disk can accelerate failure—**image first**.
+
+## Quick start
 
 ```bash
 cd desktop
 python3 -m driverepair_desktop list
-# Select the exact external disk ID printed above (Linux example):
-sudo python3 -m driverepair_desktop scan --device linux:/dev/sdb
-# Optional complete scan; may stress a failing disk:
-sudo python3 -m driverepair_desktop scan --device linux:/dev/sdb --mode full --ack-risk
+# Use an exact ID from the list, then:
+sudo python3 -m driverepair_desktop scan --device linux:/dev/sdX
 ```
 
-On **Windows**, use `py -3 -m driverepair_desktop list` from an elevated PowerShell terminal in `desktop`, then `py -3 -m driverepair_desktop scan --device windows:PhysicalDriveN` using the discovered ID. On **macOS**, use `python3 -m driverepair_desktop list` and `sudo python3 -m driverepair_desktop scan --device macos:diskN` from `desktop`.
+**Windows** (elevated PowerShell):
 
-Detailed instructions, safeguards, supported buses and limitations: **[desktop/README.md](desktop/README.md)**.
+```powershell
+cd desktop
+py -3 -m driverepair_desktop list
+py -3 -m driverepair_desktop scan --device windows:PhysicalDriveN
+```
 
-## Actual capabilities
+**macOS:**
 
-| Component | Status |
-|---|---|
-| Desktop external whole-disk discovery | Implemented: Linux `lsblk`, macOS `diskutil`, Windows PowerShell `Get-Disk`; cross-OS fixture tested |
-| Desktop read-only USB/external surface scanning | Implemented, synthetic-image and mocked-device tested; **real-hardware validation pending** |
-| Bounded sequential/sample reads, no source disk writes | Implemented in desktop scanner, synthetic tests passing |
-| Large-drive memory management | Streaming chunks, fixed memory bounds (desktop path) |
-| OS-level read error and short-read reporting | Implemented (not sector reconstruction or checksum proof) |
-| Desktop Windows/macOS hardware compatibility | Implemented code paths; not yet validated on those operating systems |
-| SMART, bad-sector recovery, SSD remediation | **Not available in desktop path** |
-| BIOS/UEFI Rust boot environment | Experimental, not verified safe for public use |
-| Standalone signed Windows/macOS installers | Not built or signed |
+```bash
+cd desktop
+python3 -m driverepair_desktop list
+sudo python3 -m driverepair_desktop scan --device macos:diskN
+```
 
-**Critical limitation:** A completed read-only scan does not establish data integrity or physical health, nor does it repair a drive. A failing drive should be cloned or professionally recovered before being stressed by diagnostics. Some USB bridges and system permissions prohibit raw disk reads. Never run the experimental boot repair code on valuable media.
+Full mode (longer, more stress on failing media):
+
+```bash
+sudo python3 -m driverepair_desktop scan --device <ID> --mode full --ack-risk --json
+```
+
+Hardware-free smoke test:
+
+```bash
+python3 -m driverepair_desktop scan-image --image ./some-regular-file.bin --json
+```
+
+Details, privileges, and limitations: **[desktop/README.md](desktop/README.md)**.
 
 ## Tests
 
 ```bash
 cd desktop
 python3 -m unittest discover -s tests -v
-python3 -m driverepair_desktop scan-image --image /path/to/a/regular/file.img --json
 ```
 
-No physical disk access is required for tests. OS-specific smoke testing and hardware benchmarks are release blockers, not completed features. See [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
+Rust library Gate 0 safety tests (fail-closed stubs; not a hardware driver suite):
+
+```bash
+cargo test --features "std,alloc" --lib
+```
 
 ## Repository layout
 
-- `desktop/driverepair_desktop/`: read-only host OS disk discovery, scanner and CLI.
-- `desktop/tests/`: test fixtures and failure-mode coverage; no privileged disk I/O.
-- `src/boot/`: experimental BIOS/UEFI boot prototypes (separate Cargo crates).
-- `src/disk/`, `src/repair/`: experimental Rust framework; **not** a production hardware backend.
-- `scripts/`: legacy boot-media scripts; **destructive USB writers are hard-disabled (exit 2) pending safety gates** and are not part of desktop scanning.
+| Path | Role |
+|---|---|
+| `desktop/driverepair_desktop/` | **Supported product:** read-only host scanner |
+| `desktop/tests/` | Synthetic / fixture tests (no real disks) |
+| `src/` | Experimental Rust library (fail-closed unimplemented I/O) |
+| `src/boot/` | Experimental UEFI/BIOS prototypes — **unshipped** |
+| `scripts/` | Legacy USB writers — **hard-disabled** (`exit 2`) |
+| `docs/` | Status, architecture, safety, and release notes |
+
+## Documentation
+
+- [Project status](docs/PROJECT_STATUS.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Safety gate](docs/release-readiness/SAFETY_GATE.md)
+- [Test evidence](docs/release-readiness/TEST_EVIDENCE.md)
+- [Release decision](docs/release-readiness/RELEASE_DECISION.md)
+- [Security policy](SECURITY.md)
+- [Contributing](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
 
 ## Principles
 
-- Never infer a repaired sector from a successful read.
-- Never issue write-capable I/O from the desktop scanner.
-- Default to external whole disks only, requiring an exact discovered disk ID.
-- Abort when the disk identity changes, access is lost or read error limits are exceeded.
-- Use independent, reproducible tests before any claims about recovery effectiveness.
+1. Never call a successful read a “repair.”
+2. Never write to the scanned source from the desktop path.
+3. Prefer explicit device IDs from a fresh discovery list.
+4. Prefer honest `Unknown` / `Unsupported` over false success.
+5. Publish only claims backed by tests or labeled limitations.
 
-**License:** MIT (see `Cargo.toml`; review third-party notices before distributing built media). Project maintained by commstech.
+## Disclaimer
 
+THE SOFTWARE IS PROVIDED “AS IS”. DriveRepair is experimental diagnostic software. Authors are not liable for data loss, drive failure, or misuse. Always keep backups.
 
-## Gate 0 Rust library (experimental)
-
-Host Rust crates now fail closed on unimplemented I/O, default to read-only access, and refuse misleading SMART/repair claims. See `docs/release-readiness/` and `src/boot/EXPERIMENTAL.md`. These are **not** a substitute for the desktop scanner.
-
+Maintained by **commstech**.

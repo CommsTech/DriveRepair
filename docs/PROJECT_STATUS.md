@@ -1,24 +1,38 @@
-# DriveRepair — engineering status and release gates
+# Project status
 
-## Available now (experimental)
+**Public classification:** Experimental open-source diagnostic tool  
+**Version:** 0.0.1  
+**Supported product:** Desktop read-only external disk scanner (`desktop/`)
 
-A read-only host OS scanner is available in `desktop/`. It can enumerate external whole disks and scan them without restarting the computer. Results indicate whether the OS returned the requested bytes, **not** whether those bytes are semantically correct or sectors were repaired. Only simulated-file tests and fixture-based device discovery were executed in this review environment.
+## Working today
 
-## Not yet implemented or not proven
+| Capability | Evidence |
+|---|---|
+| External disk listing (Win/macOS/Linux code paths) | Implemented; fixture-tested |
+| Read-only sample/full scans | Implemented; synthetic tests passing |
+| JSON reporting of read errors | Implemented |
+| Device identity recheck | Implemented; unit-tested |
+| Offline unit tests without physical disks | `python -m unittest` in `desktop/tests` |
+| Rust Gate 0 fail-closed library tests | `cargo test --features "std,alloc" --lib` |
 
-- Device health logs (SMART/NVMe), automatic rescue imaging, recovery mapfile and verified data reconstruction.
-- Native host graphics, installable packages or signed distributions.
-- Hardware-tested macOS/Windows raw physical reads, OS-specific privilege workflows and USB-controller variations.
-- Certified BIOS/UEFI recovery workflow and independently verified low-level Rust hardware drivers.
-- Real failing-drive reproducible benchmarks, independent release/security review.
+## Not available / not claimed
 
-## Required before public beta
+- Sector repair, remapping, TRIM, secure erase
+- File recovery or verified reconstruction of unreadable data
+- Production BIOS/UEFI bootable repair media
+- Signed installers
+- Guaranteed SMART/NVMe health reporting
+- Image-first clone/rescue engine (scaffold only)
 
-1. Test Windows 10/11, macOS Intel/Apple Silicon and Linux on sacrificial **external** USB HDD/SSD/flash disks. Capture exact OS, privileges, bus/bridge, logical sector size and read behavior.
-2. Verify that the host OS scan opens raw devices with **read-only** privileges and never sends a write, discard, erase or device-repair command.
-3. Test unplug/replug (same and different drive), access failures, corrupt responses, non-512 logical sectors, filesystem activity and long latency.
-4. Demonstrate sample mode clearly indicates partial coverage; do not equate read success with media health.
-5. Boot-media creation scripts are hard-disabled (exit 2) pending safety gates. Do not re-enable without identity challenge + artifact preflight review.
-6. Use standard safe recovery/imaging tools for actual rescue until the project provides independently validated equivalent safety.
+## Release gates
 
-Release state: **PRIVATE TEST ONLY.**
+| Gate | Status |
+|---|---|
+| Honest public docs + MIT LICENSE | Met for experimental release |
+| Desktop synthetic tests green | Met on maintainer workstation / CI config present |
+| Hardware matrix on sacrificial externals | Pending (community / maintainer lab) |
+| Write-capable remediation | Out of scope until separately designed and audited |
+
+## Recommended public messaging
+
+> DriveRepair is an experimental, open-source, **read-only** external disk surface scanner for Windows, macOS, and Linux. It reports whether the OS can read requested regions. It does not repair drives.

@@ -1,15 +1,25 @@
 # Changelog
 
-## Unreleased — desktop external-drive scanner
+## 0.0.1 — public experimental (2026-10-31)
 
-- Added read-only **Windows, macOS, Linux** host scanning that does not require restarting the machine.
-- Uses the host operating system to discover external whole disks rather than relying on incomplete experimental low-level firmware drivers.
-- Adds bounded, streaming sample/full scans with read error classification, device re-identification and JSON result output.
-- Added synthetic-image tests and mocked OS discovery fixtures; real hardware testing still pending.
-- Disabled the host Rust demo's misleading repair menus; it now points users to the non-destructive desktop scanner.
-- Removed legacy proprietary-binary analysis materials and obsolete progress claims from the current project tree.
+### Added
 
-## v0.0.1 — initial experimental scaffold
+- Cross-platform **read-only** desktop scanner (`desktop/driverepair_desktop`) for Windows, macOS, and Linux
+- External whole-disk discovery via OS tools; exact ID selection; identity recheck
+- Sample and full surface scans with JSON output and bounded error stops
+- Synthetic unit tests (no physical disks required)
+- MIT `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md`, honest public README
+- Gate 0 Rust library fail-closed behavior for unimplemented I/O
 
-- Added Rust device abstraction, boot prototypes and command-line menu experiments.
-- Hardware drivers, repair correctness, boot workflow and full-size scan performance were not independently verified.
+### Changed
+
+- Host Rust launcher no longer offers misleading repair workflows; points to the desktop scanner
+- Destructive USB provisioning scripts hard-disabled (`exit 2`)
+- Documentation rewritten for public experimental release; obsolete overclaim materials removed
+
+### Not included
+
+- Sector repair / remapping / TRIM / erase
+- Production BIOS/UEFI recovery media
+- Signed desktop installers
+- Guaranteed SMART health from hardware

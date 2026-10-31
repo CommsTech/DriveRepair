@@ -3,9 +3,17 @@ name = "drive-repair"
 version = "0.0.1"
 edition = "2021"
 authors = ["commstech"]
-description = "DriveRepair by commstech v0.0.1 - Modern drive repair utility supporting drives from 64GB to 20TB"
+description = "DriveRepair — experimental read-only external disk surface scanner (desktop) plus fail-closed Rust research library"
 license = "MIT"
 repository = "https://git.commsnet.org/commstech/DriveRepair.git"
+readme = "README.md"
+keywords = ["disk", "storage", "diagnostic", "read-only", "scanner"]
+categories = ["command-line-utilities", "os"]
+exclude = [
+    ".agent-temp/",
+    "**/target/",
+    "BUILD_*.md",
+]
 
 [lib]
 name = "drive_repair"

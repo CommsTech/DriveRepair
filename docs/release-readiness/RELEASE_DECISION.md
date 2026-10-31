@@ -1,44 +1,34 @@
-# RELEASE_DECISION
+# Release decision
 
 **Date:** 2026-10-31  
-**Branch:** `remediation/gate0-safety-2026-10-31`  
-**Baseline HEAD:** `e7396368828bef08d534a1f2442d0e382243cf9e`
+**Commit baseline:** `main` after public-docs packaging  
 
-## Formal status
+## Decision
 
-| Decision | Value |
+| Question | Answer |
 |---|---|
-| Release class | **NOT_READY** for public distribution |
-| Operational class | **PRIVATE_TEST_ONLY** for the Python desktop read-only scanner + Gate 0 Rust library containment |
-| Public experimental beta | **Blocked** |
-| Public stable | **Blocked** |
-| Better-than-SpinRite (any workload) | **NOT_PROVEN** |
+| May this repository be published publicly? | **Yes**, as an **experimental open-source** project |
+| May it be marketed as a disk **repair** utility? | **No** |
+| May it be marketed as a read-only external disk **surface scanner**? | **Yes**, with limitations clearly stated |
+| Production BIOS/UEFI repair USB | **No** — experimental / disabled |
+| Competitive “better than X” claims | **Forbidden** until controlled lab evidence exists |
 
-## What is authorized under PRIVATE_TEST_ONLY
+## Allowed public claims
 
-- Offline synthetic desktop unit tests (`desktop/tests`)
-- `scan-image` against regular files / generated fixtures
-- `list` / read-only `scan` of **owner-approved sacrificial external** media only, with `--ack-risk` for full mode
-- Host `cargo test --features "std,alloc" --lib` on the Gate 0 fail-closed library
+- Cross-platform desktop CLI for listing and read-only scanning of external whole disks
+- Does not write to the scanned source disk
+- Synthetic unit tests exist and should be run before trusting local builds
+- MIT licensed
 
-## What remains forbidden without separate owner approval
+## Forbidden public claims
 
-- Merge to protected `main` / public release packaging
-- Re-enabling destructive USB/ISO writers
-- Running experimental BIOS/UEFI “repair” paths on valuable disks
-- Claiming sector repair, verified reconstruction, or competitive superiority
-- Widening desktop discovery to internal/boot/system disks
+- Repairs bad sectors / remaps media / recovers unreadable data
+- Replaces commercial repair suites
+- Verified SMART health from empty or stubbed backends
+- Bootable USB “fixes your drive”
 
-## Evidence anchors
+## Operator warnings (must ship in README)
 
-- Desktop delivery note (2026-10-31): 19/19 Python tests in Linux analysis env; macOS/Windows hardware **NOT_PROVEN** here until re-run
-- Gate 0 Rust containment: fail-closed stubs, SMART Unknown on empty, no Repaired-on-read, USB scripts exit 2
-- No top-level `.iso`; boot product **NOT_PROVEN**
-- Imaging/mapfile rescue orchestration: scaffold only
-
-## Next gates (ordered)
-
-1. Re-run desktop + Rust CI on Windows/macOS/Linux runners; attach logs to `TEST_EVIDENCE.md`
-2. Sacrificial external-device matrix; zero-write invariant on source
-3. Image-first rescue with durable map (ddrescue) in QEMU/fixtures
-4. Independent review before any main merge or installer
+- Full scans can stress failing media — image first
+- Successful reads are not integrity proofs
+- Privileges and USB bridges vary by OS
