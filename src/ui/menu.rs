@@ -120,6 +120,7 @@ impl Menu {
                 crate::disk::DiskInterface::SATA => "SATA",
                 crate::disk::DiskInterface::NVMe => "NVMe",
                 crate::disk::DiskInterface::USB => "USB",
+                crate::disk::DiskInterface::Unknown => "Unknown",
             };
 
             let size_str = crate::disk::detection::format_size(disk.size_bytes);

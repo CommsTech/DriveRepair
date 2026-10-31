@@ -40,3 +40,12 @@ radare2/
 *.ghidra
 *.log
 *.bak
+
+# Python desktop runtime and packaging
+__pycache__/
+*.py[cod]
+.pytest_cache/
+/dist/
+/build/
+*.spec
+

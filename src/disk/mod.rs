@@ -1,5 +1,6 @@
 // Unified disk interface trait
 // Supports ATA, SATA, NVMe, and USB drives with 64-bit LBA addressing
+// Gate 0: fail-closed stubs, identity helpers, mock disk for safety tests
 
 #![allow(dead_code)]
 
@@ -19,6 +20,12 @@ pub mod sata;
 pub mod usb;
 pub mod utils;
 
+#[cfg(feature = "alloc")]
+pub mod mock;
+
+#[cfg(all(test, feature = "alloc"))]
+pub use mock::MockDisk;
+
 /// Sector size constants
 pub const SECTOR_SIZE_512: u64 = 512;
 pub const SECTOR_SIZE_4096: u64 = 4096;
@@ -30,6 +37,72 @@ pub enum DiskInterface {
     SATA,
     NVMe,
     USB,
+    /// Interface could not be determined (fail-closed / unknown path)
+    Unknown,
+}
+
+/// Access mode for disk operations (Gate 0: default read-only)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccessMode {
+    /// Reads allowed; all writes denied
+    #[default]
+    ReadOnly,
+    /// Reads and writes allowed (explicit opt-in only)
+    ReadWrite,
+}
+
+impl AccessMode {
+    /// Returns true if write operations are permitted
+    pub fn allows_writes(self) -> bool {
+        matches!(self, AccessMode::ReadWrite)
+    }
+}
+
+/// Stable device identity used to reject source==destination mistakes
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceIdentity {
+    #[cfg(feature = "alloc")]
+    pub path: alloc::string::String,
+    #[cfg(not(feature = "alloc"))]
+    pub path: &'static str,
+    #[cfg(feature = "alloc")]
+    pub serial: alloc::string::String,
+    #[cfg(not(feature = "alloc"))]
+    pub serial: &'static str,
+    #[cfg(feature = "alloc")]
+    pub model: alloc::string::String,
+    #[cfg(not(feature = "alloc"))]
+    pub model: &'static str,
+}
+
+impl DeviceIdentity {
+    /// Create identity from path and serial (alloc)
+    #[cfg(feature = "alloc")]
+    pub fn new(
+        path: impl Into<alloc::string::String>,
+        serial: impl Into<alloc::string::String>,
+        model: impl Into<alloc::string::String>,
+    ) -> Self {
+        Self {
+            path: path.into(),
+            serial: serial.into(),
+            model: model.into(),
+        }
+    }
+
+    /// True when identity fields are empty / unknown
+    pub fn is_unknown(&self) -> bool {
+        self.path.is_empty() && self.serial.is_empty()
+    }
+
+    /// True when two identities refer to the same device (path or serial)
+    pub fn conflicts_with(&self, other: &DeviceIdentity) -> bool {
+        if self.is_unknown() || other.is_unknown() {
+            return false;
+        }
+        (!self.path.is_empty() && self.path == other.path)
+            || (!self.serial.is_empty() && self.serial == other.serial)
+    }
 }
 
 /// Disk information structure
@@ -60,6 +133,14 @@ pub enum DiskError {
     ReadError,
     /// Sector write error
     WriteError,
+    /// Write rejected by access policy (read-only mode / Gate 0)
+    WriteDenied,
+    /// Device identity could not be established
+    IdentityUnknown,
+    /// Source and destination refer to the same device
+    SourceDestinationConflict,
+    /// Backend or device temporarily / permanently unavailable
+    Unavailable,
     /// Invalid sector address
     InvalidSector,
     /// Invalid parameter
@@ -68,12 +149,18 @@ pub enum DiskError {
     NotReady,
     /// Timeout
     Timeout,
-    /// Unsupported operation
+    /// Unsupported operation (unimplemented / experimental backend)
     Unsupported,
     /// Hardware error
     HardwareError,
     /// Read-only media
     ReadOnly,
+}
+
+impl Default for DiskError {
+    fn default() -> Self {
+        DiskError::Unsupported
+    }
 }
 
 /// Unified disk trait for all interface types
@@ -103,9 +190,11 @@ pub trait Disk: Send + Sync {
     /// Get total number of sectors (64-bit)
     fn total_sectors(&self) -> u64;
 
-    /// Get disk size in bytes (64-bit)
+    /// Get disk size in bytes (64-bit) using checked multiplication
     fn size_bytes(&self) -> u64 {
-        self.total_sectors() * self.sector_size()
+        self.total_sectors()
+            .checked_mul(self.sector_size())
+            .unwrap_or(u64::MAX)
     }
 
     /// Check if disk is ready
@@ -113,6 +202,11 @@ pub trait Disk: Send + Sync {
 
     /// Flush any pending writes
     fn flush(&self) -> Result<(), DiskError>;
+
+    /// Optional access mode (defaults to ReadOnly for safety)
+    fn access_mode(&self) -> AccessMode {
+        AccessMode::ReadOnly
+    }
 }
 
 /// Helper function to calculate LBA from CHS (for compatibility)
@@ -141,7 +235,6 @@ mod tests {
 
     #[test]
     fn test_chs_to_lba() {
-        // Test CHS to LBA conversion
         let lba = chs_to_lba(0, 0, 1, 255, 63);
         assert_eq!(lba, 0);
     }
@@ -151,5 +244,24 @@ mod tests {
         assert!(validate_lba(0, 1000));
         assert!(validate_lba(999, 1000));
         assert!(!validate_lba(1000, 1000));
+    }
+
+    #[test]
+    fn test_access_mode_default_readonly() {
+        assert_eq!(AccessMode::default(), AccessMode::ReadOnly);
+        assert!(!AccessMode::ReadOnly.allows_writes());
+        assert!(AccessMode::ReadWrite.allows_writes());
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_device_identity_conflict() {
+        let a = DeviceIdentity::new("/dev/sda", "SERIAL1", "Model");
+        let b = DeviceIdentity::new("/dev/sda", "OTHER", "Model");
+        let c = DeviceIdentity::new("/dev/sdb", "SERIAL1", "Model");
+        let d = DeviceIdentity::new("/dev/sdc", "SERIAL2", "Model");
+        assert!(a.conflicts_with(&b));
+        assert!(a.conflicts_with(&c));
+        assert!(!a.conflicts_with(&d));
     }
 }

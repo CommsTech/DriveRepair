@@ -82,10 +82,9 @@ impl BiosMenuIntegration {
             VgaTextMode::print_string(&info);
         }
 
-        // TODO: Implement keyboard input for selection
-        // Use BIOS INT 16h for keyboard input
-        // For now, return first disk
-        Ok(Some(0))
+        // EXPERIMENTAL/UNSUPPORTED: keyboard selection via INT 16h not wired.
+        // Gate 0: require explicit selection — never auto-select disk 0.
+        Ok(None)
     }
 
     /// Show repair options menu and return selected option
@@ -97,10 +96,9 @@ impl BiosMenuIntegration {
         VgaTextMode::print_string("[2] SMART Check - Check SMART status only\n");
         VgaTextMode::print_string("[3] Cancel - Return to main menu\n");
 
-        // TODO: Implement keyboard input for selection
-        // Use BIOS INT 16h for keyboard input
-        // For now, return Quick Scan
-        Some(RepairOption::QuickScan)
+        // EXPERIMENTAL/UNSUPPORTED: keyboard selection via INT 16h not wired.
+        // Gate 0: require explicit selection — never default to QuickScan.
+        None
     }
 }
 

@@ -174,19 +174,22 @@ impl EnhancedDiskDetector {
 mod tests {
     use super::*;
 
+    // Gate 0: skip AHCI/NVMe detect tests entirely on hosted OS (windows/linux/macos)
     #[test]
-    #[cfg_attr(not(target_arch = "x86_64"), ignore)]
+    #[cfg_attr(
+        any(target_os = "windows", target_os = "linux", target_os = "macos"),
+        ignore = "hosted OS: AHCI/NVMe PCI detect not run under Gate 0"
+    )]
     fn test_detect_nvme_controllers() {
-        // This test requires x86_64 architecture and may fail in non-BIOS environment
-        // But it validates the structure
         let _result = EnhancedDiskDetector::detect_nvme_controllers();
     }
 
     #[test]
-    #[cfg_attr(not(target_arch = "x86_64"), ignore)]
+    #[cfg_attr(
+        any(target_os = "windows", target_os = "linux", target_os = "macos"),
+        ignore = "hosted OS: AHCI/NVMe PCI detect not run under Gate 0"
+    )]
     fn test_detect_ahci_controllers() {
-        // This test requires x86_64 architecture and may fail in non-BIOS environment
-        // But it validates the structure
         let _result = EnhancedDiskDetector::detect_ahci_controllers();
     }
 }

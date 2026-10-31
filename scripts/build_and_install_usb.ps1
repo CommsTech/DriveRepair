@@ -1,3 +1,13 @@
+# =============================================================================
+# GATE 0 SAFETY: Destructive USB provisioning is DISABLED pending safety gates.
+# This script will NOT erase disks, format media, or write bootloaders.
+# Original body preserved below but is unreachable.
+# =============================================================================
+Write-Host "ERROR: Destructive USB provisioning is DISABLED pending Gate 0 safety gates." -ForegroundColor Red
+Write-Host "Refusing to touch USB/disk media. Exit code 2." -ForegroundColor Red
+exit 2
+
+<# DISABLED_ORIGINAL_BODY
 # PowerShell script to build bootloaders and install to USB drive
 # Combines build and USB installation steps
 
@@ -201,3 +211,5 @@ if ($allGood) {
     exit 1
 }
 
+
+#>

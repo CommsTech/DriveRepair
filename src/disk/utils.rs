@@ -53,9 +53,12 @@ pub fn validate_lba(lba: u64, total_sectors: u64) -> bool {
     lba < total_sectors
 }
 
-/// Validate sector count
+/// Validate sector count using checked addition (no wraparound)
 pub fn validate_sector_count(lba: u64, count: u32, total_sectors: u64) -> bool {
-    lba + count as u64 <= total_sectors
+    match lba.checked_add(count as u64) {
+        Some(end) => end <= total_sectors,
+        None => false,
+    }
 }
 
 /// Calculate disk size from sectors

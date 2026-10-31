@@ -5,6 +5,9 @@ on:
   pull_request:
     branches: [ main, develop ]
 
+# Gate 0 note: boot ISO build is NOT_PROVEN in CI yet.
+# Homemade BIOS/UEFI boot media builds are experimental and not asserted here.
+
 jobs:
   fmt:
     name: Check Formatting
@@ -12,11 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
           components: rustfmt
-          override: true
       - name: Check formatting
         run: cargo fmt --check
 
@@ -26,13 +27,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
           components: clippy
-          override: true
       - name: Run Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --features "std,alloc" --lib -- -D warnings
 
   test:
     name: Run Tests
@@ -43,10 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        uses: dtolnay/rust-toolchain@stable
       - name: Run tests
         run: cargo test --features "std,alloc" --lib
 
@@ -73,11 +69,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
+          targets: ${{ matrix.target }}
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
+  desktop-tests:
+    name: Read-only desktop scanner tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run offline synthetic tests (no real disks)
+        working-directory: desktop
+        run: python -m unittest discover -s tests -v

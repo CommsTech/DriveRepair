@@ -1,40 +1,15 @@
-# DriveRepair by commstech v0.0.1
+# Changelog
 
-## Changelog
+## Unreleased — desktop external-drive scanner
 
-### v0.0.1 (Initial Release)
-- Initial project setup
-- Core architecture implementation
-- Disk interface layer (ATA, SATA, NVMe, USB)
-- SMART interface framework
-- Repair engine framework
-- User interface components
-- UEFI and BIOS bootloader skeletons
-- USB creation script
-- CI/CD pipeline setup
-- Support for x86_64 and ARM64 architectures
-- 64-bit LBA addressing (supports drives up to 20TB)
+- Added read-only **Windows, macOS, Linux** host scanning that does not require restarting the machine.
+- Uses the host operating system to discover external whole disks rather than relying on incomplete experimental low-level firmware drivers.
+- Adds bounded, streaming sample/full scans with read error classification, device re-identification and JSON result output.
+- Added synthetic-image tests and mocked OS discovery fixtures; real hardware testing still pending.
+- Disabled the host Rust demo's misleading repair menus; it now points users to the non-destructive desktop scanner.
+- Removed legacy proprietary-binary analysis materials and obsolete progress claims from the current project tree.
 
-## Roadmap
+## v0.0.1 — initial experimental scaffold
 
-### v0.1.0 (Planned)
-- Complete reverse engineering analysis of SPINRITE.EXE
-- Implement low-level disk access (port I/O, PCI enumeration)
-- Complete disk detection implementation
-- Implement SMART command interface
-- Complete repair engine algorithms
-- Implement UEFI bootloader
-- Implement BIOS bootloader
-- Testing and validation
-
-### v0.2.0 (Planned)
-- Advanced error recovery mechanisms
-- Surface scanning patterns
-- Data recovery capabilities
-- Performance optimizations
-
-### v0.3.0 (Planned)
-- GUI interface (optional)
-- Network support for remote diagnostics
-- Advanced reporting and logging
-
+- Added Rust device abstraction, boot prototypes and command-line menu experiments.
+- Hardware drivers, repair correctness, boot workflow and full-size scan performance were not independently verified.

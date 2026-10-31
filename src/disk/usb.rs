@@ -1,5 +1,5 @@
 // USB mass storage device interface
-// Supports USB-attached drives
+// Gate 0: fail-closed — unimplemented I/O returns Unsupported
 
 use crate::disk::{Disk, DiskError, DiskInfo, DiskInterface, SECTOR_SIZE_512};
 use core::result::Result;
@@ -29,13 +29,7 @@ impl UsbDisk {
     /// # Arguments
     /// * `device_address` - USB device address
     pub fn new(device_address: u8) -> Result<Self, DiskError> {
-        // TODO: Implement USB disk initialization
-        // 1. Enumerate USB devices
-        // 2. Find mass storage device (Class 0x08)
-        // 3. Get device descriptor
-        // 4. Get capacity via SCSI READ CAPACITY
-        // 5. Get inquiry data (model, serial, firmware)
-
+        // EXPERIMENTAL/UNSUPPORTED: USB mass-storage enumeration not implemented
         Ok(Self {
             device_address,
             sector_size: SECTOR_SIZE_512,
@@ -52,12 +46,19 @@ impl UsbDisk {
     /// Send SCSI command via USB
     #[allow(dead_code)]
     fn send_scsi_command(&self, _command: &[u8], _data: &mut [u8]) -> Result<(), DiskError> {
-        // TODO: Implement USB mass storage command
-        // 1. Build USB bulk-only transport command block wrapper
-        // 2. Send command via bulk-out endpoint
-        // 3. Receive data via bulk-in endpoint
-        // 4. Check status
-        Ok(())
+        // EXPERIMENTAL/UNSUPPORTED: USB BOT / SCSI command path not implemented
+        Err(DiskError::Unsupported)
+    }
+
+    #[allow(dead_code)]
+    fn send_command(&self, _command: &[u8], _data: &mut [u8]) -> Result<(), DiskError> {
+        self.send_scsi_command(_command, _data)
+    }
+
+    #[allow(dead_code)]
+    fn wait_ready(&self) -> Result<(), DiskError> {
+        // EXPERIMENTAL/UNSUPPORTED: USB device ready wait not implemented
+        Err(DiskError::Unsupported)
     }
 }
 
@@ -83,40 +84,14 @@ impl Disk for UsbDisk {
         })
     }
 
-    fn read_sectors(&self, lba: u64, count: u32, _buffer: &mut [u8]) -> Result<(), DiskError> {
-        if !self.is_ready() {
-            return Err(DiskError::NotReady);
-        }
-
-        if lba + count as u64 > self.total_sectors {
-            return Err(DiskError::InvalidSector);
-        }
-
-        // TODO: Implement USB read
-        // 1. Build SCSI READ(10) or READ(16) command
-        // 2. Send via USB bulk-only transport
-        // 3. Receive data
-        // 4. Handle errors and retries
-
-        Ok(())
+    fn read_sectors(&self, _lba: u64, _count: u32, _buffer: &mut [u8]) -> Result<(), DiskError> {
+        // EXPERIMENTAL/UNSUPPORTED: USB SCSI READ not implemented
+        Err(DiskError::Unsupported)
     }
 
-    fn write_sectors(&self, lba: u64, count: u32, _buffer: &[u8]) -> Result<(), DiskError> {
-        if !self.is_ready() {
-            return Err(DiskError::NotReady);
-        }
-
-        if lba + count as u64 > self.total_sectors {
-            return Err(DiskError::InvalidSector);
-        }
-
-        // TODO: Implement USB write
-        // 1. Build SCSI WRITE(10) or WRITE(16) command
-        // 2. Send data via USB bulk-only transport
-        // 3. Wait for completion
-        // 4. Handle errors and retries
-
-        Ok(())
+    fn write_sectors(&self, _lba: u64, _count: u32, _buffer: &[u8]) -> Result<(), DiskError> {
+        // EXPERIMENTAL/UNSUPPORTED: USB SCSI WRITE not implemented
+        Err(DiskError::Unsupported)
     }
 
     fn sector_size(&self) -> u64 {
@@ -128,12 +103,11 @@ impl Disk for UsbDisk {
     }
 
     fn is_ready(&self) -> bool {
-        // TODO: Check USB device status
-        true
+        self.total_sectors > 0
     }
 
     fn flush(&self) -> Result<(), DiskError> {
-        // TODO: Send SCSI SYNCHRONIZE CACHE command
-        Ok(())
+        // EXPERIMENTAL/UNSUPPORTED: SCSI SYNCHRONIZE CACHE not implemented
+        Err(DiskError::Unsupported)
     }
 }

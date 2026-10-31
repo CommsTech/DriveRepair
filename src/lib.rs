@@ -25,10 +25,12 @@ pub mod prelude {
 pub mod disk;
 pub mod platform;
 pub mod repair;
+#[cfg(feature = "alloc")]
+pub mod rescue;
 pub mod smart;
 pub mod ui;
 
 // Re-export commonly used types
-pub use disk::{Disk, DiskError, DiskInfo, DiskInterface};
-pub use repair::{RepairConfig, RepairEngine, RepairResult, RepairStats};
+pub use disk::{AccessMode, DeviceIdentity, Disk, DiskError, DiskInfo, DiskInterface};
+pub use repair::{RepairConfig, RepairEngine, RepairResult, RepairStats, SectorOutcome};
 pub use smart::{SmartHealthStatus, SmartInterface};

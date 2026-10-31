@@ -70,10 +70,9 @@ impl<'a> UefiMenuIntegration<'a> {
             self.system_table.stdout().output_string(&info)?;
         }
 
-        // TODO: Implement keyboard input for selection
-        // Use Simple Text Input protocol
-        // For now, return first disk
-        Ok(Some(0))
+        // EXPERIMENTAL/UNSUPPORTED: Simple Text Input selection not wired.
+        // Gate 0: require explicit selection — never auto-select disk 0.
+        Ok(None)
     }
 
     /// Show repair options menu and return selected option
@@ -95,10 +94,9 @@ impl<'a> UefiMenuIntegration<'a> {
             .stdout()
             .output_string("[3] Cancel - Return to main menu\n")?;
 
-        // TODO: Implement keyboard input for selection
-        // Use Simple Text Input protocol
-        // For now, return Quick Scan
-        Ok(Some(RepairOption::QuickScan))
+        // EXPERIMENTAL/UNSUPPORTED: Simple Text Input selection not wired.
+        // Gate 0: require explicit selection — never default to QuickScan.
+        Ok(None)
     }
 }
 

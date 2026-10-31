@@ -1,162 +1,70 @@
-# DriveRepair by commstech v0.0.1
+# DriveRepair
 
-## Project Summary
+DriveRepair is an experimental storage diagnostic and repair research project. Its **desktop external-disk scanner** can operate on Windows, macOS and Linux **without rebooting**. A separate experimental Rust BIOS/UEFI boot environment remains in the repository but is **not ready for real-disk repairs or public release**.
 
-DriveRepair is a modern disk repair tool designed to replace and improve upon SpinRite, with support for drives from 64GB to 20TB, including SSDs. The project is written in Rust and supports both UEFI and BIOS boot methods, with compatibility for x86_64 and ARM64 architectures.
+## Run a read-only external USB / portable drive scan
 
-## Key Features
-
-- **64-bit LBA addressing**: Supports drives up to 20TB (fixes the 1TB limitation in SpinRite)
-- **Multiple disk interfaces**: ATA, SATA, NVMe, and USB support
-- **Dual boot support**: UEFI and BIOS bootloaders
-- **Cross-platform**: x86_64 and ARM64 architectures
-- **Modern error recovery**: CRC32 verification, exponential backoff retry strategies
-- **SMART support**: ATA SMART command interface with health reporting
-- **Interactive UI**: Menu-based disk selection and repair options
-
-## Project Status
-
-**Overall Progress: ~95% Complete**
-
-### Completed Components
-
-✅ **Reverse Engineering** (100%)
-- Full disassembly analysis of SPINRITE.EXE
-- Algorithm extraction and documentation
-- 1TB limitation identified and addressed
-
-✅ **Core Implementation** (95%)
-- Unified disk abstraction layer (100%)
-- Disk detection and enumeration (95%)
-- SMART interface (90%)
-- Repair engine with CRC32 (100%)
-- User interface with menu system (95%)
-
-✅ **Bootloader Implementation** (90%)
-- UEFI bootloader with disk enumeration (90%)
-- BIOS bootloader with VGA text mode (85%)
-- Menu integration (100%)
-- Repair engine integration (100%)
-- Disk wrappers for UEFI and BIOS (100%)
-
-### Remaining Work
-
-⏳ **Keyboard Input** (Framework complete, needs implementation)
-- UEFI Simple Text Input protocol
-- BIOS INT 16h keyboard services
-
-⏳ **BIOS Mode Transition** (Needs implementation)
-- Real-mode to protected-mode transition
-
-⏳ **Hardware Testing** (Pending)
-- Drive compatibility testing (64GB-20TB)
-- Interface testing (ATA, SATA, NVMe, USB)
-- Boot testing (UEFI/BIOS)
-- Mac compatibility testing
-
-## Architecture
-
-### Core Modules
-
-- **`src/disk/`**: Disk abstraction and interface implementations
-  - `ata.rs`: ATA disk interface
-  - `sata.rs`: SATA/AHCI interface
-  - `nvme.rs`: NVMe interface
-  - `usb.rs`: USB mass storage interface
-  - `detection.rs`: Disk detection and enumeration
-  - `ata_port_io.rs`: Platform-aware ATA port I/O
-
-- **`src/repair/`**: Disk repair engine
-  - `mod.rs`: Main repair engine with scan patterns
-  - `recovery.rs`: Error recovery strategies
-  - `crc32.rs`: CRC32 verification implementation
-
-- **`src/smart/`**: SMART interface
-  - `mod.rs`: SMART attribute parsing
-  - `ata_smart.rs`: ATA SMART command executor
-
-- **`src/ui/`**: User interface
-  - `mod.rs`: Main UI functions
-  - `menu.rs`: Interactive menu system
-  - `input.rs`: Keyboard input handling
-
-- **`src/platform/`**: Platform abstraction layer
-  - `bios.rs`: BIOS-specific implementations
-  - `uefi.rs`: UEFI-specific implementations
-  - `windows.rs`: Windows-specific implementations
-
-- **`src/boot/`**: Bootloader implementations
-  - `uefi/`: UEFI bootloader
-  - `bios/`: BIOS bootloader
-
-## Building
-
-### Prerequisites
-
-- Rust toolchain (latest stable)
-- UEFI target: `rustup target add x86_64-unknown-uefi`
-- ARM64 target: `rustup target add aarch64-unknown-uefi`
-
-### Build Commands
+The current desktop utility uses **Python 3.10+** and the operating system's existing storage drivers. No Python packages are needed; raw physical-drive reads often require elevated privileges.
 
 ```bash
-# Standard library version (for testing)
-cargo build --features "std,alloc"
-
-# UEFI bootloader
-cargo build --target x86_64-unknown-uefi --features "alloc"
-
-# BIOS bootloader
-cargo build --target x86_64-unknown-none --features "alloc"
+cd desktop
+python3 -m driverepair_desktop list
+# Select the exact external disk ID printed above (Linux example):
+sudo python3 -m driverepair_desktop scan --device linux:/dev/sdb
+# Optional complete scan; may stress a failing disk:
+sudo python3 -m driverepair_desktop scan --device linux:/dev/sdb --mode full --ack-risk
 ```
 
-## Creating Bootable USB
+On **Windows**, use `py -3 -m driverepair_desktop list` from an elevated PowerShell terminal in `desktop`, then `py -3 -m driverepair_desktop scan --device windows:PhysicalDriveN` using the discovered ID. On **macOS**, use `python3 -m driverepair_desktop list` and `sudo python3 -m driverepair_desktop scan --device macos:diskN` from `desktop`.
 
-Use the provided PowerShell script:
+Detailed instructions, safeguards, supported buses and limitations: **[desktop/README.md](desktop/README.md)**.
 
-```powershell
-.\scripts\create_usb.ps1 -UsbDrive "F:"
-```
+## Actual capabilities
 
-The script will:
-1. Create GPT partition table
-2. Create EFI System Partition (ESP)
-3. Copy UEFI bootloaders (x64 and ARM64)
-4. Copy BIOS bootloader
-5. Set up boot configuration
+| Component | Status |
+|---|---|
+| Desktop external whole-disk discovery | Implemented: Linux `lsblk`, macOS `diskutil`, Windows PowerShell `Get-Disk`; cross-OS fixture tested |
+| Desktop read-only USB/external surface scanning | Implemented, synthetic-image and mocked-device tested; **real-hardware validation pending** |
+| Bounded sequential/sample reads, no source disk writes | Implemented in desktop scanner, synthetic tests passing |
+| Large-drive memory management | Streaming chunks, fixed memory bounds (desktop path) |
+| OS-level read error and short-read reporting | Implemented (not sector reconstruction or checksum proof) |
+| Desktop Windows/macOS hardware compatibility | Implemented code paths; not yet validated on those operating systems |
+| SMART, bad-sector recovery, SSD remediation | **Not available in desktop path** |
+| BIOS/UEFI Rust boot environment | Experimental, not verified safe for public use |
+| Standalone signed Windows/macOS installers | Not built or signed |
 
-## Testing
+**Critical limitation:** A completed read-only scan does not establish data integrity or physical health, nor does it repair a drive. A failing drive should be cloned or professionally recovered before being stressed by diagnostics. Some USB bridges and system permissions prohibit raw disk reads. Never run the experimental boot repair code on valuable media.
 
-Run the test suite:
+## Tests
 
 ```bash
-cargo test --features "std,alloc" --lib
+cd desktop
+python3 -m unittest discover -s tests -v
+python3 -m driverepair_desktop scan-image --image /path/to/a/regular/file.img --json
 ```
 
-Note: Some platform-specific tests are skipped in CI (require privileged instructions).
+No physical disk access is required for tests. OS-specific smoke testing and hardware benchmarks are release blockers, not completed features. See [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
 
-## Documentation
+## Repository layout
 
-Comprehensive documentation is available in the `docs/` directory:
+- `desktop/driverepair_desktop/`: read-only host OS disk discovery, scanner and CLI.
+- `desktop/tests/`: test fixtures and failure-mode coverage; no privileged disk I/O.
+- `src/boot/`: experimental BIOS/UEFI boot prototypes (separate Cargo crates).
+- `src/disk/`, `src/repair/`: experimental Rust framework; **not** a production hardware backend.
+- `scripts/`: legacy boot-media scripts; **destructive USB writers are hard-disabled (exit 2) pending safety gates** and are not part of desktop scanning.
 
-- `ARCHITECTURE.md`: Overall system architecture
-- `REVERSE_ENGINEERING.md`: SpinRite analysis findings
-- `ATA_IMPLEMENTATION.md`: ATA command reference
-- `BOOTLOADER_IMPLEMENTATION.md`: Bootloader implementation guide
-- `SMART_IMPLEMENTATION.md`: SMART command reference
-- `STATUS.md`: Current project status
-- `COMPLETENESS_REPORT.md`: Detailed completeness report
+## Principles
 
-## License
+- Never infer a repaired sector from a successful read.
+- Never issue write-capable I/O from the desktop scanner.
+- Default to external whole disks only, requiring an exact discovered disk ID.
+- Abort when the disk identity changes, access is lost or read error limits are exceeded.
+- Use independent, reproducible tests before any claims about recovery effectiveness.
 
-[License information to be added]
+**License:** MIT (see `Cargo.toml`; review third-party notices before distributing built media). Project maintained by commstech.
 
-## Contributing
 
-[Contributing guidelines to be added]
+## Gate 0 Rust library (experimental)
 
-## Acknowledgments
+Host Rust crates now fail closed on unimplemented I/O, default to read-only access, and refuse misleading SMART/repair claims. See `docs/release-readiness/` and `src/boot/EXPERIMENTAL.md`. These are **not** a substitute for the desktop scanner.
 
-- Based on reverse engineering of SpinRite by Steve Gibson
-- Built with modern Rust best practices
-- Designed for modern hardware (64GB-20TB drives, NVMe, SSDs)

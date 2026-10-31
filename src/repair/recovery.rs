@@ -1,6 +1,6 @@
 // Error recovery strategies
 // Implements various retry and recovery mechanisms for disk operations
-// Based on SpinRite analysis: exponential backoff, multiple retry strategies
+// Gate 0: never claim verified from nonzero CRC alone; max_attempts==0 is fail-closed
 
 use core::clone::Clone;
 use core::default::Default;
@@ -79,13 +79,20 @@ impl ErrorRecovery {
         }
     }
 
-    /// Execute operation with retry logic
+    /// Execute operation with retry logic.
+    /// If `max_attempts == 0`, returns `Err(E::default())` without panicking
+    /// and without treating the operation as successful.
     pub fn retry<F, T, E>(&self, mut operation: F) -> Result<T, E>
     where
         F: FnMut() -> Result<T, E>,
-        E: Clone,
+        E: Clone + Default,
     {
-        let mut last_error = None;
+        if self.max_attempts == 0 {
+            // Fail-closed: zero attempts configured — do not call operation, do not unwrap
+            return Err(E::default());
+        }
+
+        let mut last_error: Option<E> = None;
 
         for attempt in 0..self.max_attempts {
             match operation() {
@@ -93,18 +100,21 @@ impl ErrorRecovery {
                 Err(e) => {
                     last_error = Some(e.clone());
 
-                    if attempt < self.max_attempts - 1 {
+                    if attempt + 1 < self.max_attempts {
                         let delay = self.strategy.delay_for_attempt(attempt);
                         if delay > 0 {
-                            // TODO: Implement actual delay (platform-specific)
-                            // For now, this is a placeholder
+                            // EXPERIMENTAL/UNSUPPORTED: platform-specific delay not wired yet
+                            let _ = delay;
                         }
                     }
                 }
             }
         }
 
-        Err(last_error.unwrap())
+        match last_error {
+            Some(e) => Err(e),
+            None => Err(E::default()),
+        }
     }
 }
 
@@ -121,31 +131,46 @@ pub enum VerificationMethod {
     Ecc,
 }
 
-/// Verify sector data integrity
+/// Honest verification outcome — never claim Verified without an expected value
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerificationResult {
+    /// Data matched the expected CRC / checksum
+    Verified,
+    /// No expected value was provided; integrity unknown
+    Unverified,
+    /// Expected value was provided and did not match
+    Mismatch,
+}
+
+/// Verify sector data against an optional expected CRC32.
+/// Passing `None` always yields `Unverified` — nonzero CRC alone is never "verified".
+pub fn verify_against_expected(data: &[u8], expected_crc: Option<u32>) -> VerificationResult {
+    match expected_crc {
+        None => {
+            let _ = data;
+            VerificationResult::Unverified
+        }
+        Some(expected) => {
+            use crate::repair::crc32::crc32;
+            let calculated = crc32(data);
+            if calculated == expected {
+                VerificationResult::Verified
+            } else {
+                VerificationResult::Mismatch
+            }
+        }
+    }
+}
+
+/// Legacy helper retained for callers that still pass a method.
+/// Without an expected CRC this never returns true for Crc32/Ecc/Checksum "verified".
 pub fn verify_sector(data: &[u8], method: VerificationMethod) -> bool {
     match method {
-        VerificationMethod::None => true,
-        VerificationMethod::Checksum => {
-            // Simple XOR checksum
-            let checksum = data.iter().fold(0u8, |acc, &b| acc ^ b);
-            // For now, just check that data is not all zeros or all ones
-            checksum != 0 && checksum != 0xFF
-        }
-        VerificationMethod::Crc32 => {
-            // Use CRC32 for data integrity verification
-            // Based on SpinRite analysis: uses checksum/CRC for verification
-            use crate::repair::crc32::crc32;
-            let calculated_crc = crc32(data);
-            // For now, we verify that CRC is non-zero (basic integrity check)
-            // In a full implementation, we would store and compare CRC values
-            calculated_crc != 0 || data.iter().any(|&b| b != 0)
-        }
-        VerificationMethod::Ecc => {
-            // ECC (Error Correcting Code) is hardware-level and may not be accessible
-            // For now, fall back to CRC32 for verification
-            use crate::repair::crc32::crc32;
-            let calculated_crc = crc32(data);
-            calculated_crc != 0 || data.iter().any(|&b| b != 0)
+        VerificationMethod::None => false,
+        VerificationMethod::Checksum | VerificationMethod::Crc32 | VerificationMethod::Ecc => {
+            // Gate 0: never claim verified from content heuristics alone
+            let _ = data;
+            false
         }
     }
 }
@@ -153,6 +178,7 @@ pub fn verify_sector(data: &[u8], method: VerificationMethod) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::disk::DiskError;
 
     #[test]
     fn test_retry_strategy_fixed_delay() {
@@ -172,15 +198,37 @@ mod tests {
         assert_eq!(strategy.delay_for_attempt(1), 200);
         assert_eq!(strategy.delay_for_attempt(2), 400);
         assert_eq!(strategy.delay_for_attempt(3), 800);
-        assert_eq!(strategy.delay_for_attempt(4), 1000); // Capped at max
+        assert_eq!(strategy.delay_for_attempt(4), 1000);
     }
 
     #[test]
-    fn test_verify_sector_checksum() {
+    fn test_verify_against_expected_none_is_unverified() {
         let data = [0x01, 0x02, 0x03, 0x04];
-        assert!(verify_sector(&data, VerificationMethod::Checksum));
+        assert_eq!(
+            verify_against_expected(&data, None),
+            VerificationResult::Unverified
+        );
+    }
 
-        let zeros = [0u8; 512];
-        assert!(!verify_sector(&zeros, VerificationMethod::Checksum));
+    #[test]
+    fn test_verify_against_expected_match_and_mismatch() {
+        use crate::repair::crc32::crc32;
+        let data = [0x01, 0x02, 0x03, 0x04];
+        let crc = crc32(&data);
+        assert_eq!(
+            verify_against_expected(&data, Some(crc)),
+            VerificationResult::Verified
+        );
+        assert_eq!(
+            verify_against_expected(&data, Some(crc ^ 0xFFFF)),
+            VerificationResult::Mismatch
+        );
+    }
+
+    #[test]
+    fn test_max_attempts_zero_no_panic() {
+        let recovery = ErrorRecovery::new(RetryStrategy::None, 0);
+        let result: Result<(), DiskError> = recovery.retry(|| Ok(()));
+        assert_eq!(result, Err(DiskError::Unsupported));
     }
 }

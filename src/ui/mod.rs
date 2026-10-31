@@ -75,10 +75,11 @@ impl UserInterface {
                 DiskInterface::SATA => "SATA",
                 DiskInterface::NVMe => "NVMe",
                 DiskInterface::USB => "USB",
+                DiskInterface::Unknown => "Unknown",
             };
 
             let size_str = Self::format_size(disk.size_bytes);
-            let status = "Ready"; // TODO: Get actual status
+            let status = "Unknown"; // EXPERIMENTAL: live ready status not wired
 
             println!(
                 "{:<4} {:<8} {:<20} {:<12} {:<10}",
@@ -139,6 +140,9 @@ impl UserInterface {
             SmartHealthStatus::Unknown => {
                 println!("Unknown");
             }
+            SmartHealthStatus::UnableToQuery => {
+                println!("{}Unable to query{}", colors::YELLOW, colors::RESET);
+            }
         }
     }
 
@@ -156,28 +160,35 @@ impl UserInterface {
         let bar = "=".repeat(filled) + &" ".repeat(bar_width - filled);
 
         let status = match result {
-            RepairResult::Repaired => {
+            RepairResult::ReadOk | RepairResult::CopiedAndVerified => {
                 let mut s = String::new();
                 s.push_str(colors::GREEN);
-                s.push_str("Repaired");
+                s.push_str("ReadOk");
                 s.push_str(colors::RESET);
                 s
             }
-            RepairResult::Recovered => {
+            RepairResult::ReadUnverified => {
                 let mut s = String::new();
                 s.push_str(colors::YELLOW);
-                s.push_str("Recovered");
+                s.push_str("Unverified");
                 s.push_str(colors::RESET);
                 s
             }
-            RepairResult::Failed => {
+            RepairResult::RewriteVerified => {
+                let mut s = String::new();
+                s.push_str(colors::GREEN);
+                s.push_str("RewriteVerified");
+                s.push_str(colors::RESET);
+                s
+            }
+            RepairResult::ReadError | RepairResult::Unreadable => {
                 let mut s = String::new();
                 s.push_str(colors::RED);
-                s.push_str("Failed");
+                s.push_str("Unreadable");
                 s.push_str(colors::RESET);
                 s
             }
-            RepairResult::Skipped => {
+            RepairResult::Skipped | RepairResult::NotAttempted => {
                 let mut s = String::new();
                 s.push_str("Skipped");
                 s
@@ -196,8 +207,10 @@ impl UserInterface {
         println!();
         println!("Repair Statistics:");
         println!("{}", "-".repeat(60));
-        println!("Repaired:  {}", stats.repaired);
-        println!("Recovered: {}", stats.recovered);
+        println!("Readable:  {}", stats.readable);
+        println!("Repaired:  {} (rewrite verified only)", stats.repaired);
+        println!("Unverified:{}", stats.read_unverified);
+        println!("Unreadable:{}", stats.unreadable);
         println!("Failed:    {}", stats.failed);
         println!("Skipped:   {}", stats.skipped);
         println!("Total:     {}", stats.total());
@@ -214,6 +227,7 @@ impl UserInterface {
         println!("Timeout: {} ms", config.timeout_ms);
         println!("Scan Pattern: {:?}", config.scan_pattern);
         println!("Aggressive Correction: {}", config.aggressive_correction);
+        println!("Allow Writes: {}", config.allow_writes);
         println!("Enable TRIM: {}", config.enable_trim);
         println!("Start Sector: {}", config.start_sector);
         println!("End Sector: {}", config.end_sector);
