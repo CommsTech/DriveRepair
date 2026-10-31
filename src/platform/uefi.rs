@@ -53,7 +53,7 @@ impl PortIO for UefiPlatform {
 
     /// Delay for specified microseconds
     fn delay_us(microseconds: u32) {
-        // TODO: Use UEFI boot services stall function
+        // EXPERIMENTAL/UNSUPPORTED: Use UEFI boot services stall function
         // For now, simple delay loop
         for _ in 0..microseconds {
             core::hint::spin_loop();
@@ -112,19 +112,19 @@ impl PciIO for UefiPlatform {
     /// Read configuration space register
     /// Uses UEFI PCI Root Bridge I/O protocol
     fn read_config(_bus: u8, _device: u8, _function: u8, _offset: u8) -> u32 {
-        // TODO: Use UEFI PCI Root Bridge I/O protocol
+        // EXPERIMENTAL/UNSUPPORTED: Use UEFI PCI Root Bridge I/O protocol
         // For now, return 0
         0
     }
 
     /// Write configuration space register
     fn write_config(_bus: u8, _device: u8, _function: u8, _offset: u8, _value: u32) {
-        // TODO: Use UEFI PCI Root Bridge I/O protocol
+        // EXPERIMENTAL/UNSUPPORTED: Use UEFI PCI Root Bridge I/O protocol
     }
 
     /// Enumerate PCI devices
     fn enumerate_devices() -> Result<Vec<PciDevice>, DiskError> {
-        // TODO: Use UEFI PCI Root Bridge I/O protocol to enumerate devices
+        // EXPERIMENTAL/UNSUPPORTED: Use UEFI PCI Root Bridge I/O protocol to enumerate devices
         // For now, return empty list
         Ok(Vec::new())
     }

@@ -26,31 +26,12 @@ impl DiskEnumerator {
     pub fn enumerate() -> Result<Vec<Box<dyn Disk>>, DiskError> {
         let mut disks: Vec<Box<dyn Disk>> = Vec::new();
 
-        // Enumerate NVMe drives
-        if let Ok(controller) = NvmeController::detect() {
-            let namespace_count = controller.namespace_count();
-            for namespace_id in 1..=namespace_count {
-                // Clone controller for each namespace (or use references)
-                // For now, create a new controller for each namespace
-                // TODO: Refactor to use references or Arc
-                if let Ok(disk) = NvmeDisk::new(NvmeController::detect().unwrap(), namespace_id) {
-                    disks.push(Box::new(disk));
-                }
-            }
-        }
-
-        // Enumerate SATA drives via AHCI
-        if let Ok(controller) = AhciController::detect() {
-            let port_count = controller.port_count();
-            for port in 0..port_count {
-                // Clone controller for each port (or use references)
-                // For now, create a new controller for each port
-                // TODO: Refactor to use references or Arc
-                if let Ok(disk) = SataDisk::new(AhciController::detect().unwrap(), port) {
-                    disks.push(Box::new(disk));
-                }
-            }
-        }
+        // Gate 0: NVMe/AHCI detect stubs return Unsupported — do not fabricate disks
+        let _ = NvmeController::detect();
+        let _ = AhciController::detect();
+        // Keep type imports live for future wiring without fabricating controllers
+        let _: Option<NvmeDisk> = None;
+        let _: Option<SataDisk> = None;
 
         // Enumerate ATA/IDE drives
         // Primary channel, master
@@ -79,8 +60,7 @@ impl DiskEnumerator {
         }
 
         // Enumerate USB drives
-        // TODO: Implement USB enumeration
-        // For now, try common device addresses
+        // EXPERIMENTAL/UNSUPPORTED: full USB enumeration not implemented
         for addr in 1..=16 {
             if let Ok(disk) = UsbDisk::new(addr) {
                 if disk.is_ready() {

@@ -1,5 +1,5 @@
 // SATA disk interface via AHCI controller
-// Supports modern SATA drives with NCQ
+// Gate 0: fail-closed — detect and I/O return Unsupported
 
 use crate::disk::{Disk, DiskError, DiskInfo, DiskInterface, SECTOR_SIZE_512};
 use core::result::Result;
@@ -33,18 +33,8 @@ pub struct SataDisk {
 impl AhciController {
     /// Detect and initialize AHCI controller
     pub fn detect() -> Result<Self, DiskError> {
-        // TODO: Implement AHCI detection
-        // 1. Enumerate PCI devices
-        // 2. Find AHCI controller (Class 0x01, Subclass 0x06, ProgIF 0x01)
-        // 3. Read base address register (BAR5)
-        // 4. Map memory
-        // 5. Initialize controller
-        // 6. Enable AHCI mode
-
-        Ok(Self {
-            base_address: 0,
-            port_count: 0,
-        })
+        // EXPERIMENTAL/UNSUPPORTED: AHCI PCI enumeration and init not implemented
+        Err(DiskError::Unsupported)
     }
 
     /// Get number of ports
@@ -60,13 +50,7 @@ impl SataDisk {
     /// * `controller` - AHCI controller instance
     /// * `port` - Port number (0-based)
     pub fn new(controller: AhciController, port: u32) -> Result<Self, DiskError> {
-        // TODO: Implement SATA disk initialization
-        // 1. Check if port is implemented
-        // 2. Check if device is present
-        // 3. Send IDENTIFY DEVICE command
-        // 4. Parse identify data
-        // 5. Get capacity (48-bit LBA)
-
+        // EXPERIMENTAL/UNSUPPORTED: SATA port identify not implemented
         Ok(Self {
             controller,
             port,
@@ -84,13 +68,14 @@ impl SataDisk {
     /// Send ATA command via AHCI
     #[allow(dead_code)]
     fn send_command(&self, _command: u8, _lba: u64, _count: u16) -> Result<(), DiskError> {
-        // TODO: Implement AHCI command submission
-        // 1. Allocate command list and FIS
-        // 2. Build command FIS
-        // 3. Submit command to port
-        // 4. Wait for completion
-        // 5. Check for errors
-        Ok(())
+        // EXPERIMENTAL/UNSUPPORTED: AHCI command submission not implemented
+        Err(DiskError::Unsupported)
+    }
+
+    #[allow(dead_code)]
+    fn wait_ready(&self) -> Result<(), DiskError> {
+        // EXPERIMENTAL/UNSUPPORTED: AHCI port ready wait not implemented
+        Err(DiskError::Unsupported)
     }
 }
 
@@ -116,40 +101,14 @@ impl Disk for SataDisk {
         })
     }
 
-    fn read_sectors(&self, lba: u64, count: u32, _buffer: &mut [u8]) -> Result<(), DiskError> {
-        if !self.is_ready() {
-            return Err(DiskError::NotReady);
-        }
-
-        if lba + count as u64 > self.total_sectors {
-            return Err(DiskError::InvalidSector);
-        }
-
-        // TODO: Implement AHCI read
-        // 1. Build READ FPDMA QUEUED command (NCQ) or READ DMA EXT
-        // 2. Submit command via AHCI
-        // 3. Wait for completion
-        // 4. Handle errors and retries
-
-        Ok(())
+    fn read_sectors(&self, _lba: u64, _count: u32, _buffer: &mut [u8]) -> Result<(), DiskError> {
+        // EXPERIMENTAL/UNSUPPORTED: AHCI read not implemented
+        Err(DiskError::Unsupported)
     }
 
-    fn write_sectors(&self, lba: u64, count: u32, _buffer: &[u8]) -> Result<(), DiskError> {
-        if !self.is_ready() {
-            return Err(DiskError::NotReady);
-        }
-
-        if lba + count as u64 > self.total_sectors {
-            return Err(DiskError::InvalidSector);
-        }
-
-        // TODO: Implement AHCI write
-        // 1. Build WRITE FPDMA QUEUED command (NCQ) or WRITE DMA EXT
-        // 2. Submit command via AHCI
-        // 3. Wait for completion
-        // 4. Handle errors and retries
-
-        Ok(())
+    fn write_sectors(&self, _lba: u64, _count: u32, _buffer: &[u8]) -> Result<(), DiskError> {
+        // EXPERIMENTAL/UNSUPPORTED: AHCI write not implemented
+        Err(DiskError::Unsupported)
     }
 
     fn sector_size(&self) -> u64 {
@@ -161,12 +120,11 @@ impl Disk for SataDisk {
     }
 
     fn is_ready(&self) -> bool {
-        // TODO: Check port status
-        true
+        self.total_sectors > 0
     }
 
     fn flush(&self) -> Result<(), DiskError> {
-        // TODO: Send FLUSH CACHE EXT via AHCI
-        Ok(())
+        // EXPERIMENTAL/UNSUPPORTED: FLUSH CACHE EXT via AHCI not implemented
+        Err(DiskError::Unsupported)
     }
 }

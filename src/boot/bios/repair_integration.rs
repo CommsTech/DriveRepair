@@ -1,25 +1,18 @@
 // Repair engine integration for BIOS bootloader
 // Connects menu selection with repair operations
 
-#![no_std]
-#![no_main]
 
-use core::panic::PanicInfo;
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    loop {}
-}
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
-use crate::boot::bios::disk_detection::BiosDiskDetector;
-use crate::boot::bios::disk_wrapper::BiosDisk;
-use crate::boot::bios::menu_integration::BiosMenuIntegration;
-use crate::disk::DiskError;
-use crate::ui::menu::RepairOption;
-use crate::repair::{RepairEngine, RepairConfig, ScanPattern};
+use crate::disk_detection::BiosDiskDetector;
+use crate::disk_wrapper::BiosDisk;
+use crate::menu_integration::BiosMenuIntegration;
+use drive_repair::disk::DiskError;
+use drive_repair::ui::menu::RepairOption;
+use drive_repair::repair::{RepairEngine, RepairConfig, ScanPattern};
 
 // VGA text mode helper
 mod vga {
@@ -105,7 +98,7 @@ impl BiosRepairIntegration {
                 end_sector: selected_disk.total_sectors,
             },
             RepairOption::SmartCheck => {
-                // TODO: Implement SMART check
+                // EXPERIMENTAL/UNSUPPORTED: Implement SMART check
                 vga::print_string("SMART check not yet implemented.\n");
                 return Ok(());
             }
@@ -114,7 +107,7 @@ impl BiosRepairIntegration {
         // 5. Initialize repair engine
         // Create BIOS disk wrapper
         // Determine if this is an ATA disk or INT 13h disk
-        let mut disk = if selected_disk.interface == crate::disk::DiskInterface::ATA {
+        let mut disk = if selected_disk.interface == drive_repair::disk::DiskInterface::ATA {
             // ATA disk - need to determine primary/master from detection
             // For now, assume primary/master
             BiosDisk::new_ata(true, true, selected_disk.clone())
@@ -134,8 +127,8 @@ impl BiosRepairIntegration {
         vga::print_string(&info);
 
         // Run scan and repair with progress callback
-        let progress_callback = |current: u64, total: u64, result: crate::repair::RepairResult| {
-            // TODO: Display progress via VGA
+        let progress_callback = |current: u64, total: u64, result: drive_repair::repair::RepairResult| {
+            // EXPERIMENTAL/UNSUPPORTED: Display progress via VGA
             // For now, this is a placeholder
             let _ = (current, total, result);
         };
@@ -178,4 +171,3 @@ fn format_size(bytes: u64) -> alloc::string::String {
     result.push_str(UNITS[unit_index]);
     result
 }
-

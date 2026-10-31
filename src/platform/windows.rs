@@ -19,14 +19,14 @@ impl PortIO for WindowsPlatform {
     /// Read byte from I/O port
     /// Note: Requires kernel-mode driver or special privileges
     fn inb(_port: u16) -> u8 {
-        // TODO: Use Windows API (requires kernel driver)
+        // EXPERIMENTAL/UNSUPPORTED: Use Windows API (requires kernel driver)
         // For user mode, use CreateFile with physical drive
         0
     }
 
     /// Write byte to I/O port
     fn outb(_port: u16, _value: u8) {
-        // TODO: Use Windows API (requires kernel driver)
+        // EXPERIMENTAL/UNSUPPORTED: Use Windows API (requires kernel driver)
     }
 
     /// Read word from I/O port
@@ -36,7 +36,7 @@ impl PortIO for WindowsPlatform {
 
     /// Write word to I/O port
     fn outw(_port: u16, _value: u16) {
-        // TODO: Use Windows API
+        // EXPERIMENTAL/UNSUPPORTED: Use Windows API
     }
 
     /// Read double word from I/O port
@@ -46,14 +46,14 @@ impl PortIO for WindowsPlatform {
 
     /// Write double word to I/O port
     fn outdw(_port: u16, _value: u32) {
-        // TODO: Use Windows API
+        // EXPERIMENTAL/UNSUPPORTED: Use Windows API
     }
 
     /// Delay for specified microseconds
     fn delay_us(microseconds: u32) {
         // Use Windows Sleep function (milliseconds)
         // For microseconds, use high-resolution timer
-        // TODO: Implement high-resolution delay
+        // EXPERIMENTAL/UNSUPPORTED: Implement high-resolution delay
         if microseconds >= 1000 {
             // Use std::thread::sleep for milliseconds
             #[cfg(feature = "std")]
@@ -118,18 +118,18 @@ impl PciIO for WindowsPlatform {
     /// Read configuration space register
     /// Uses Windows SetupAPI or direct PCI access
     fn read_config(_bus: u8, _device: u8, _function: u8, _offset: u8) -> u32 {
-        // TODO: Use Windows SetupAPI or kernel driver
+        // EXPERIMENTAL/UNSUPPORTED: Use Windows SetupAPI or kernel driver
         0
     }
 
     /// Write configuration space register
     fn write_config(_bus: u8, _device: u8, _function: u8, _offset: u8, _value: u32) {
-        // TODO: Use Windows SetupAPI or kernel driver
+        // EXPERIMENTAL/UNSUPPORTED: Use Windows SetupAPI or kernel driver
     }
 
     /// Enumerate PCI devices
     fn enumerate_devices() -> Result<Vec<PciDevice>, DiskError> {
-        // TODO: Use Windows SetupAPI to enumerate PCI devices
+        // EXPERIMENTAL/UNSUPPORTED: Use Windows SetupAPI to enumerate PCI devices
         Ok(Vec::new())
     }
 }

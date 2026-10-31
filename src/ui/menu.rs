@@ -88,10 +88,8 @@ impl Menu {
                     #[cfg(feature = "std")]
                     self.display();
                 }
-                KeyCode::Enter => {
-                    if !self.items.is_empty() {
-                        return Some(self.items[self.selected].id);
-                    }
+                KeyCode::Enter if !self.items.is_empty() => {
+                    return Some(self.items[self.selected].id);
                 }
                 KeyCode::Escape => {
                     return None;
@@ -120,6 +118,7 @@ impl Menu {
                 crate::disk::DiskInterface::SATA => "SATA",
                 crate::disk::DiskInterface::NVMe => "NVMe",
                 crate::disk::DiskInterface::USB => "USB",
+                crate::disk::DiskInterface::Unknown => "Unknown",
             };
 
             let size_str = crate::disk::detection::format_size(disk.size_bytes);

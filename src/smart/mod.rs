@@ -1,5 +1,5 @@
 // SMART (Self-Monitoring, Analysis, and Reporting Technology) interface
-// Provides health monitoring and predictive failure analysis
+// Gate 0: empty attributes => Unknown (never Healthy)
 
 #![allow(dead_code)]
 
@@ -48,8 +48,10 @@ pub enum SmartHealthStatus {
     Warning,
     /// Drive is failing
     Failing,
-    /// Status unknown
+    /// Status unknown (including empty / unqueried attribute sets)
     Unknown,
+    /// SMART could not be queried from the device
+    UnableToQuery,
 }
 
 /// SMART interface trait
@@ -106,37 +108,32 @@ impl SmartParser {
             raw_value: u64::from_le_bytes([
                 data[5], data[6], data[7], data[8], data[9], data[10], data[11], 0,
             ]),
-            threshold: data[12],
+            threshold: if data.len() > 12 { data[12] } else { 0 },
         })
     }
 
-    /// Interpret SMART health status from attributes
+    /// Interpret SMART health status from attributes.
+    /// Empty attribute lists are Unknown — never Healthy.
     pub fn interpret_health(attributes: &[SmartAttribute]) -> SmartHealthStatus {
+        if attributes.is_empty() {
+            return SmartHealthStatus::Unknown;
+        }
+
         let mut has_warnings = false;
         let mut has_failures = false;
 
         for attr in attributes {
-            // Check if attribute is below threshold
             if attr.current < attr.threshold && attr.threshold > 0 {
                 has_failures = true;
             }
 
-            // Check critical attributes
             match attr.id {
-                SMART_ATTR_REALLOCATED_SECTORS => {
-                    if attr.raw_value > 0 {
-                        has_warnings = true;
-                    }
-                }
-                SMART_ATTR_CURRENT_PENDING_SECTORS => {
-                    if attr.raw_value > 0 {
-                        has_warnings = true;
-                    }
-                }
-                SMART_ATTR_OFFLINE_UNCORRECTABLE => {
-                    if attr.raw_value > 0 {
-                        has_warnings = true;
-                    }
+                SMART_ATTR_REALLOCATED_SECTORS
+                | SMART_ATTR_CURRENT_PENDING_SECTORS
+                | SMART_ATTR_OFFLINE_UNCORRECTABLE
+                    if attr.raw_value > 0 =>
+                {
+                    has_warnings = true;
                 }
                 _ => {}
             }
@@ -193,5 +190,13 @@ mod tests {
         } else {
             panic!("Failed to parse attribute");
         }
+    }
+
+    #[test]
+    fn test_empty_attributes_unknown() {
+        assert_eq!(
+            SmartParser::interpret_health(&[]),
+            SmartHealthStatus::Unknown
+        );
     }
 }

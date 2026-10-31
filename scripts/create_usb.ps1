@@ -1,3 +1,13 @@
+# =============================================================================
+# GATE 0 SAFETY: Destructive USB provisioning is DISABLED pending safety gates.
+# This script will NOT erase disks, format media, or write bootloaders.
+# Original body preserved below but is unreachable.
+# =============================================================================
+Write-Host "ERROR: Destructive USB provisioning is DISABLED pending Gate 0 safety gates." -ForegroundColor Red
+Write-Host "Refusing to touch USB/disk media. Exit code 2." -ForegroundColor Red
+exit 2
+
+<# DISABLED_ORIGINAL_BODY
 # PowerShell script to create bootable USB drive
 # Creates hybrid UEFI/BIOS bootable USB with GPT partition table
 
@@ -226,3 +236,5 @@ Write-Host ""
 Write-Host "Note: You may need to configure your system's boot order to boot from USB." -ForegroundColor Cyan
 Write-Host "DriveRepair by commstech v0.0.1" -ForegroundColor Cyan
 
+
+#>

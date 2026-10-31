@@ -1,15 +1,8 @@
 // Integration of menu system with BIOS bootloader
 // Provides interactive disk selection and repair options
 
-#![no_std]
-#![no_main]
 
-use core::panic::PanicInfo;
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    loop {}
-}
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -17,9 +10,9 @@ extern crate alloc;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-use crate::boot::bios::disk_detection::BiosDiskDetector;
-use crate::disk::DiskInfo;
-use crate::ui::menu::RepairOption;
+use crate::disk_detection::BiosDiskDetector;
+use drive_repair::disk::DiskInfo;
+use drive_repair::ui::menu::RepairOption;
 // VGA text mode helper - defined inline for now
 mod vga {
     /// VGA text buffer address (0xB8000)
@@ -49,7 +42,7 @@ pub struct BiosMenuIntegration;
 impl BiosMenuIntegration {
     /// Show disk selection menu and return selected disk index
     #[cfg(feature = "alloc")]
-    pub fn show_disk_selection() -> Result<Option<usize>, crate::disk::DiskError> {
+    pub fn show_disk_selection() -> Result<Option<usize>, drive_repair::disk::DiskError> {
         // Detect disks
         // Try INT 13h first, then fall back to ATA port I/O
         let disks = match BiosDiskDetector::detect_via_int13h() {
@@ -67,11 +60,11 @@ impl BiosMenuIntegration {
 
         for (index, disk) in disks.iter().enumerate() {
             let interface_str = match disk.interface {
-                crate::disk::DiskInterface::ATA => "ATA",
-                crate::disk::DiskInterface::SATA => "SATA",
-                crate::disk::DiskInterface::NVMe => "NVMe",
-                crate::disk::DiskInterface::USB => "USB",
-                crate::disk::DiskInterface::Unknown => "Unknown",
+                drive_repair::disk::DiskInterface::ATA => "ATA",
+                drive_repair::disk::DiskInterface::SATA => "SATA",
+                drive_repair::disk::DiskInterface::NVMe => "NVMe",
+                drive_repair::disk::DiskInterface::USB => "USB",
+                drive_repair::disk::DiskInterface::Unknown => "Unknown",
             };
 
             let size_str = format_size(disk.size_bytes);
@@ -82,10 +75,9 @@ impl BiosMenuIntegration {
             VgaTextMode::print_string(&info);
         }
 
-        // TODO: Implement keyboard input for selection
-        // Use BIOS INT 16h for keyboard input
-        // For now, return first disk
-        Ok(Some(0))
+        // EXPERIMENTAL/UNSUPPORTED: keyboard selection via INT 16h not wired.
+        // Gate 0: require explicit selection — never auto-select disk 0.
+        Ok(None)
     }
 
     /// Show repair options menu and return selected option
@@ -97,10 +89,9 @@ impl BiosMenuIntegration {
         VgaTextMode::print_string("[2] SMART Check - Check SMART status only\n");
         VgaTextMode::print_string("[3] Cancel - Return to main menu\n");
 
-        // TODO: Implement keyboard input for selection
-        // Use BIOS INT 16h for keyboard input
-        // For now, return Quick Scan
-        Some(RepairOption::QuickScan)
+        // EXPERIMENTAL/UNSUPPORTED: keyboard selection via INT 16h not wired.
+        // Gate 0: require explicit selection — never default to QuickScan.
+        None
     }
 }
 
@@ -118,4 +109,3 @@ fn format_size(bytes: u64) -> String {
 
     format!("{:.2} {}", size, UNITS[unit_index])
 }
-

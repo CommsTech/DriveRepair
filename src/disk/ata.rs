@@ -1,5 +1,5 @@
 // ATA/IDE disk interface implementation
-// Supports PIO and DMA modes
+// Gate 0: fail-closed — unimplemented I/O returns Unsupported, never Ok(())
 
 use crate::disk::{Disk, DiskError, DiskInfo, DiskInterface, SECTOR_SIZE_512};
 use core::result::Result;
@@ -10,7 +10,7 @@ extern crate alloc;
 #[cfg(feature = "alloc")]
 use alloc::string::String;
 
-/// ATA disk implementation
+/// ATA disk implementation (experimental / unsupported on hosted OS)
 pub struct AtaDisk {
     primary: bool,
     master: bool,
@@ -25,24 +25,20 @@ pub struct AtaDisk {
 }
 
 impl AtaDisk {
-    /// Create new ATA disk instance
+    /// Create new ATA disk instance.
+    /// May construct, but `is_ready` is false until real IDENTIFY succeeds.
     ///
     /// # Arguments
     /// * `primary` - true for primary channel (0x1F0), false for secondary (0x170)
     /// * `master` - true for master drive, false for slave
     pub fn new(primary: bool, master: bool) -> Result<Self, DiskError> {
-        // TODO: Implement actual ATA detection and initialization
-        // This will need to:
-        // 1. Access I/O ports (0x1F0-0x1F7 for primary, 0x170-0x177 for secondary)
-        // 2. Send IDENTIFY DEVICE command (0xEC)
-        // 3. Read identify data
-        // 4. Parse model, serial, firmware, capacity
-
+        // EXPERIMENTAL/UNSUPPORTED: ATA detection and IDENTIFY DEVICE not implemented.
+        // Constructs a non-ready stub so callers can exist without fake successful I/O.
         Ok(Self {
             primary,
             master,
             sector_size: SECTOR_SIZE_512,
-            total_sectors: 0, // Will be populated from IDENTIFY
+            total_sectors: 0,
             #[cfg(feature = "alloc")]
             model: String::new(),
             #[cfg(feature = "alloc")]
@@ -56,8 +52,7 @@ impl AtaDisk {
     #[allow(dead_code)]
     fn read_register(&self, _offset: u16) -> u8 {
         let _base = if self.primary { 0x1F0 } else { 0x170 };
-        // TODO: Implement actual port I/O
-        // unsafe { inb(base + offset) }
+        // EXPERIMENTAL/UNSUPPORTED: port I/O not implemented for ATA registers
         0
     }
 
@@ -65,27 +60,21 @@ impl AtaDisk {
     #[allow(dead_code)]
     fn write_register(&self, _offset: u16, _value: u8) {
         let _base = if self.primary { 0x1F0 } else { 0x170 };
-        // TODO: Implement actual port I/O
-        // unsafe { outb(base + offset, value) }
+        // EXPERIMENTAL/UNSUPPORTED: port I/O not implemented for ATA registers
     }
 
     /// Wait for drive to be ready
     #[allow(dead_code)]
     fn wait_ready(&self) -> Result<(), DiskError> {
-        // TODO: Implement ready wait logic
-        // Poll status register until BSY is clear and DRDY is set
-        Ok(())
+        // EXPERIMENTAL/UNSUPPORTED: ready-wait polling not implemented
+        Err(DiskError::Unsupported)
     }
 
     /// Send ATA command
     #[allow(dead_code)]
     fn send_command(&self, _command: u8, _lba: u64, _count: u8) -> Result<(), DiskError> {
-        // TODO: Implement ATA command sending
-        // 1. Wait for drive ready
-        // 2. Set LBA registers (48-bit LBA mode for large drives)
-        // 3. Set sector count
-        // 4. Send command
-        Ok(())
+        // EXPERIMENTAL/UNSUPPORTED: ATA command submission not implemented
+        Err(DiskError::Unsupported)
     }
 }
 
@@ -111,41 +100,14 @@ impl Disk for AtaDisk {
         })
     }
 
-    fn read_sectors(&self, lba: u64, count: u32, _buffer: &mut [u8]) -> Result<(), DiskError> {
-        if !self.is_ready() {
-            return Err(DiskError::NotReady);
-        }
-
-        if lba + count as u64 > self.total_sectors {
-            return Err(DiskError::InvalidSector);
-        }
-
-        // TODO: Implement actual ATA read
-        // 1. Send READ SECTORS EXT command (0x24 for 48-bit LBA)
-        // 2. Wait for data ready
-        // 3. Read data from data register (0x1F0 or 0x170)
-        // 4. Handle errors and retries
-
-        Ok(())
+    fn read_sectors(&self, _lba: u64, _count: u32, _buffer: &mut [u8]) -> Result<(), DiskError> {
+        // EXPERIMENTAL/UNSUPPORTED: ATA READ SECTORS EXT not implemented
+        Err(DiskError::Unsupported)
     }
 
-    fn write_sectors(&self, lba: u64, count: u32, _buffer: &[u8]) -> Result<(), DiskError> {
-        if !self.is_ready() {
-            return Err(DiskError::NotReady);
-        }
-
-        if lba + count as u64 > self.total_sectors {
-            return Err(DiskError::InvalidSector);
-        }
-
-        // TODO: Implement actual ATA write
-        // 1. Send WRITE SECTORS EXT command (0x34 for 48-bit LBA)
-        // 2. Wait for data ready
-        // 3. Write data to data register
-        // 4. Send CACHE FLUSH command
-        // 5. Handle errors and retries
-
-        Ok(())
+    fn write_sectors(&self, _lba: u64, _count: u32, _buffer: &[u8]) -> Result<(), DiskError> {
+        // EXPERIMENTAL/UNSUPPORTED: ATA WRITE SECTORS EXT not implemented
+        Err(DiskError::Unsupported)
     }
 
     fn sector_size(&self) -> u64 {
@@ -157,12 +119,12 @@ impl Disk for AtaDisk {
     }
 
     fn is_ready(&self) -> bool {
-        // TODO: Check status register
-        true
+        // Fail-closed: not ready until IDENTIFY populates capacity
+        self.total_sectors > 0
     }
 
     fn flush(&self) -> Result<(), DiskError> {
-        // TODO: Send FLUSH CACHE EXT command (0xEA)
-        Ok(())
+        // EXPERIMENTAL/UNSUPPORTED: FLUSH CACHE EXT not implemented
+        Err(DiskError::Unsupported)
     }
 }
