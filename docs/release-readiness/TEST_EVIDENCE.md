@@ -3,8 +3,8 @@
 **Rule:** Never invent `PASS`. Unknown or unrun → `NOT_PROVEN` / `SKIPPED` / `BLOCKED`.
 
 **Environment:** Windows workstation · path `c:\Users\commstech\Github\DriveRepair`  
-**HEAD (mission start / still tip):** `e7396368828bef08d534a1f2442d0e382243cf9e`  
-**Branch:** `remediation/gate0-safety-2026-10-31` (dirty Gate 0 working tree)  
+**HEAD (mission start):** `e7396368828bef08d534a1f2442d0e382243cf9e`  
+**Branch tip (pushed):** `f5177a7` on `remediation/gate0-safety-2026-10-31`  
 **Toolchain:** `rustc 1.96.0-nightly (23903d01c 2026-03-26)` · `cargo 1.96.0-nightly (e84cb639e 2026-03-21)`
 
 ---
@@ -26,17 +26,26 @@ Notes / key output (verbatim excerpt):
 
 ## Executed this session
 
-### T-01 — Library unit tests
+### T-01 — Library unit tests (initial docs pass — historical)
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-31 (early Gate 0 WIP) |
+| Command | `cargo test --features "std,alloc" --lib` |
+| Exit code | **101** |
+| Result | **FAIL** (did not compile; tests not executed) |
+| Notes | Historical only. Mid-integration UI/mock compile errors later fixed before push. |
+
+### T-01b — Library unit tests (post-fix, pushed tip)
 
 | Field | Value |
 |---|---|
 | Date | 2026-10-31 |
+| Commit | `f5177a7` |
 | Command | `cargo test --features "std,alloc" --lib` |
-| Exit code | **101** |
-| Result | **FAIL** (did not compile; tests not executed) |
-| Notes | Compiler errors included: `src/ui/mod.rs` still matches removed `RepairResult::Recovered` / `Failed`; `SmartHealthStatus::UnableToQuery` unmatched; `scan_and_repair` callback typed as `Fn` but mock test mutates capture (`FnMut` needed) in `src/disk/mock.rs`. |
-
-**Do not claim safety property PASS.** Zero-source-write tests are authored but **NOT_PROVEN**.
+| Exit code | **0** |
+| Result | **PASS** — 42 passed; 0 failed; 3 ignored |
+| Notes | Includes Gate 0 safety tests (RO write deny, zero write_count on scan, empty SMART → Unknown, Unsupported stubs). Hosted AHCI/NVMe detect tests ignored. Does **not** prove hardware I/O, ISO boot, or ddrescue rescue. |
 
 ### T-02 — Toolchain / baseline probes
 
@@ -47,14 +56,13 @@ Notes / key output (verbatim excerpt):
 | `Get-FileHash …\DriveRepair-main.zip` | 0 | PASS (probe) | SHA-256 matches baseline `02707c5a…` |
 | Top-level `*.iso` presence | 0 | PASS (probe) | `NO_TOP_LEVEL_ISO` |
 
-### T-03 — `cargo check` (library)
+### T-03 — Clippy / fmt (pre-push on tip `f5177a7`)
 
 | Field | Value |
 |---|---|
-| Command | *(not re-run as a dedicated check after final UI edits in this docs pass)* |
-| Result | **NOT_PROVEN** this documentation session |
-
-Historical inventory (earlier same-day audit) reported `cargo check --features "std,alloc"` exit 0 on pre-Gate-0 tree — that result must not be reused as proof for the current dirty Gate 0 tree.
+| Commands | `cargo fmt --check`; `cargo clippy --features "std,alloc" --lib -- -D warnings` |
+| Exit code | **0** |
+| Result | **PASS** (pre-push hook on push to Gitea) |
 
 ---
 
@@ -76,14 +84,14 @@ Historical inventory (earlier same-day audit) reported `cargo check --features "
 
 ---
 
-## Acceptance tests still required before PRIVATE_TEST_ONLY
+## Acceptance tests still required before broader PRIVATE_TEST_ONLY hardware use
 
-1. Green `cargo test --features "std,alloc" --lib` with captured summary (zero write_count proofs).
+1. ~~Green `cargo test --features "std,alloc" --lib`~~ — done on tip `f5177a7` (T-01b).
 2. Linux VM: ddrescue orchestrated rescue on loop/`dm-*` images with mapfile off-source.
 3. QEMU boot of **product** Linux live ISO (not homemade EFI alone).
-4. Explicit refusal tests: same-serial src/dst; unknown identity; RO mode write deny.
+4. Sacrificial external-device matrix on Win/macOS/Linux (desktop path).
 
-Until then: **NOT_READY**.
+Until ISO + fault-injection + owner-approved hardware matrix: public release remains **NOT_READY**. Desktop scanner remains **PRIVATE_TEST_ONLY**.
 
 ## Workstation re-run 2026-10-31 (Windows)
 

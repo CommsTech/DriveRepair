@@ -75,9 +75,9 @@ This document states the Gate 0 rules and where the current tree enforces (or fa
 
 | Command | Result |
 |---|---|
-| `cargo test --features "std,alloc" --lib` | **FAIL** — exit **101** (compile errors). Property proofs **NOT_PROVEN**. |
+| `cargo test --features "std,alloc" --lib` (tip `f5177a7`) | **PASS** — exit **0**; 42 passed, 3 ignored. See [TEST_EVIDENCE.md](TEST_EVIDENCE.md) T-01b. |
 
-Do **not** mark this gate PASS until a clean test run is captured in [TEST_EVIDENCE.md](TEST_EVIDENCE.md).
+Library Gate 0 property tests are green on hosted OS. Hardware I/O, ISO boot, and dm-* fault injection remain **NOT_PROVEN**.
 
 ---
 

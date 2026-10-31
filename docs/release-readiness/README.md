@@ -1,6 +1,8 @@
 # DriveRepair Gate 0/1 Release-Readiness Pack
 
-**Verdict (this pack):** `NOT_READY` / `PUBLIC_RELEASE_BLOCKED` / `BETTER_THAN_SPINRITE = NOT_PROVEN`
+**Verdict (this pack):** `NOT_READY` / `PUBLIC_RELEASE_BLOCKED` / operational class `PRIVATE_TEST_ONLY` (desktop + Gate 0 lib) / `BETTER_THAN_SPINRITE = NOT_PROVEN`
+
+**Docs follow-up:** early pack draft recorded `cargo test` exit 101 mid-WIP; tip `f5177a7` later proved **42 passed / 3 ignored** (see [TEST_EVIDENCE.md](TEST_EVIDENCE.md) T-01b). Do not treat the historical 101 as current tip status.
 
 ## Baseline (reverified 2026-10-31)
 

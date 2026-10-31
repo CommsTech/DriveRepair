@@ -26,7 +26,7 @@ Contain patient-disk risk before any public or USB-facing release: fail closed, 
 | Boot policy doc | Homemade loaders unshipped | `src/boot/EXPERIMENTAL.md` |
 | USB scripts | Hard fail `exit 2` | `scripts/create_usb.ps1` and siblings |
 | CI | Replace `actions-rs/toolchain@v1` with `dtolnay/rust-toolchain@stable`; ISO NOT_PROVEN note | `.gitea/workflows/ci.yml` |
-| UI | Still catching up to `SectorOutcome` / `UnableToQuery` at doc time | `src/ui/mod.rs` — **compile FAIL** |
+| UI | Updated for `SectorOutcome` / `UnableToQuery` | `src/ui/mod.rs` — compiles on tip `f5177a7` |
 
 Untracked/supporting: `issues.md`, build status notes, `scripts/deploy_full_usb.ps1` (disabled), UEFI `target/` artifacts (should not be released).
 

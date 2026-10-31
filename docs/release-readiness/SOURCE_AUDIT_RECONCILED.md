@@ -65,10 +65,10 @@ Finding IDs are **not** invented severity scores; they track the Gate 0 hard-sto
 | Field | Value |
 |---|---|
 | ZIP / pre-Gate-0 | No safety property tests; Windows `cargo test` crashed on privileged port I/O (inventory). |
-| Current status | **PARTIALLY_FIXED** — tests authored; suite **does not compile** at documentation time → result **NOT_PROVEN** / compile **FAIL** |
-| Evidence | Authored: `src/disk/mock.rs:243-302` (`readonly_mode_rejects_writes`, `mock_scan_does_not_call_write`, large sequential). Hosted port I/O stubs: `src/platform/bios.rs:16-29`. |
-| Executed | `cargo test --features "std,alloc" --lib` → **exit 101** (compile errors in `src/ui/mod.rs` SectorOutcome match arms, `Fn` vs `FnMut` in mock scan callback, etc.). See [TEST_EVIDENCE.md](TEST_EVIDENCE.md). |
-| Mission action | MockDisk + safety tests added; remediation must finish compile before PASS can be claimed. |
+| Current status | **PARTIALLY_FIXED** — tests authored and green on tip `f5177a7`; proves library RO/zero-write invariants on mocks only |
+| Evidence | Authored: `src/disk/mock.rs` safety tests. Hosted port I/O stubs: `src/platform/bios.rs`. |
+| Executed | Early WIP: exit 101 (historical). Tip `f5177a7`: `cargo test --features "std,alloc" --lib` → **exit 0** (42 passed, 3 ignored). See [TEST_EVIDENCE.md](TEST_EVIDENCE.md) T-01b. |
+| Mission action | MockDisk + safety tests landed; real-device zero-write still **NOT_PROVEN**. |
 
 ---
 
@@ -120,4 +120,4 @@ Finding IDs are **not** invented severity scores; they track the Gate 0 hard-sto
 
 Gate 0 on branch `remediation/gate0-safety-2026-10-31` (working tree, not merged to `main` at doc time) addresses fail-closed stubs, AccessMode, honest SectorOutcome/SMART Unknown, hosted I/O stubs, menu non-auto-select, USB script disable, rescue scaffold, EXPERIMENTAL boot note, and CI toolchain swap.
 
-**Does not clear PUBLIC_RELEASE_BLOCKED:** boot-media exclusion missing, durable mapfile absent, homemade UEFI writes still possible, no ISO, `cargo test` compile FAIL, no SpinRite head-to-head.
+**Does not clear PUBLIC_RELEASE_BLOCKED:** boot-media exclusion missing, durable mapfile absent, homemade UEFI writes still possible, no product ISO, no SpinRite head-to-head, no sacrificial hardware matrix. Library `cargo test` is green on tip `f5177a7` but is not a release proof.
