@@ -1,8 +1,6 @@
 // UEFI disk wrapper implementing Disk trait
 // Provides disk access via UEFI Block I/O protocol
 
-#![no_std]
-#![no_main]
 
 use uefi::prelude::*;
 use uefi::table::boot::BootServices;
@@ -163,4 +161,3 @@ mod tests {
         assert!(true);
     }
 }
-

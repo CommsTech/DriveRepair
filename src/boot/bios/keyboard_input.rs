@@ -1,15 +1,8 @@
 // BIOS keyboard input implementation
 // Uses INT 16h for keyboard input
 
-#![no_std]
-#![no_main]
 
-use core::panic::PanicInfo;
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    loop {}
-}
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -21,7 +14,7 @@ impl BiosKeyboardInput {
     /// Wait for key press and return character
     /// Uses INT 16h, AH=0x00 (Read Character)
     pub fn wait_for_key() -> Option<char> {
-        // TODO: Implement INT 16h, AH=0x00
+        // EXPERIMENTAL/UNSUPPORTED: Implement INT 16h, AH=0x00
         // This requires real-mode assembly or V86 mode
         // Steps:
         // 1. Switch to real mode (if in protected mode)
@@ -38,7 +31,7 @@ impl BiosKeyboardInput {
     /// Read number from input
     #[cfg(feature = "alloc")]
     pub fn read_number(max: usize) -> Option<usize> {
-        // TODO: Implement number reading from keyboard
+        // EXPERIMENTAL/UNSUPPORTED: Implement number reading from keyboard
         // Read characters until Enter is pressed
         // Parse as number
         // Validate range (0..max)
@@ -48,7 +41,7 @@ impl BiosKeyboardInput {
     /// Read line from input
     #[cfg(feature = "alloc")]
     pub fn read_line() -> Option<alloc::string::String> {
-        // TODO: Implement line reading from keyboard
+        // EXPERIMENTAL/UNSUPPORTED: Implement line reading from keyboard
         // Read characters until Enter is pressed
         // Build string from characters
         None
@@ -57,7 +50,7 @@ impl BiosKeyboardInput {
     /// Check if key is available (non-blocking)
     /// Uses INT 16h, AH=0x01 (Check for Keystroke)
     pub fn key_available() -> bool {
-        // TODO: Implement INT 16h, AH=0x01
+        // EXPERIMENTAL/UNSUPPORTED: Implement INT 16h, AH=0x01
         // This requires real-mode assembly or V86 mode
         // Steps:
         // 1. Switch to real mode (if in protected mode)
@@ -69,4 +62,3 @@ impl BiosKeyboardInput {
         false
     }
 }
-

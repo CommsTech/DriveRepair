@@ -2,14 +2,13 @@
 name = "drive-repair-bios"
 version = "0.1.0"
 edition = "2021"
-authors = ["DriveRepair Team"]
+authors = ["commstech"]
 
 [dependencies]
-drive-repair = { path = "../../..", features = ["alloc"] }
+drive-repair = { path = "../../..", features = ["alloc"], default-features = false }
 
 [[bin]]
 name = "drive-repair-bios"
 path = "main.rs"
 
 [workspace]
-

@@ -1,8 +1,6 @@
 // Integration of menu system with UEFI bootloader
 // Provides interactive disk selection and repair options
 
-#![no_std]
-#![no_main]
 
 use uefi::prelude::*;
 use uefi::table::boot::BootServices;
@@ -114,4 +112,3 @@ fn format_size(bytes: u64) -> String {
 
     format!("{:.2} {}", size, UNITS[unit_index])
 }
-

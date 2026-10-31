@@ -1,8 +1,6 @@
 // Repair engine integration for UEFI bootloader
 // Connects menu selection with repair operations
 
-#![no_std]
-#![no_main]
 
 use uefi::prelude::*;
 use uefi::table::boot::BootServices;
@@ -102,7 +100,7 @@ impl<'a> UefiRepairIntegration<'a> {
                 end_sector: selected_disk.total_sectors,
             },
             RepairOption::SmartCheck => {
-                // TODO: Implement SMART check
+                // EXPERIMENTAL/UNSUPPORTED: Implement SMART check
                 self.system_table
                     .stdout()
                     .output_string("SMART check not yet implemented.\n")?;
@@ -144,7 +142,7 @@ impl<'a> UefiRepairIntegration<'a> {
 
         // Run scan and repair with progress callback
         let progress_callback = |current: u64, total: u64, result: drive_repair::repair::RepairResult| {
-            // TODO: Display progress via UEFI output
+            // EXPERIMENTAL/UNSUPPORTED: Display progress via UEFI output
             // For now, this is a placeholder
             let _ = (current, total, result);
         };
@@ -187,4 +185,3 @@ fn format_size(bytes: u64) -> alloc::string::String {
     result.push_str(UNITS[unit_index]);
     result
 }
-

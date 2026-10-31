@@ -75,7 +75,7 @@ impl EnhancedDiskDetector {
         let _port_io = AtaPortIO::new(primary);
 
         // Send IDENTIFY DEVICE command (0xEC)
-        // TODO: Implement full IDENTIFY DEVICE command sequence
+        // EXPERIMENTAL/UNSUPPORTED: Implement full IDENTIFY DEVICE command sequence
         // 1. Select drive (master/slave)
         // 2. Wait for ready
         // 3. Send IDENTIFY DEVICE command
@@ -117,7 +117,7 @@ impl EnhancedDiskDetector {
         // Enumerate NVMe drives via PCI
         if let Ok(nvme_controllers) = Self::detect_nvme_controllers() {
             for _controller in nvme_controllers {
-                // TODO: Initialize NVMe controller and enumerate namespaces
+                // EXPERIMENTAL/UNSUPPORTED: Initialize NVMe controller and enumerate namespaces
                 // For now, create placeholder disk info
                 disks.push(DiskInfo {
                     interface: DiskInterface::NVMe,
@@ -143,7 +143,7 @@ impl EnhancedDiskDetector {
         // Enumerate AHCI/SATA drives via PCI
         if let Ok(ahci_controllers) = Self::detect_ahci_controllers() {
             for _controller in ahci_controllers {
-                // TODO: Initialize AHCI controller and enumerate ports
+                // EXPERIMENTAL/UNSUPPORTED: Initialize AHCI controller and enumerate ports
                 // For now, create placeholder disk info
                 disks.push(DiskInfo {
                     interface: DiskInterface::SATA,

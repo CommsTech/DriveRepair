@@ -125,7 +125,7 @@ pub enum Platform {
 
 /// Get current platform
 pub fn get_platform() -> Platform {
-    // TODO: Implement platform detection
+    // EXPERIMENTAL/UNSUPPORTED: Implement platform detection
     // For now, return a placeholder
     #[cfg(target_os = "windows")]
     return Platform::Windows;

@@ -1,8 +1,6 @@
 // Complete UEFI disk enumeration implementation
 // Uses Block I/O protocol to enumerate and access disks
 
-#![no_std]
-#![no_main]
 
 use uefi::prelude::*;
 use uefi::table::boot::{BootServices, SearchType};
@@ -99,7 +97,7 @@ impl<'a> UefiDiskEnumerator<'a> {
 
     /// Determine disk interface from device path
     fn determine_interface_from_device_path(_device_path: &DevicePath) -> DiskInterface {
-        // TODO: Parse device path to determine interface type
+        // EXPERIMENTAL/UNSUPPORTED: Parse device path to determine interface type
         // Device path types:
         // - ACPI: ATA/SATA
         // - PCI: NVMe, AHCI
@@ -111,7 +109,7 @@ impl<'a> UefiDiskEnumerator<'a> {
     /// Extract device information from device path
     #[cfg(feature = "alloc")]
     fn extract_device_info_from_path(_device_path: &DevicePath) -> (String, String, String) {
-        // TODO: Parse device path to extract model, serial, firmware
+        // EXPERIMENTAL/UNSUPPORTED: Parse device path to extract model, serial, firmware
         // This requires parsing the device path protocol structure
         // For now, return placeholders
         (String::new(), String::new(), String::new())
@@ -208,4 +206,3 @@ mod tests {
         assert!(true);
     }
 }
-

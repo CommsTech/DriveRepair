@@ -15,6 +15,7 @@ pub mod ata_port_io;
 pub mod detection;
 #[cfg(feature = "alloc")]
 pub mod enhanced_detection;
+pub mod graph_anchors;
 pub mod nvme;
 pub mod sata;
 pub mod usb;

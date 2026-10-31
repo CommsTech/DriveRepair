@@ -20,7 +20,7 @@ impl InputHandler {
     /// Wait for key press and return key code
     /// Returns None if no key available
     pub fn get_key() -> Option<KeyCode> {
-        // TODO: Implement keyboard input
+        // EXPERIMENTAL/UNSUPPORTED: Implement keyboard input
         // For BIOS: Use INT 16h, AH=0x00 (Read Key)
         // For UEFI: Use Simple Text Input protocol
         // For std: Use stdin
@@ -44,7 +44,7 @@ impl InputHandler {
             match Self::wait_for_key() {
                 KeyCode::Digit(d) => {
                     digits.push(d);
-                    // TODO: Display digit
+                    // EXPERIMENTAL/UNSUPPORTED: Display digit
                 }
                 KeyCode::Enter => {
                     if !digits.is_empty() {

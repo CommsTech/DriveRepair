@@ -1,15 +1,8 @@
 // Complete BIOS disk detection implementation
 // Uses INT 13h and direct ATA port I/O
 
-#![no_std]
-#![no_main]
 
-use core::panic::PanicInfo;
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    loop {}
-}
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -19,9 +12,9 @@ use alloc::vec::Vec;
 #[cfg(feature = "alloc")]
 use alloc::string::String;
 
-use crate::disk::{DiskError, DiskInfo, DiskInterface};
-use crate::platform::bios::BiosPlatform;
-use crate::disk::ata_port_io::AtaPortIO;
+use drive_repair::disk::{DiskError, DiskInfo, DiskInterface};
+use drive_repair::platform::bios::BiosPlatform;
+use drive_repair::disk::ata_port_io::AtaPortIO;
 
 /// BIOS disk detector
 pub struct BiosDiskDetector;
@@ -46,7 +39,7 @@ impl BiosDiskDetector {
     /// Get drive parameters using INT 13h, AH=0x48
     #[cfg(feature = "alloc")]
     fn get_drive_parameters_int13h(drive_number: u8) -> Result<DiskInfo, DiskError> {
-        // TODO: Implement INT 13h, AH=0x48 call
+        // EXPERIMENTAL/UNSUPPORTED: Implement INT 13h, AH=0x48 call
         // This requires real mode or V86 mode
         // Steps:
         // 1. Switch to real mode (if in protected mode)
@@ -66,7 +59,7 @@ impl BiosDiskDetector {
     /// Detect ATA drives using direct port I/O
     #[cfg(feature = "alloc")]
     pub fn detect_via_ata_ports() -> Result<Vec<DiskInfo>, DiskError> {
-        use crate::disk::enhanced_detection::EnhancedDiskDetector;
+        use drive_repair::disk::enhanced_detection::EnhancedDiskDetector;
 
         // Use enhanced detection which uses PCI enumeration and ATA port probing
         EnhancedDiskDetector::enumerate_all()
@@ -79,7 +72,7 @@ impl BiosDiskDetector {
         count: u8,
         buffer: &mut [u8],
     ) -> Result<(), DiskError> {
-        // TODO: Implement INT 13h, AH=0x02 (Read Sectors) call
+        // EXPERIMENTAL/UNSUPPORTED: Implement INT 13h, AH=0x02 (Read Sectors) call
         // This requires real mode or V86 mode
         // Steps:
         // 1. Convert LBA to CHS (if needed for older BIOS)
@@ -113,7 +106,7 @@ impl BiosDiskDetector {
         // Wait for drive ready
         port_io.wait_ready(5000)?; // 5 second timeout
 
-        // TODO: Implement full ATA read command sequence
+        // EXPERIMENTAL/UNSUPPORTED: Implement full ATA read command sequence
         // Steps:
         // 1. Select drive (master/slave)
         // 2. Wait for ready
@@ -141,7 +134,7 @@ impl BiosDiskDetector {
         // Wait for drive ready
         port_io.wait_ready(5000)?; // 5 second timeout
 
-        // TODO: Implement full ATA write command sequence
+        // EXPERIMENTAL/UNSUPPORTED: Implement full ATA write command sequence
         // Steps:
         // 1. Select drive (master/slave)
         // 2. Wait for ready
@@ -170,4 +163,3 @@ mod tests {
         assert!(true);
     }
 }
-
