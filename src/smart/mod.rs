@@ -130,10 +130,10 @@ impl SmartParser {
             match attr.id {
                 SMART_ATTR_REALLOCATED_SECTORS
                 | SMART_ATTR_CURRENT_PENDING_SECTORS
-                | SMART_ATTR_OFFLINE_UNCORRECTABLE => {
-                    if attr.raw_value > 0 {
-                        has_warnings = true;
-                    }
+                | SMART_ATTR_OFFLINE_UNCORRECTABLE
+                    if attr.raw_value > 0 =>
+                {
+                    has_warnings = true;
                 }
                 _ => {}
             }

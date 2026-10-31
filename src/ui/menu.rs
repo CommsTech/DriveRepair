@@ -88,10 +88,8 @@ impl Menu {
                     #[cfg(feature = "std")]
                     self.display();
                 }
-                KeyCode::Enter => {
-                    if !self.items.is_empty() {
-                        return Some(self.items[self.selected].id);
-                    }
+                KeyCode::Enter if !self.items.is_empty() => {
+                    return Some(self.items[self.selected].id);
                 }
                 KeyCode::Escape => {
                     return None;

@@ -127,7 +127,7 @@ pub struct DiskInfo {
 }
 
 /// Error types for disk operations
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DiskError {
     /// Sector read error
     ReadError,
@@ -150,17 +150,12 @@ pub enum DiskError {
     /// Timeout
     Timeout,
     /// Unsupported operation (unimplemented / experimental backend)
+    #[default]
     Unsupported,
     /// Hardware error
     HardwareError,
     /// Read-only media
     ReadOnly,
-}
-
-impl Default for DiskError {
-    fn default() -> Self {
-        DiskError::Unsupported
-    }
 }
 
 /// Unified disk trait for all interface types
@@ -190,11 +185,9 @@ pub trait Disk: Send + Sync {
     /// Get total number of sectors (64-bit)
     fn total_sectors(&self) -> u64;
 
-    /// Get disk size in bytes (64-bit) using checked multiplication
+    /// Get disk size in bytes (64-bit) using saturating multiplication
     fn size_bytes(&self) -> u64 {
-        self.total_sectors()
-            .checked_mul(self.sector_size())
-            .unwrap_or(u64::MAX)
+        self.total_sectors().saturating_mul(self.sector_size())
     }
 
     /// Check if disk is ready

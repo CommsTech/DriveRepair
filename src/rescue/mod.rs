@@ -59,14 +59,14 @@ impl RescuePlan {
         }
         validate_source_destination(&self.source, &self.destination)?;
 
-        let mut argv = Vec::new();
-        argv.push(String::from("ddrescue"));
-        argv.push(String::from("-f"));
-        argv.push(String::from("-n"));
-        argv.push(self.source.path.clone());
-        argv.push(self.destination.path.clone());
-        argv.push(self.mapfile_path.clone());
-        Ok(argv)
+        Ok(vec![
+            String::from("ddrescue"),
+            String::from("-f"),
+            String::from("-n"),
+            self.source.path.clone(),
+            self.destination.path.clone(),
+            self.mapfile_path.clone(),
+        ])
     }
 }
 

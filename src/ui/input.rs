@@ -61,11 +61,9 @@ impl InputHandler {
                 KeyCode::Escape => {
                     return None;
                 }
-                KeyCode::Backspace => {
-                    if !digits.is_empty() {
-                        digits.pop();
-                        // TODO: Erase last digit from display
-                    }
+                KeyCode::Backspace if !digits.is_empty() => {
+                    digits.pop();
+                    // EXPERIMENTAL: host display backspace not wired in no_std UI
                 }
                 _ => {}
             }

@@ -44,7 +44,7 @@ impl AtaPortIO {
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         {
             let _ = (_timeout_ms, self);
-            return Err(DiskError::Unsupported);
+            Err(DiskError::Unsupported)
         }
 
         #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
