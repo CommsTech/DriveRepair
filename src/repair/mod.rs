@@ -178,12 +178,9 @@ impl<D: Disk> RepairEngine<D> {
                 let limit = sectors_to_scan.min(BOUNDED_SCAN_CAP);
                 let mut seed = start ^ end ^ 0x9E37_79B9;
                 for i in 0..limit {
-                    seed = seed
-                        .wrapping_mul(1_103_515_245)
-                        .wrapping_add(12_345);
+                    seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
                     let offset = seed % sectors_to_scan;
-                    let sector =
-                        start.saturating_add(offset.wrapping_add(i) % sectors_to_scan);
+                    let sector = start.saturating_add(offset.wrapping_add(i) % sectors_to_scan);
                     self.process_sector(
                         sector,
                         sectors_to_scan,

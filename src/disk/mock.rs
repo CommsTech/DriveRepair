@@ -199,10 +199,7 @@ mod safety_tests {
             disk.read_sectors(0, 1, &mut buf),
             Err(DiskError::Unsupported)
         );
-        assert_eq!(
-            disk.write_sectors(0, 1, &buf),
-            Err(DiskError::Unsupported)
-        );
+        assert_eq!(disk.write_sectors(0, 1, &buf), Err(DiskError::Unsupported));
         assert_eq!(disk.flush(), Err(DiskError::Unsupported));
     }
 
@@ -227,10 +224,7 @@ mod safety_tests {
             disk.read_sectors(0, 1, &mut buf),
             Err(DiskError::Unsupported)
         );
-        assert_eq!(
-            disk.write_sectors(0, 1, &buf),
-            Err(DiskError::Unsupported)
-        );
+        assert_eq!(disk.write_sectors(0, 1, &buf), Err(DiskError::Unsupported));
     }
 
     #[test]
@@ -296,10 +290,7 @@ mod safety_tests {
             .expect("large sequential scan");
         assert_eq!(seen, 1_000_000);
         assert_eq!(stats.repaired, 0);
-        assert_eq!(
-            engine.into_disk().write_count.load(Ordering::Relaxed),
-            0
-        );
+        assert_eq!(engine.into_disk().write_count.load(Ordering::Relaxed), 0);
     }
 
     #[test]

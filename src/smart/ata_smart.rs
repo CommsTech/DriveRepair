@@ -104,7 +104,10 @@ mod tests {
         assert_eq!(executor.is_enabled(), Err(DiskError::Unavailable));
         #[cfg(feature = "alloc")]
         {
-            assert_eq!(executor.read_attributes().unwrap_err(), DiskError::Unsupported);
+            assert_eq!(
+                executor.read_attributes().unwrap_err(),
+                DiskError::Unsupported
+            );
             assert_eq!(
                 executor.health_status().unwrap(),
                 SmartHealthStatus::Unknown

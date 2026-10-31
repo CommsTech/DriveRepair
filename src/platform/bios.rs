@@ -15,7 +15,11 @@ use alloc::vec::Vec;
 
 /// True when running on a hosted OS where privileged port I/O is illegal
 const fn is_hosted_os() -> bool {
-    cfg!(any(target_os = "windows", target_os = "linux", target_os = "macos"))
+    cfg!(any(
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "macos"
+    ))
 }
 
 /// BIOS platform implementation
