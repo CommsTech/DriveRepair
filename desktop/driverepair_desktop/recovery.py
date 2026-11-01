@@ -67,6 +67,34 @@ def _write_all(fd: int, data: bytes, offset: int | None = None) -> None:
         pos += n
 
 
+def _mark_output_sparse(fd: int) -> None:
+    """Mark a new rescue image sparse before sizing it.
+
+    Linux sparse files leave holes cheaply. On Windows, SetEndOfFile without
+    FSCTL_SET_SPARSE can allocate (or slowly extend) the full logical size,
+    which blocks --max-chunks lab bounds and can fill the destination volume
+    before any patient bytes are copied.
+    """
+    if os.name != 'nt':
+        return
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    FSCTL_SET_SPARSE = 0x000900C4
+    handle = msvcrt.get_osfhandle(fd)
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.DeviceIoControl.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+        ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p,
+    ]
+    kernel.DeviceIoControl.restype = wintypes.BOOL
+    returned = wintypes.DWORD(0)
+    if not kernel.DeviceIoControl(handle, FSCTL_SET_SPARSE, None, 0, None, 0,
+                                  ctypes.byref(returned), None):
+        raise OSError(ctypes.get_last_error(), 'FSCTL_SET_SPARSE failed for rescue image')
+
+
 def _open_output(path: str, size: int, resume: bool) -> int:
     nofollow = getattr(os, 'O_NOFOLLOW', 0)
     if resume:
@@ -80,6 +108,7 @@ def _open_output(path: str, size: int, resume: bool) -> int:
         if resume and st.st_size != size:
             raise RuntimeError('Destination image size changed; refusing resume')
         if not resume:
+            _mark_output_sparse(fd)
             os.ftruncate(fd, size)
             os.fsync(fd)
         return fd
