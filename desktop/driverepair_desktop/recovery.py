@@ -7,6 +7,7 @@ No host raw-device writes are performed by this module.
 from __future__ import annotations
 
 import errno
+from contextlib import contextmanager
 import json
 import os
 import stat
@@ -130,6 +131,51 @@ def _open_output(path: str, size: int, resume: bool) -> int:
         raise
 
 
+@contextmanager
+def _rescue_writer_lock(output: str):
+    """One recovery writer per image/map, released even after process death.
+
+    Lock the stable sidecar file rather than a renamed journal. Its presence is
+    not a stale-lock signal; only the *OS lock* determines ownership. Leave the
+    tiny sidecar in place to avoid unlink/recreate inode races.
+    """
+    path = _safe_path(output) + '.rescue.lock'
+    if os.path.lexists(path) and not stat.S_ISREG(os.lstat(path).st_mode):
+        raise ValueError('Unexpected non-regular rescue lock file')
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0)
+    fd = os.open(path, binary_open_flags(flags), 0o600)
+    acquired = False
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError('Rescue lock target must be a regular file')
+        if os.name == 'nt':
+            import msvcrt
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b'\0')
+                os.fsync(fd)
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise RuntimeError('Recovery already running for this image/map') from exc
+        else:
+            import fcntl
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (OSError, BlockingIOError) as exc:
+                raise RuntimeError('Recovery already running for this image/map') from exc
+        acquired = True
+        yield
+    finally:
+        if acquired:
+            if os.name == 'nt':
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def _merge_ranges(ranges: list[list[int]]) -> list[list[int]]:
     result: list[list[int]] = []
     for start, length in sorted(ranges):
@@ -172,7 +218,53 @@ def _validate_state(state: dict) -> None:
     except (KeyError, TypeError, OverflowError) as exc:
         raise ValueError('Malformed recovery map') from exc
 
-def rescue_reader(reader: Reader, *, size: int, sector: int, output: str,
+def inspect_rescue_status(output: str) -> dict:
+    """Read authoritative journal progress; image *length* is not progress.
+
+    A sparse/preallocated image can report its final size before a single byte
+    is rescued. This method is read-only and makes no integrity-certification
+    claim about the bytes read from the patient disk.
+    """
+    output = _safe_path(output)
+    journal = output + '.rescue.json'
+    journal_stat = os.lstat(journal)
+    if not stat.S_ISREG(journal_stat.st_mode):
+        raise ValueError('Recovery map must be a regular file, not a link/device')
+    with open(journal, encoding='utf-8') as handle:
+        state = json.load(handle)
+    _validate_state(state)
+    if state.get('output') != output or state.get('schema') != 1:
+        raise RuntimeError('Recovery map references a different image or unsupported schema')
+    image_stat = os.stat(output, follow_symlinks=False)
+    if not stat.S_ISREG(image_stat.st_mode) or image_stat.st_size != state['size']:
+        raise RuntimeError('Image is missing, not a regular file, or has changed size')
+    missing = sum(length for _, length in state['missing_ranges'])
+    pending = sum(length for _, length in state.get('retry_pending_ranges', []))
+    unprocessed = state['size'] - state['cursor']
+    clean = (state['status'] == 'completed' and not missing and not pending
+             and not unprocessed and state['recovered_bytes'] == state['size'])
+    return {
+        'schema': 1,
+        'operation': 'rescue_status',
+        'status': state.get('status', 'unknown'),
+        'output': output,
+        'logical_image_size_bytes': image_stat.st_size,
+        'source_size_bytes': state['size'],
+        'cursor_bytes': state['cursor'],
+        'recovered_bytes': state['recovered_bytes'],
+        'unprocessed_bytes': unprocessed,
+        'unreadable_bytes': missing + pending,
+        'missing_regions': len(state['missing_ranges']) + len(state.get('retry_pending_ranges', [])),
+        'failed_read_attempts': state.get('failed_read_attempts', 0),
+        'first_pass_complete': unprocessed == 0,
+        'clean_rescue_complete': clean,
+        'percent_processed': round(100 * state['cursor'] / state['size'], 3),
+        'notes': ('Journal-backed progress, not image-file length. '
+                  'Recovered bytes are OS-read bytes, not independently checksum-verified file contents.'),
+    }
+
+
+def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str,
                   source_token: str, chunk: int = 1024 * 1024,
                   max_failed_reads: int = 4096,
                   resume: bool = False, retry_missing: bool = False,
@@ -297,3 +389,20 @@ def rescue_reader(reader: Reader, *, size: int, sector: int, output: str,
         return dict(state)
     finally:
         os.close(fd)
+
+
+def rescue_reader(reader: Reader, *, size: int, sector: int, output: str,
+                  source_token: str, chunk: int = 1024 * 1024,
+                  max_failed_reads: int = 4096,
+                  resume: bool = False, retry_missing: bool = False,
+                  progress: Callable[[dict], None] | None = None,
+                  max_chunks: int | None = None) -> dict:
+    """Rescue with exclusive OS lock to prevent concurrent output/map writers."""
+    with _rescue_writer_lock(output):
+        return _rescue_reader_locked(
+            reader, size=size, sector=sector, output=output,
+            source_token=source_token, chunk=chunk,
+            max_failed_reads=max_failed_reads, resume=resume,
+            retry_missing=retry_missing, progress=progress,
+            max_chunks=max_chunks,
+        )
