@@ -238,9 +238,9 @@ def launch() -> None:
             dest_dir.set(os.path.join(chosen, "recovered_files"))
 
     def pick_journal():
-        chosen = filedialog.askdirectory(title="Journal directory (healthy storage, not the patient)")
+        chosen = filedialog.askdirectory(title="Choose a healthy, separate parent disk for journal")
         if chosen:
-            journal_dir.set(chosen)
+            journal_dir.set(os.path.join(chosen, "driverepair-journal-new"))
 
     def apply_progress(event: dict) -> None:
         nonlocal map_dirty
@@ -307,12 +307,22 @@ def launch() -> None:
             "This reads a physical drive. Unstable hardware can worsen or disconnect. Continue?",
         ):
             return
-        if destructive and not messagebox.askyesno(
-            "Destructive acknowledgement",
-            "In-place refresh WRITES the patient disk for consistently readable regions only.\n"
-            "Unreadable sectors are skipped. This is not a backup. Continue?",
-        ):
-            return
+        if destructive:
+            if not messagebox.askyesno(
+                "Destructive acknowledgement",
+                "In-place refresh WRITES the patient disk. A crash or USB failure may permanently "
+                "destroy recoverable data. A rolling journal is NOT a backup. Continue?",
+            ):
+                return
+            selected_id = chosen_device()
+            typed = simpledialog.askstring(
+                "Confirm destructive target",
+                f"Type the exact selected device ID to authorize writes:\n{selected_id}",
+                parent=root,
+            )
+            if typed != selected_id:
+                messagebox.showerror("Not authorized", "Device ID confirmation did not match; no write started.")
+                return
         command = [sys.executable, "-m", "driverepair_desktop", *args]
         write(f"\n=== {title} ===\n")
         status.set(f"Running: {title}")
@@ -457,12 +467,12 @@ def launch() -> None:
     ttk.Label(
         tab_refresh,
         text="Dedicated In-Place Media Refresh. Rolling journal on healthy storage. "
-             "Not a SpinRite clone — Adaptive rewrite of consistently readable regions only.",
+             "Adaptive rewrite of consistently readable regions only; never a substitute for backup.",
         style="Muted.TLabel", wraplength=920,
     ).pack(anchor="w")
     row(tab_refresh, "Journal directory", journal_dir, pick_journal)
     mode_var = tk.StringVar(value="adaptive")
-    backend_var = tk.StringVar(value="hybrid")
+    backend_var = tk.StringVar(value="disk")
     after_var = tk.StringVar(value="ask")
     samples_var = tk.StringVar(value="128")
     opts = ttk.Frame(tab_refresh)
@@ -471,7 +481,7 @@ def launch() -> None:
     ttk.Combobox(opts, textvariable=mode_var, values=["adaptive", "full"], width=10,
                  state="readonly").pack(side="left", padx=6)
     ttk.Label(opts, text="Journal").pack(side="left", padx=(12, 0))
-    ttk.Combobox(opts, textvariable=backend_var, values=["hybrid", "disk", "memory"], width=10,
+    ttk.Combobox(opts, textvariable=backend_var, values=["disk"], width=10,
                  state="readonly").pack(side="left", padx=6)
     ttk.Label(opts, text="After").pack(side="left", padx=(12, 0))
     ttk.Combobox(opts, textvariable=after_var, values=["ask", "keep", "delete"], width=8,

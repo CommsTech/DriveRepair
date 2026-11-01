@@ -1,4 +1,4 @@
-﻿# Elevated Adaptive Refresh with a REAL console CLI dashboard.
+# Elevated Adaptive Refresh with a REAL console CLI dashboard.
 #
 # Why prior launches looked "stuck" after "Launching...":
 # 1) Piping Python with `2>&1` under `$ErrorActionPreference = Stop` turns
@@ -8,20 +8,20 @@
 #
 # This script must be started elevated. It keeps Python on the console (no pipe).
 param(
-    [string]$Device = "windows:PhysicalDrive2",
+    [Parameter(Mandatory=$true)][string]$Device,
     [int]$Samples = 96,
     [string]$Mode = "adaptive",
-    [string]$JournalBackend = "hybrid",
-    [string]$AfterRun = "delete"
+    [string]$JournalBackend = "disk",
+    [string]$AfterRun = "keep"
 )
 
 $ErrorActionPreference = "Continue"
-$Root = "C:\Users\commstech\Github\DriveRepair"
+$Root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $Desktop = Join-Path $Root "desktop"
 $Temp = Join-Path $Root ".agent-temp"
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $Log = Join-Path $Temp "live_adaptive_cliui_$Stamp.log"
-$Journal = Join-Path $Temp "refresh_PhysicalDrive2_adaptive_cliui_$Stamp"
+$Journal = Join-Path $Temp "refresh_secure_adaptive_$Stamp"
 
 New-Item -ItemType Directory -Path $Temp -Force | Out-Null
 function Log([string]$Message) {
@@ -38,6 +38,16 @@ if (-not $isAdmin) {
     exit 2
 }
 
+if ($JournalBackend -ne "disk") {
+    throw "Physical media refresh requires a durable disk journal."
+}
+if ($Device -notmatch '^windows:PhysicalDrive[0-9]+$') {
+    throw "Select an explicit windows:PhysicalDriveN from 'driverepair list'."
+}
+$Confirm = Read-Host "DANGEROUS: Type the full device ID '$Device' to confirm physical writes"
+if ($Confirm -cne $Device) {
+    throw "Device ID did not match; no writes initiated."
+}
 Set-Location $Desktop
 $env:PYTHONPATH = $Desktop
 $env:PYTHONUNBUFFERED = "1"

@@ -38,9 +38,9 @@ def _fmt_secs(seconds: float | None) -> str:
 
 @dataclass
 class HealthIndicators:
-    media: str = "OK"          # OK | WARN | FAIL
-    transport: str = "OK"      # OK | WARN | FAIL
-    mechanical: str = "OK"     # OK | WATCH | FAIL  (latency/variance proxy; not a microphone)
+    media: str = "UNKNOWN"          # OK | WARN | FAIL
+    transport: str = "UNKNOWN"      # OK | WARN | FAIL
+    mechanical: str = "UNKNOWN"     # OK | WATCH | FAIL  (latency/variance proxy; not a microphone)
 
 
 @dataclass

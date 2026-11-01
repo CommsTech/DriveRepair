@@ -62,7 +62,7 @@ See [desktop guide](desktop/README.md), [project status](docs/PROJECT_STATUS.md)
 
 - Diagnostics and rescue use read-only source handles. All writes go to **new output files**.
 - Default recovery commands do not rewrite physical sectors. `repair-ext-image` repairs a **new output copy** using optional `e2fsck`.
-- `refresh-external` / `refresh-image` are a dedicated In-Place Media Refresh mode alongside image recovery—not a replacement for it. They use a rolling journal on healthy storage, require multi-flag acknowledgement (plus `--ack-unvalidated-hardware` for live disks), rewrite only consistently readable regions, and never invent data for unread sectors. A rolling journal is **not** a full backup.
+- `refresh-external` / `refresh-image` are a dedicated In-Place Media Refresh mode alongside image recovery—not a replacement for it. `refresh-external` requires a **disk-backed, separate-storage journal** and explicit acknowledgements (including `--ack-unvalidated-hardware`). It aborts on write/read-back failure without discarding the original bytes, and refuses to rewrite unreadable/inconsistent regions. This is a **private experimental hardware feature**, not a full backup or public-release-certified remediation tool.
 - Read errors can be recoverable later; continued reads and SMART queries can stress or wake a mechanically failing drive. For valuable failing media, professional recovery or a proven imaging tool may be preferable.
 - Image-first recovery does not magically reconstruct lost data or reverse wear. The user must verify backups and destination identity.
 - **This code has not undergone physical-hardware validation or security review sufficient for public release.**

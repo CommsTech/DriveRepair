@@ -149,8 +149,8 @@ def parser() -> argparse.ArgumentParser:
                          help='Directory for the rolling journal; keep OFF the patient')
         cmd.add_argument('--mode', choices=['adaptive', 'full'], default='adaptive',
                          help='adaptive=refresh slow readable regions; full=whole surface (high risk)')
-        cmd.add_argument('--journal-backend', choices=['hybrid', 'disk', 'memory'], default='hybrid',
-                         help='hybrid=region in RAM + meta on disk (fast); disk=fully durable; '
+        cmd.add_argument('--journal-backend', choices=['hybrid', 'disk', 'memory'], default='disk',
+                         help='disk=crash-resumable, required for live media; hybrid=RAM region (image tests only); '
                               'memory=RAM region with tiny meta checkpoint (fastest, weakest resume)')
         cmd.add_argument('--resume', action='store_true')
         cmd.add_argument('--chunk-mib', type=int, choices=[1, 2, 4, 8], default=1)
@@ -194,6 +194,53 @@ def _source_image_token(path: str) -> tuple[str, int]:
         raise ValueError("Rescue source must be a regular file")
     fields = (real, st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
     return hashlib.sha256(repr(fields).encode()).hexdigest(), st.st_size
+
+
+def _refresh_image_token(path: str) -> tuple[str, int]:
+    """Immutable filesystem identity, intentionally excluding mutable mtime."""
+    import hashlib
+    import stat
+    st = os.stat(path, follow_symlinks=False)
+    if not stat.S_ISREG(st.st_mode):
+        raise ValueError("Refresh patient must be a regular file")
+    fields = (os.path.realpath(path), st.st_dev, st.st_ino, st.st_size)
+    return hashlib.sha256(repr(fields).encode()).hexdigest(), st.st_size
+
+
+def _validate_live_refresh_preflight(device, journal: str) -> None:
+    """Fail closed unless journal is on demonstrably separate storage."""
+    if not device.serial:
+        raise RuntimeError("Destructive refresh requires a stable hardware serial")
+    if sys.platform.startswith("linux"):
+        _verify_linux_patient_not_in_use(device)
+        # The journal has not been created yet; inspect its nearest parent mount.
+        check_path = os.path.join(os.path.dirname(os.path.abspath(journal)),
+                                  "__driverepair_storage_check__")
+        _separate_linux_destination(device, check_path)
+    elif sys.platform == "win32":
+        # Drive-letter destinations can be mapped to a disk number. Reject other
+        # paths instead of guessing whether the journal shares the patient medium.
+        import re
+        import subprocess
+        absolute = os.path.abspath(journal)
+        drive, _ = os.path.splitdrive(absolute)
+        if not re.fullmatch(r"[A-Za-z]:", drive):
+            raise RuntimeError("Windows refresh journal must be on a separate local drive letter")
+        number = int(device.path.rsplit("PhysicalDrive", 1)[-1])
+        command = (
+            f"(Get-Partition -DriveLetter '{drive[0]}' -ErrorAction Stop | "
+            "Select-Object -ExpandProperty DiskNumber) | ConvertTo-Json -Compress"
+        )
+        completed = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive",
+                                    "-Command", command], capture_output=True,
+                                   check=True, timeout=25)
+        target = json.loads(completed.stdout.decode("utf-8-sig"))
+        if not isinstance(target, int):
+            raise RuntimeError("Could not identify the journal's physical disk")
+        if target == number:
+            raise RuntimeError("Journal is stored on patient disk; refusing destructive refresh")
+    else:
+        raise RuntimeError("Raw refresh on this operating system is not validated")
 
 
 def _separate_linux_destination(device, output: str) -> None:
@@ -322,6 +369,10 @@ def _run_extras(args) -> int:
         is_device = args.command == 'refresh-external'
         if args.consistency_reads < 2:
             raise ValueError('--consistency-reads must be >= 2')
+        if is_device and args.journal_backend != 'disk':
+            raise ValueError('Physical-device refresh requires --journal-backend disk; RAM journals lose in-flight bytes after a crash')
+        if is_device and args.no_verify:
+            raise ValueError('Physical-device refresh cannot disable read-back verification')
         # Paint something immediately — device open / identity checks can take seconds.
         if args.live_dashboard:
             print(
@@ -342,6 +393,7 @@ def _run_extras(args) -> int:
                 require_unvalidated=True,
             )
             assert_patient_idle_windows(selected)
+            _validate_live_refresh_preflight(selected, args.journal)
             reread = select_external_device(args.device)
             assert_stable_identity(selected, reread)
             if args.live_dashboard:
@@ -362,7 +414,7 @@ def _run_extras(args) -> int:
                 bus='file',
                 require_unvalidated=False,
             )
-            source_token, size = _source_image_token(args.image)
+            source_token, size = _refresh_image_token(args.image)
             media = ImageReadWriter(args.image)
             sector = 512 if size % 512 == 0 else 1
         # BitLocker/LUKS: byte-identical refresh is OK; warn so operators do not
@@ -435,13 +487,20 @@ def _run_extras(args) -> int:
         elif keep == 'ask':
             keep = 'keep'
         result['journal_retained'] = keep == 'keep'
-        if keep == 'delete' and result.get('status') not in {'interrupted', 'aborted_device_or_access_error'}:
+        # Only auto-delete after an exact clean completed run. Any abort/skip/interrupt
+        # must keep region.bin/meta.json for resume and forensic inspection.
+        if keep == 'delete' and result.get('status') == 'completed' and not result.get('transaction'):
             try:
                 JournalStore(args.journal, args.journal_backend).cleanup()
                 result['journal_deleted'] = True
             except OSError as exc:
                 result['journal_deleted'] = False
                 result['journal_delete_error'] = str(exc)
+        elif keep == 'delete':
+            result['journal_deleted'] = False
+            result['journal_delete_skipped'] = (
+                f"refused to delete journal while status={result.get('status')!r}"
+            )
     else:
         is_device = args.command.endswith('-external')
         if is_device:
@@ -494,6 +553,8 @@ def _run_extras(args) -> int:
         print(json.dumps(result, indent=2))
     else:
         print(json.dumps(result, indent=2))
+    if args.command in {'refresh-image', 'refresh-external'}:
+        return 0 if result.get('status') == 'completed' else 2
     return 0 if result.get('status') in {'completed', 'comparison_only', 'smart_passed_limited',
                                          'clean', 'corrected', 'corrected_reboot_flag', 'verified_byte_exact',
                                          'completed_with_skips_or_verify_failures'} else 2
@@ -583,7 +644,8 @@ def run(argv: list[str] | None = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        print("Scan cancelled; no changes were made to the selected disk.", file=sys.stderr)
+        print("Operation interrupted. If this was media refresh, KEEP the recovery journal "
+              "and inspect the transaction before resuming; the patient may have been written.", file=sys.stderr)
         return 130
 
 
