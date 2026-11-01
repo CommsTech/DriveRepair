@@ -2,6 +2,13 @@
 
 **PRIVATE TEST ONLY. PUBLIC RELEASE NOT APPROVED.**
 
+## Desktop safety update — 0.2.7
+
+- Transaction journal hardening with fsynced original bytes, interrupted-write restore/verify and exactly-once commit.
+- Physical refresh now requires disk journaling on separately verified storage; adaptive probe I/O failures block any write.
+- 98 Python unit tests run: 97 passed, 1 Windows-only test skipped under Linux. No actual real-disk write was performed during validation.
+- Physical-drive refresh (especially 12 TB USB dock/hotplug) is still unvalidated after an unexpected USB disconnect/power failure and MUST remain private testing.
+
 ## Desktop development update — 0.2.5
 
 - GUI: industrial dark Recovery Workstation (sector map, health strip, metrics); CLI subprocess workers; `--progress-jsonl` at ~10 Hz. Not yet smoke-tested across all desktop OSes.
@@ -27,12 +34,12 @@
 - User data recovery effectiveness on damaged real media; stress/retry budgets may need optimization.
 - Linux destination-isolation logic in complex storage setups, including nested device mapper / encryption / multipath.
 - Proprietary recovery algorithm parity, competitive benchmark outcomes, deep filesystem repair, data-carving completeness.
-- Raw-drive write support, in-place repair, media refresh, actual flash/endurance rejuvenation.
+- Production-certified raw-drive write support, live interruption recovery, hardware-backed media-refresh outcomes, physical-wear reversal. Experimental refresh source exists; see IN_PLACE_MEDIA_REFRESH.md.
 - Bootable disk image integrity and Rust bootloader integration.
 
 ## Safety boundary
 
-Desktop never requests a write handle on a source drive. Media remapping/refresh operations **remain disabled** pending separate design review, independently verified backups, and real-drive testing. Bootable Rust experiments are not production-ready.
+Ordinary diagnostics and rescue keep physical sources read-only. Separately authorized `refresh-external` **does open the original drive for writing**; experimental hardware refresh is gated, journaled, and has no independent physical USB disconnect/power-loss certification. Not for valuable data. Bootable Rust experiments are not production-ready.
 
 ## Next engineering milestones
 

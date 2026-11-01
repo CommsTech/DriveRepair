@@ -134,14 +134,17 @@ class WindowsReadWriter:
         self._volume_handles: list[int] = []
 
     def lock_volumes(self, disk_number: int) -> None:
-        """FSCTL_LOCK_VOLUME + FSCTL_DISMOUNT_VOLUME for volumes on this disk."""
+        """Lock every discoverable filesystem volume, including no-letter volumes.
+
+        A mounted directory junction or other unhandled access path is a hard
+        stop. Merely checking drive letters does not prove a disk is idle.
+        """
         from ctypes import wintypes
         import subprocess
 
         script = (
-            f"Get-Partition -DiskNumber {int(disk_number)} | "
-            "Where-Object { $_.DriveLetter } | "
-            "ForEach-Object { $_.DriveLetter } | ConvertTo-Json -Compress"
+            f"Get-Partition -DiskNumber {int(disk_number)} -ErrorAction Stop | "
+            "ForEach-Object { $_.AccessPaths } | ConvertTo-Json -Compress"
         )
         try:
             raw = subprocess.run(
@@ -149,14 +152,20 @@ class WindowsReadWriter:
                 capture_output=True, check=True, timeout=25,
             ).stdout.decode("utf-8-sig").strip()
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
-            raise RuntimeError(f"Unable to enumerate volumes for exclusive lock: {exc}") from exc
-        letters: list[str] = []
-        if raw:
-            parsed = json.loads(raw)
-            if isinstance(parsed, str):
-                letters = [parsed]
-            elif isinstance(parsed, list):
-                letters = [str(x) for x in parsed]
+            raise RuntimeError(f"Cannot enumerate all patient volume access paths: {exc}") from exc
+        parsed = json.loads(raw) if raw and raw != "null" else []
+        paths = [parsed] if isinstance(parsed, str) else list(parsed or [])
+        volume_paths = []
+        for path in paths:
+            if not isinstance(path, str):
+                raise RuntimeError("Unrecognized volume path in patient partition inventory")
+            if path.startswith("\\\\?\\Volume{") and path.endswith("}\\"):
+                volume_paths.append(path[:-1])  # Open volume GUID without trailing slash.
+            elif path:
+                raise RuntimeError(
+                    "Patient has a filesystem mount path; unmount all volume access paths before refresh: "
+                    + path
+                )
         FSCTL_LOCK_VOLUME = 0x00090018
         FSCTL_DISMOUNT_VOLUME = 0x00090020
         self.kernel.DeviceIoControl.argtypes = [
@@ -164,24 +173,19 @@ class WindowsReadWriter:
             ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p,
         ]
         self.kernel.DeviceIoControl.restype = wintypes.BOOL
-        for letter in letters:
-            path = rf"\\.\{letter}:"
+        for path in sorted(set(volume_paths)):
             handle = self.kernel.CreateFileW(path, 0x80000000 | 0x40000000, 0x3, None, 3, 0, None)
             if handle == ctypes.c_void_p(-1).value or handle is None:
-                raise RuntimeError(
-                    f"Volume {letter}: is present on the patient but could not be opened exclusively. "
-                    "Unmount/stop using the filesystem before in-place refresh."
-                )
+                raise RuntimeError(f"Cannot open patient volume exclusively: {path}")
             returned = wintypes.DWORD(0)
             if not self.kernel.DeviceIoControl(handle, FSCTL_LOCK_VOLUME, None, 0, None, 0,
                                                ctypes.byref(returned), None):
                 self.kernel.CloseHandle(handle)
-                raise RuntimeError(
-                    f"FSCTL_LOCK_VOLUME failed for {letter}: — filesystem appears in use"
-                )
-            self.kernel.DeviceIoControl(handle, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0,
-                                        ctypes.byref(returned), None)
+                raise RuntimeError(f"FSCTL_LOCK_VOLUME failed for {path}: volume is in use")
             self._volume_handles.append(handle)
+            if not self.kernel.DeviceIoControl(handle, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0,
+                                               ctypes.byref(returned), None):
+                raise RuntimeError(f"FSCTL_DISMOUNT_VOLUME failed for {path}")
 
     def read_at(self, offset: int, count: int) -> bytes:
         from ctypes import wintypes
@@ -252,8 +256,14 @@ def open_device_readwrite(device: Device) -> ReadWriter:
     if sys.platform == "win32":
         media = WindowsReadWriter(device)
         number = int(device.path.rsplit("PhysicalDrive", 1)[-1])
-        media.lock_volumes(number)
-        return media
+        try:
+            media.lock_volumes(number)
+            return media
+        except BaseException:
+            media.close()
+            raise
+    if sys.platform == "darwin":
+        raise RuntimeError("Raw media refresh is disabled on macOS until exclusive locking is implemented and validated")
     return UnixReadWriter(device)
 
 
@@ -348,6 +358,13 @@ def _atomic_write_bytes(path: str, data: bytes) -> None:
     finally:
         os.close(fd)
     os.replace(temp, path)
+    # Persist the directory entry before recording SAVED/WRITING in meta.json.
+    if os.name == "posix":
+        dirfd = os.open(os.path.dirname(path), os.O_RDONLY)
+        try:
+            os.fsync(dirfd)
+        finally:
+            os.close(dirfd)
 
 
 def _sha256(data: bytes) -> str:
@@ -672,28 +689,74 @@ def _default_meta(
     }
 
 
-def _recover_interrupted_transaction(media: ReadWriter, store: JournalStore, meta: dict) -> dict:
-    """Resume policy for a partial transaction; never invents bytes."""
+def _commit_transaction(store: JournalStore, meta: dict, *, verified: bool) -> None:
+    """Commit exactly once, with progress durable before deleting the saved bytes."""
+    tx = meta["transaction"]
+    if not tx or tx["state"] != STATE_VERIFIED:
+        raise RuntimeError("Cannot commit a transaction that is not verified")
+    offset, length = int(tx["offset"]), int(tx["length"])
+    if meta["mode"] == "full":
+        if int(meta["cursor"]) != offset:
+            raise RuntimeError("Full-surface journal cursor no longer matches transaction")
+        meta["cursor"] = offset + length
+    else:
+        queue = meta.get("queue") or []
+        if not queue or list(map(int, queue[0])) != [offset, length]:
+            raise RuntimeError("Adaptive journal queue no longer matches transaction")
+        meta["queue"] = queue[1:]
+    meta["rewritten_bytes"] = int(meta["rewritten_bytes"]) + length
+    if verified:
+        meta["verified_bytes"] = int(meta["verified_bytes"]) + length
+    tx["state"] = STATE_COMMITTED
+    store.save_meta(meta)  # COMMITTED persists progress before deletion.
+    store.clear_region()
+    meta["transaction"] = None
+    store.save_meta(meta)
+
+
+def _recover_interrupted_transaction(media: ReadWriter, store: JournalStore, meta: dict,
+                                     identity_check: Callable[[], None] | None = None) -> dict:
+    """Fail closed if a transaction cannot be restored; never lose its journal."""
     tx = meta.get("transaction")
     if not tx:
         return meta
     state = tx.get("state")
-    offset = int(tx["offset"])
-    length = int(tx["length"])
-    digest = tx.get("sha256")
-    if state in {STATE_COMMITTED, STATE_VERIFIED}:
-        meta["transaction"] = None
+    if state == STATE_COMMITTED:
+        # Accounting already persisted with COMMITTED. Blob is no longer needed.
         store.clear_region()
-        return meta
-    if state in {STATE_SAVED, STATE_WRITING}:
-        data = store.load_region(length, digest)
-        _write_all_at(media, offset, data)
-        tx["state"] = STATE_SAVED
-        meta["transaction"] = tx
-        store.save_region(data)
+        meta["transaction"] = None
         store.save_meta(meta)
         return meta
-    raise RuntimeError(f"Unknown transaction state {state!r}")
+    offset, length = int(tx["offset"]), int(tx["length"])
+    data = store.load_region(length, tx["sha256"])
+    if identity_check:
+        identity_check()
+    if state == STATE_VERIFIED:
+        # A crash may have occurred before moving the cursor. Revalidate before commit.
+        if media.read_at(offset, length) == data:
+            _commit_transaction(store, meta, verified=bool(meta["verify"]))
+            return meta
+        # The region changed: fall through to restore with the preserved bytes.
+    elif state not in {STATE_SAVED, STATE_WRITING}:
+        raise RuntimeError(f"Unknown transaction state {state!r}")
+    if state in {STATE_WRITING, STATE_VERIFIED}:
+        # Previous write may be torn. Keep the saved bytes until confirmed restored.
+        _write_all_at(media, offset, data)
+        if media.read_at(offset, length) != data:
+            raise RuntimeError("Interrupted region restoration failed verification; journal retained")
+    tx["state"] = STATE_SAVED
+    store.save_meta(meta)
+    return meta
+
+
+def _stop_with_journal(store: JournalStore, meta: dict, status: str,
+                       *, error: str | None = None) -> str:
+    """Stop on write/verify failure; DO NOT discard the only surviving original bytes."""
+    meta["status"] = status
+    if error:
+        meta["last_error_class"] = error
+    store.save_meta(meta)
+    return status
 
 
 def refresh_media(
@@ -711,7 +774,7 @@ def refresh_media(
     consistency_reads: int = 2,
     adaptive_samples: int = 256,
     slow_multiplier: float = 2.0,
-    journal_backend: str = "hybrid",
+    journal_backend: str = "disk",
     auto_escalate: bool = True,
     progress: Callable[[dict], None] | None = None,
     identity_check: Callable[[], None] | None = None,
@@ -739,7 +802,11 @@ def refresh_media(
             raise RuntimeError("Journal does not match this media identity/size")
         if meta.get("sector") != sector or meta.get("chunk") != chunk or meta.get("mode") != mode:
             raise RuntimeError("Journal sector/chunk/mode does not match this run")
-        meta = _recover_interrupted_transaction(media, store, meta)
+        if meta.get("verify") != verify or meta.get("consistency_reads") != consistency_reads:
+            raise RuntimeError("Verification/consistency settings changed on resume")
+        if meta.get("journal_backend") not in {None, journal_backend}:
+            raise RuntimeError("Journal backend changed on resume")
+        meta = _recover_interrupted_transaction(media, store, meta, identity_check)
     else:
         store.prepare_new()
         meta = _default_meta(
@@ -763,6 +830,10 @@ def refresh_media(
         store.save_meta(meta)
 
     status = "completed"
+    if mode == "adaptive" and int(meta.get("adaptive_probe_failures") or 0):
+        # Do not attempt destructive maintenance when the preliminary survey
+        # already encountered unreadable regions. Rescue first.
+        status = "aborted_probe_read_errors"
     refresh_index = 0
     refresh_total = len(meta.get("queue") or []) if mode == "adaptive" else max(
         1, (size + chunk - 1) // chunk
@@ -781,100 +852,60 @@ def refresh_media(
     def next_region() -> tuple[int, int] | None:
         if mode == "adaptive":
             queue = meta.get("queue") or []
-            if not queue:
-                return None
-            offset, length = queue.pop(0)
-            meta["queue"] = queue
-            return int(offset), int(length)
+            return (int(queue[0][0]), int(queue[0][1])) if queue else None
         cursor = int(meta["cursor"])
         if cursor >= size:
             return None
         length = min(chunk, size - cursor)
-        if length % sector:
-            length -= length % sector
-        if length <= 0:
-            return None
-        return cursor, length
+        length -= length % sector
+        return (cursor, length) if length else None
+
+    def skip_region(offset: int, length: int, *, inconsistent: bool = False) -> None:
+        key = "inconsistent_ranges" if inconsistent else "skipped_ranges"
+        meta[key] = _merge_ranges(list(meta.get(key) or []) + [[offset, length]])
+        if mode == "full":
+            meta["cursor"] = offset + length
+        else:
+            queue = meta.get("queue") or []
+            if not queue or list(map(int, queue[0])) != [offset, length]:
+                raise RuntimeError("Adaptive queue mismatch while skipping region")
+            meta["queue"] = queue[1:]
+        save()
 
     try:
-        while True:
+        while status == "completed":
             if identity_check:
                 identity_check()
             tx = meta.get("transaction")
-            if tx and tx.get("state") == STATE_SAVED:
-                offset = int(tx["offset"])
-                length = int(tx["length"])
+            if tx:
+                if tx.get("state") != STATE_SAVED:
+                    raise RuntimeError("Unexpected transaction state after resume")
+                offset, length = int(tx["offset"]), int(tx["length"])
                 data = store.load_region(length, tx["sha256"])
-                if progress:
-                    progress({
-                        "status": "refreshing", "phase": "refresh",
-                        "offset": offset, "refresh_index": refresh_index,
-                        "refresh_total": refresh_total,
-                        "rewritten_bytes": meta["rewritten_bytes"],
-                        "verified_bytes": meta["verified_bytes"],
-                        "message": f"Rewrite+verify @ {_fmt_offset(offset)}",
-                        "force": True,
-                    })
+                if identity_check:
+                    identity_check()
                 tx["state"] = STATE_WRITING
-                meta["transaction"] = tx
-                save()
+                save()  # Durable WRITING state before patient mutation.
                 try:
                     _write_all_at(media, offset, data)
-                except OSError as exc:
+                    # Always read back: even --no-verify must detect obvious errors.
+                    observed = media.read_at(offset, length)
+                    if observed != data:
+                        raise OSError(errno.EIO, "Post-write readback mismatch")
+                except (OSError, RuntimeError) as exc:
                     meta["failed_write_attempts"] = int(meta["failed_write_attempts"]) + 1
-                    meta["last_error_class"] = _classify_os_error(exc)
-                    if progress:
-                        progress({
-                            "status": "refreshing", "offset": offset, "failed": True,
-                            "error_class": meta["last_error_class"], "force": True,
-                            "message": f"Write failed @ {_fmt_offset(offset)}",
-                        })
-                    try:
-                        _write_all_at(media, offset, data)
-                    except OSError:
-                        pass
-                    meta["skipped_ranges"] = _merge_ranges(
-                        list(meta.get("skipped_ranges") or []) + [[offset, length]]
+                    status = _stop_with_journal(
+                        store, meta, "aborted_write_or_verify_error", error=str(exc)
                     )
-                    meta["transaction"] = None
-                    store.clear_region()
-                    if exc.errno in _FATAL:
-                        status = "aborted_device_or_access_error"
-                        break
-                    save()
-                    if int(meta["failed_read_attempts"]) + int(meta["failed_write_attempts"]) >= max_errors:
-                        status = "aborted_error_limit"
-                        break
-                    continue
-                if verify:
-                    try:
-                        check = media.read_at(offset, length)
-                        if check != data:
-                            meta["skipped_ranges"] = _merge_ranges(
-                                list(meta.get("skipped_ranges") or []) + [[offset, length]]
-                            )
-                            _write_all_at(media, offset, data)
-                            meta["transaction"] = None
-                            store.clear_region()
-                            save()
-                            continue
-                        meta["verified_bytes"] = int(meta["verified_bytes"]) + length
-                    except OSError as exc:
-                        meta["last_error_class"] = _classify_os_error(exc)
-                        _write_all_at(media, offset, data)
-                        meta["transaction"] = None
-                        store.clear_region()
-                        save()
-                        continue
+                    if progress:
+                        progress({"status": status, "phase": "refresh", "offset": offset,
+                                  "failed": True, "force": True,
+                                  "message": "Write/readback failed; original bytes retained in journal"})
+                    break
                 tx["state"] = STATE_VERIFIED
-                meta["transaction"] = tx
                 save()
-                meta["rewritten_bytes"] = int(meta["rewritten_bytes"]) + length
+                _commit_transaction(store, meta, verified=verify)
                 refresh_index += 1
-                if mode == "full":
-                    meta["cursor"] = offset + length
-                meta["transaction"] = None
-                store.clear_region()
                 save()
                 continue
 
@@ -885,45 +916,23 @@ def refresh_media(
             try:
                 data = _read_consistent(media, offset, length, consistency_reads)
             except RuntimeError as exc:
-                if str(exc) == "inconsistent_reads":
-                    meta["inconsistent_ranges"] = _merge_ranges(
-                        list(meta.get("inconsistent_ranges") or []) + [[offset, length]]
-                    )
-                    if progress:
-                        progress({
-                            "status": "refreshing", "offset": offset, "failed": True,
-                            "error_class": "media_or_io", "force": True,
-                            "message": f"Inconsistent reads — skipped @ {_fmt_offset(offset)}",
-                        })
-                    if mode == "full":
-                        meta["cursor"] = offset + length
-                    save()
-                    continue
-                raise
+                if str(exc) != "inconsistent_reads":
+                    raise
+                skip_region(offset, length, inconsistent=True)
+                continue
             except OSError as exc:
                 meta["failed_read_attempts"] = int(meta["failed_read_attempts"]) + 1
-                meta["skipped_ranges"] = _merge_ranges(
-                    list(meta.get("skipped_ranges") or []) + [[offset, length]]
-                )
                 meta["last_error_class"] = _classify_os_error(exc)
-                if progress:
-                    progress({
-                        "status": "refreshing", "offset": offset, "failed": True,
-                        "error_class": meta["last_error_class"], "force": True,
-                        "message": f"Read failed — skipped @ {_fmt_offset(offset)}",
-                    })
-                if mode == "full":
-                    meta["cursor"] = offset + length
+                skip_region(offset, length)
                 if exc.errno in _FATAL:
                     status = "aborted_device_or_access_error"
-                    save()
                     break
-                save()
                 if int(meta["failed_read_attempts"]) + int(meta["failed_write_attempts"]) >= max_errors:
                     status = "aborted_error_limit"
                     break
                 continue
 
+            # Journal original data durably *before* any patient write.
             store.save_region(data)
             meta["transaction"] = {
                 "state": STATE_SAVED,
@@ -938,6 +947,8 @@ def refresh_media(
     if status == "completed":
         if meta.get("skipped_ranges") or meta.get("inconsistent_ranges"):
             status = "completed_with_skips_or_verify_failures"
+        elif int(meta.get("adaptive_probe_failures") or 0):
+            status = "completed_with_probe_errors"
         if meta.get("transaction"):
             status = "interrupted"
         elif mode == "full" and int(meta["cursor"]) < size:

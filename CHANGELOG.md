@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.7 — In-place media refresh safety hotfix (2026-11-01)
+
+- Made **disk-backed** original-byte journaling the default and required it for physical drives.
+- Fixed write/read-back failure paths that previously discarded the only saved region while reporting a skip. Now fail closed and keep the active transaction journal.
+- Fixed crash/restart accounting for `VERIFIED`/`COMMITTED` states, and ensured adaptive queue items remain pending until committed.
+- Made image refresh identity stable across intentional in-place changes by excluding file modification time from its token.
+- Added live-disk journal-storage isolation checks, mounting/volume safety gates, typed destructive GUI confirmation, and Windows launcher defaults that keep the journal.
+- Adaptive refresh aborts before writes if its initial probe encounters unreadable sectors.
+- Auto-delete journal only after exact `completed` with no active transaction.
+- Added 11 fault-injection/safety tests for interrupted writes, restart, verification, and device preflight logic.
+- Live lab (USB Seagate 12 TB `PhysicalDrive2`): sample scan 24/24 OK; Adaptive 64 probes with disk journal on `D:` completed (1 MiB rewritten+verified); hybrid live backend correctly rejected.
+- This is a **private-testing hardening release**, not certified for real failing media or public deployment.
+
 ## 0.2.6 — BitLocker-aware gates + reliable elevated CLI dashboard (2026-11-01)
 
 - Fail-closed BitLocker/LUKS detection for carve/undelete/ext check-repair (`inspect-encryption`, `--ack-encrypted-volume`).
