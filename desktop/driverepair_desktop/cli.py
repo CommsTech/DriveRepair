@@ -40,6 +40,7 @@ from .encryption import (
     require_plaintext_filesystem,
     scan_path_for_encryption,
 )
+from . import console_ui as cui
 
 
 
@@ -374,14 +375,17 @@ def _run_extras(args) -> int:
         if is_device and args.no_verify:
             raise ValueError('Physical-device refresh cannot disable read-back verification')
         # Paint something immediately — device open / identity checks can take seconds.
+        # ASCII ellipsis only (PowerShell cp1252 mojibake on Unicode …).
         if args.live_dashboard:
             print(
                 f'[{time.strftime("%H:%M:%S")}] Preparing {args.mode} refresh '
-                f'(journal={args.journal_backend}); opening patient…',
+                f'(journal={args.journal_backend}); opening patient...',
                 file=sys.stderr, flush=True,
             )
+        device_label = ""
         if is_device:
             selected = select_external_device(args.device)
+            device_label = f"{selected.id}  {selected.model[:28]}  {cui.fmt_bytes(selected.size_bytes)}"
             require_destructive_acknowledgements(
                 ack_risk=args.ack_risk,
                 ack_destructive=args.ack_destructive,
@@ -398,7 +402,7 @@ def _run_extras(args) -> int:
             assert_stable_identity(selected, reread)
             if args.live_dashboard:
                 print(
-                    f'[{time.strftime("%H:%M:%S")}] Opening read/write handle on {selected.id}…',
+                    f'[{time.strftime("%H:%M:%S")}] Opening read/write handle on {selected.id}...',
                     file=sys.stderr, flush=True,
                 )
             media = open_device_readwrite(selected)
@@ -435,23 +439,29 @@ def _run_extras(args) -> int:
             )
         emitter = ProgressEmitter(enabled=bool(args.progress_jsonl), min_interval_s=0.1)
         # Live progress on stderr (TTY panel, line-mode for logs, optional JSONL for GUI).
+        # Prefer a real in-place panel in interactive PowerShell / Windows Terminal.
+        if args.live_dashboard and sys.stderr.isatty():
+            os.environ.setdefault("DRIVEREPAIR_FORCE_TTY_DASHBOARD", "1")
         dashboard = RefreshDashboard(
             mode=args.mode, size=size, enabled=bool(args.live_dashboard),
             journal_backend=args.journal_backend, emitter=emitter,
+            device_label=device_label,
         )
         dashboard.handle({
             "status": "starting", "force": True,
-            "message": f"Patient open — starting {args.mode} refresh",
+            "message": f"Patient open - starting {args.mode} refresh",
             "offset": 0,
         })
         try:
-            print(
-                f'DESTRUCTIVE In-Place Media Refresh ({args.mode}, journal={args.journal_backend}). '
-                'Rolling journal protects only the active region. '
-                'Unreadable/inconsistent sectors are skipped, not invented. '
-                'mechanical*=latency proxy (USB docks have no acoustic mic).',
-                file=sys.stderr, flush=True,
-            )
+            # Banner only when not painting the full panel (avoid scrolling under the UI).
+            if not (args.live_dashboard and dashboard._is_tty()):
+                print(
+                    f'DESTRUCTIVE In-Place Media Refresh ({args.mode}, journal={args.journal_backend}). '
+                    'Rolling journal protects only the active region. '
+                    'Unreadable/inconsistent sectors are skipped, not invented. '
+                    'mechanical*=latency proxy (USB docks have no acoustic mic).',
+                    file=sys.stderr, flush=True,
+                )
 
             def identity_check() -> None:
                 if is_device:
@@ -577,13 +587,23 @@ def run(argv: list[str] | None = None) -> int:
             devices = list_external_devices()
             if args.json:
                 print(json.dumps([device.public() for device in devices], indent=2))
-            elif not devices:
-                print("No eligible external whole disks detected. Internal disks are excluded.")
+            if not devices:
+                print("No eligible external whole disks detected. Internal disks are excluded.",
+                      file=sys.stderr if args.json else sys.stdout)
             else:
+                # Human table always on stderr when --json so operators can read it.
+                out = sys.stderr if args.json else sys.stdout
+                cui.enable_windows_vt()
+                print(cui.paint("External whole disks", cui.BOLD, cui.CYAN, stream=out), file=out)
+                print(f"{'ID':<28} {'SIZE':>10} {'BUS':<6} {'SERIAL':<10} MODEL", file=out)
+                print("-" * 78, file=out)
                 for device in devices:
-                    print(f"{device.id} | {device.model} | {device.size_bytes:,} bytes "
-                          f"| {device.bus} | sector {device.sector_size} bytes | "
-                          f"serial {device.public()['serial_suffix']}")
+                    pub = device.public()
+                    print(
+                        f"{device.id:<28} {cui.fmt_bytes(device.size_bytes):>10} "
+                        f"{device.bus:<6} {pub['serial_suffix']:<10} {device.model}",
+                        file=out,
+                    )
             return 0
 
         if args.command == "scan":
@@ -608,17 +628,19 @@ def run(argv: list[str] | None = None) -> int:
             context = {"image_test_file": os.path.basename(image)}
 
         try:
-            if not args.json:
-                print("READ-ONLY scan. This DOES NOT repair disks or verify data integrity.",
-                      file=sys.stderr)
+            print("READ-ONLY scan. This DOES NOT repair disks or verify data integrity.",
+                  file=sys.stderr)
             def report(current: int, total: int) -> None:
-                if not args.json and (current == total or current == 1 or
-                                     current % max(1, total // 10) == 0):
-                    print(f"Scanning: {current}/{total} chunks", file=sys.stderr)
+                if current == total or current == 1 or current % max(1, total // 10) == 0:
+                    pct = int(100 * current / max(1, total))
+                    bar = cui.progress_bar(current, total, 20)
+                    print(f"\rSCAN  {current}/{total} {pct:3d}% {bar}   ", end="",
+                          file=sys.stderr, flush=True)
             result = scan_reader(reader, size=size, sector=sector,
                                  mode=args.mode, samples=args.samples,
                                  chunk=args.chunk_mib * 1024 * 1024,
                                  max_errors=args.max_errors, progress=report)
+            print(file=sys.stderr)
         finally:
             reader.close()
 
@@ -631,14 +653,22 @@ def run(argv: list[str] | None = None) -> int:
             except (RuntimeError, ValueError):
                 result["status"] = "aborted_device_not_present_after_scan"
         result.update(context)
+        # Human summary on stderr; machine JSON on stdout when requested.
+        err_n = int(result.get("read_error_chunks") or 0)
+        print(
+            f"Scan {result['status']}: readable {cui.fmt_bytes(int(result['readable_bytes']))} / "
+            f"attempted {cui.fmt_bytes(int(result['attempted_bytes']))}  "
+            f"errors={err_n}  elapsed={float(result.get('elapsed_seconds') or 0):.1f}s",
+            file=sys.stderr,
+        )
+        if result.get("mode") == "sample":
+            print("Sample scan only - untested regions may still have errors.", file=sys.stderr)
         if args.json:
             print(json.dumps(result, indent=2))
         else:
             print(f"Status: {result['status']}; attempted {result['attempted_bytes']:,} bytes; "
                   f"readable {result['readable_bytes']:,}; read-error chunks "
                   f"{result['read_error_chunks']}")
-            if result["mode"] == "sample":
-                print("Sample scan only — untested regions may have errors.")
         return 0 if result["status"] == "completed" else 2
     except (ValueError, RuntimeError, OSError, json.JSONDecodeError, zipfile.BadZipFile) as exc:
         print(f"Error: {exc}", file=sys.stderr)

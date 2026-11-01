@@ -52,6 +52,7 @@ Set-Location $Desktop
 $env:PYTHONPATH = $Desktop
 $env:PYTHONUNBUFFERED = "1"
 $env:DRIVEREPAIR_FORCE_TTY_DASHBOARD = "1"
+$env:DRIVEREPAIR_COLOR = "1"
 
 Log ("Launching Adaptive Refresh CLI UI device=$Device samples=$Samples")
 Log ("journal=$Journal")

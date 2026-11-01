@@ -41,10 +41,10 @@ class Device:
         }
 
 
-def _run(command: list[str]) -> bytes:
+def _run(command: list[str], timeout: float = 25) -> bytes:
     try:
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                check=True, timeout=25)
+                                check=True, timeout=timeout)
         return result.stdout
     except (FileNotFoundError, subprocess.CalledProcessError,
             subprocess.TimeoutExpired) as exc:
@@ -112,12 +112,13 @@ def macos_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
     return devices
 
 
-def windows_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
-    # A fixed script, not user input. No mutating PowerShell cmdlets.
+def _windows_devices_from_get_disk(run: Callable[..., bytes]) -> list[Device]:
+    # Preferred path when Storage cmdlets are healthy.
     script = ("Get-Disk | Select-Object Number,FriendlyName,SerialNumber,UniqueId,"
               "Size,LogicalSectorSize,BusType,IsBoot,IsSystem,IsOffline | "
               "ConvertTo-Json -Compress -Depth 3")
-    data = run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script])
+    data = run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+               timeout=12)
     records = json.loads(data.decode("utf-8-sig"))
     if isinstance(records, dict):
         records = [records]
@@ -145,9 +146,94 @@ def windows_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
         path = rf"\\.\PhysicalDrive{number}"
         devices.append(Device(f"windows:PhysicalDrive{number}", path,
                               str(record.get("FriendlyName") or "External disk"),
-                              size, sector, bus,
+                              size, sector, "usb" if bus in {"usb", "7"} else bus,
                               str(record.get("SerialNumber") or record.get("UniqueId") or "")))
     return devices
+
+
+def _parse_usb_disk_records(records: list[dict]) -> list[Device]:
+    devices: list[Device] = []
+    for record in records or []:
+        iface = str(record.get("InterfaceType") or record.get("BusType") or "").upper()
+        # Conservative: only USB-attached whole disks.
+        if iface not in {"USB", "7"}:
+            continue
+        try:
+            number = int(record.get("Index", record.get("Number")))
+        except (KeyError, ValueError, TypeError):
+            continue
+        if number < 0:
+            continue
+        size = _positive_int(record.get("Size"))
+        sector = _positive_int(
+            record.get("BytesPerSector") or record.get("LogicalSectorSize"), 512
+        )
+        if not size or not sector or size % sector:
+            continue
+        path = rf"\\.\PhysicalDrive{number}"
+        model = str(record.get("Model") or record.get("FriendlyName") or "External USB disk").strip()
+        serial = str(record.get("SerialNumber") or record.get("UniqueId") or "").strip()
+        devices.append(Device(
+            f"windows:PhysicalDrive{number}", path, model, size, sector, "usb", serial,
+        ))
+    return devices
+
+
+def _windows_devices_from_cim(run: Callable[..., bytes]) -> list[Device]:
+    """Fallback when Get-Disk hangs after USB dock reseat (common on Windows)."""
+    script = (
+        "Get-CimInstance Win32_DiskDrive | "
+        "Select-Object Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector | "
+        "ConvertTo-Json -Compress -Depth 3"
+    )
+    data = run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+               timeout=20)
+    records = json.loads(data.decode("utf-8-sig"))
+    if isinstance(records, dict):
+        records = [records]
+    return _parse_usb_disk_records(list(records or []))
+
+
+def _windows_devices_from_wmic(run: Callable[..., bytes]) -> list[Device]:
+    """Last-resort fallback: WMIC avoids nested PowerShell / Storage-cmdlet hangs."""
+    data = run(
+        ["wmic", "diskdrive", "get",
+         "Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector", "/format:csv"],
+        timeout=20,
+    )
+    text = data.decode("utf-8-sig", errors="replace").strip()
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return []
+    headers = [h.strip() for h in lines[0].split(",")]
+    records: list[dict] = []
+    for line in lines[1:]:
+        cols = [c.strip() for c in line.split(",")]
+        if len(cols) < len(headers):
+            continue
+        row = {headers[i]: cols[i] for i in range(len(headers))}
+        records.append(row)
+    return _parse_usb_disk_records(records)
+
+
+def windows_devices(run: Callable[..., bytes] = _run) -> list[Device]:
+    # WMIC first: Get-Disk/CIM often hang or return empty right after USB dock reseat.
+    # Fall back to CIM then Get-Disk for environments without WMIC.
+    errors: list[str] = []
+    last_empty: list[Device] | None = None
+    for finder in (_windows_devices_from_wmic, _windows_devices_from_cim,
+                   _windows_devices_from_get_disk):
+        try:
+            found = finder(run)
+            if found:
+                return found
+            last_empty = found
+        except (RuntimeError, json.JSONDecodeError, ValueError, TypeError, OSError) as exc:
+            errors.append(f"{finder.__name__}: {exc}")
+            continue
+    if last_empty is not None:
+        return last_empty
+    raise RuntimeError("Windows external-disk discovery failed (" + "; ".join(errors) + ")")
 
 
 def list_external_devices(platform: str | None = None,
