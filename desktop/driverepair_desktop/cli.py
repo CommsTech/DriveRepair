@@ -93,6 +93,8 @@ def parser() -> argparse.ArgumentParser:
                          help="After first-pass rescue, automatically retry missing regions in smaller pieces")
         cmd.add_argument("--chunk-mib", type=int, choices=[1, 2, 4, 8], default=1)
         cmd.add_argument("--max-read-errors", type=int, default=4096)
+        cmd.add_argument("--max-chunks", type=int, default=None,
+                         help="Optional lab bound: stop after N chunk writes (journal kept for resume)")
         if name in {"rescue-external", "rescue-system"}:
             cmd.add_argument("--ack-risk", action="store_true", help="Accept read stress on failing media")
         if name == "rescue-system":
@@ -977,18 +979,40 @@ def _run_extras(args) -> int:
             if args.command.startswith('rescue-'):
                 if args.multi_pass and args.retry_missing:
                     raise ValueError('--multi-pass and --retry-missing cannot be combined')
+                _rescue_last_emit = [0.0]
+                _rescue_last_identity = [0.0]
+
                 def check_progress(state):
-                    if is_device:
+                    now = time.monotonic()
+                    # Identity re-check is expensive on Windows (Get-Disk via PowerShell).
+                    # Re-query a few times per minute — not once per 8 MiB chunk.
+                    if is_device and (now - _rescue_last_identity[0] >= 15.0 or
+                                      state.get('status', '').startswith('completed')):
+                        _rescue_last_identity[0] = now
                         latest = (select_linux_any_disk(args.device) if args.command == 'rescue-system'
                                   else select_external_device(args.device))
                         if latest.fingerprint != source_token:
                             raise RuntimeError('Patient device changed mid-recovery; job halted')
+                    # Throttled operator progress so long rescues do not look hung
+                    # under --json (final JSON still prints only at the end).
+                    if now - _rescue_last_emit[0] >= 2.0 or state.get('status', '').startswith('completed'):
+                        _rescue_last_emit[0] = now
+                        cursor = int(state.get('cursor') or 0)
+                        recovered = int(state.get('recovered_bytes') or 0)
+                        pct = (100.0 * cursor / size) if size else 0.0
+                        print(
+                            f"RESCUE  cursor={cursor} ({pct:.1f}%) recovered={recovered} "
+                            f"missing={len(state.get('missing_ranges') or [])} "
+                            f"status={state.get('status')}",
+                            file=sys.stderr, flush=True,
+                        )
                 result = rescue_reader(reader, size=size, sector=sector,
                                        output=args.output, source_token=source_token,
                                        chunk=args.chunk_mib * 1024 * 1024,
                                        max_failed_reads=args.max_read_errors,
                                        resume=args.resume, retry_missing=args.retry_missing,
-                                       progress=check_progress)
+                                       progress=check_progress,
+                                       max_chunks=getattr(args, 'max_chunks', None))
                 if args.multi_pass and result.get('status') == 'completed_with_missing_data':
                     # Revalidate device immediately before targeted retries.
                     check_progress(result)
@@ -997,7 +1021,8 @@ def _run_extras(args) -> int:
                                            chunk=args.chunk_mib * 1024 * 1024,
                                            max_failed_reads=args.max_read_errors,
                                            resume=True, retry_missing=True,
-                                           progress=check_progress)
+                                           progress=check_progress,
+                                           max_chunks=getattr(args, 'max_chunks', None))
             else:
                 result = read_benchmark(reader, size=size, sector=sector,
                                         mode=args.mode, samples=args.samples,
