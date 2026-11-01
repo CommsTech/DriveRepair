@@ -1,4 +1,4 @@
-# DriveRepair desktop — 0.3.0b1
+# DriveRepair desktop — 0.3.1b1
 
 A privacy-first guided Python 3.10+ desktop UI/CLI, with incremental Rust recovery-core migration. This is not a signed standalone native installer. The GUI requires Tk. Raw-device repair remains experimental; do not operate on irreplaceable disks.
 
@@ -20,6 +20,25 @@ python3 -m driverepair_desktop rescue-image --engine rust --image original.img -
 ```
 
 Rust core is experimental; no raw devices and no Windows Rust resume. Default Python engine remains the better-tested reference until CI/hardware comparisons establish parity. Rust `.rmap` is not compatible with Python `.rescue.json`.
+
+## Recover an unbootable internal disk (Linux live USB)
+
+Boot a trusted Linux live USB, connect healthy destination storage, then use
+GUI → **Recover OS drive** (guided selection, destination preflight, read-only
+rescue) or:
+
+```sh
+python3 -m driverepair_desktop list-all-linux --json
+python3 -m driverepair_desktop plan-system-recovery --device linux:/dev/sdX \
+  --expect-fingerprint 12HEXCHARS --output /mnt/separate-storage/patient.img --json
+python3 -m driverepair_desktop rescue-system --device linux:/dev/sdX \
+  --expect-fingerprint 12HEXCHARS --output /mnt/separate-storage/patient.img \
+  --ack-risk --ack-offline-system --multi-pass --json
+```
+
+This is not enabled for mounted active OS disks. `list` remains external-only.
+Separate destination support includes mounted NAS shares with recognized
+filesystems. Read `../docs/ONE_DRIVE_RECOVERY.md` before touching valuable data.
 
 ## Safe recovery shortcuts
 
@@ -62,7 +81,7 @@ GUI: choose a goal on the **Start here** tab, or open **Recover deleted files** 
 - `fls` / `icat` (The Sleuth Kit) for metadata-assisted deleted-file recovery.
 - Cargo/Rust stable for the optional standalone image rescue core.
 
-Physical USB-docked recovery on Windows/macOS, custom BIOS/UEFI boot ISO, 7-pass/DoD-certified erasure, firmware rescue and automated media refresh **are not validated/implemented**. See `../docs/PUBLIC_BETA_GATES.md` for release blockers and `../docs/ARCHITECTURE_CURRENT.md` for Rust migration.
+Physical USB-docked recovery on Windows/macOS, boot-tested BIOS/UEFI boot ISO, 7-pass/DoD-certified erasure, firmware rescue and automated media refresh **are not validated/implemented**. See `../docs/PUBLIC_BETA_GATES.md` for release blockers and `../docs/ARCHITECTURE_CURRENT.md` for Rust migration.
 
 ## Tests
 

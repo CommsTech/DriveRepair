@@ -107,3 +107,23 @@ jobs:
         run: cargo build --manifest-path rust/recovery-core/Cargo.toml
       - name: Test small image recovery core
         run: cargo test --manifest-path rust/recovery-core/Cargo.toml
+
+  offline-recovery-integrity:
+    name: Offline system rescue source and package checks (NO disk I/O)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: '3.11'
+      - name: Validate live-ISO scripts without running them
+        run: bash -n scripts/build_live_iso.sh scripts/check_live_iso.sh
+      - name: Unit tests for source safety, network mount and mock imaging
+        working-directory: desktop
+        run: python -m unittest discover -s tests -p 'test_offline_recovery.py' -v
+      - name: Verify CLI offline rescue commands are packaged
+        run: |
+          python scripts/build_desktop.py --no-wheel
+          python dist/DriveRepair-0.3.1b1.pyz list-all-linux --help
+          python dist/DriveRepair-0.3.1b1.pyz plan-system-recovery --help
+          python dist/DriveRepair-0.3.1b1.pyz rescue-system --help

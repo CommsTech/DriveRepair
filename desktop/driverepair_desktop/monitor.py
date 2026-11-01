@@ -49,14 +49,21 @@ def evaluate_snapshot(previous: dict | None, current: dict) -> dict:
             warnings.append('Unusually slow sampled regions; repeat under controlled conditions')
     old = _numbers(previous) if previous else {}
     new = _numbers(current)
+    # A FIRST baseline with existing media failures is already actionable.
+    # SMART overall PASSED does not erase nonzero pending/uncorrectable counters.
+    danger = {'ata.5', 'ata.187', 'ata.197', 'ata.198', 'nvme.media_errors',
+              'nvme.critical_warning'}
+    for key in sorted(danger):
+        if new.get(key, 0) > 0:
+            warnings.append(f'{key} reports a nonzero fault indicator ({new[key]}); '
+                            'preserve data and investigate before media refresh')
     for key, value in new.items():
         if key in old and value > old[key]:
             warnings.append(f'{key} increased ({old[key]} -> {value}); investigate/backup')
-    if not previous:
-        disposition = 'baseline_recorded'
-    else:
-        disposition = 'attention' if warnings else 'no_new_signal_observed'
+    disposition = ('attention' if warnings else
+                   'baseline_recorded' if not previous else 'no_new_signal_observed')
     return {'status': disposition, 'warnings': warnings,
+            'recommend_preserve_data_first': bool(warnings),
             'notes': 'Not a health certificate. Read-only monitoring cannot predict all failures, '
                      'and NEVER starts repair, writes, self-tests, TRIM, or firmware operations.'}
 
