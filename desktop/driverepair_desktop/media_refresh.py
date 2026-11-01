@@ -508,9 +508,9 @@ def _probe_adaptive_targets(
     threshold = max(median * slow_multiplier, median + 1e-6)
     # Deduplicate targets (escalation may add overlapping finer ranges).
     merged: dict[int, int] = {}
-    for o, l, t in timings:
-        if t >= threshold:
-            merged[o] = max(merged.get(o, 0), l)
+    for offset, length, latency in timings:
+        if latency >= threshold:
+            merged[offset] = max(merged.get(offset, 0), length)
     targets = sorted(merged.items())
     return targets, {
         "adaptive_samples_requested": samples,
@@ -586,8 +586,8 @@ class JournalStore:
     """disk | hybrid (RAM region + disk meta) | memory (RAM region+meta, meta also mirrored lightly)."""
 
     def __init__(self, journal_dir: str, backend: str) -> None:
-        if backend not in {"disk", "hybrid", "memory"}:
-            raise ValueError("journal backend must be disk, hybrid, or memory")
+        if backend not in {"disk", "hybrid", "memory", "ramdisk"}:
+            raise ValueError("journal backend must be disk, hybrid, memory, or ramdisk")
         self.backend = backend
         self.journal_dir = os.path.abspath(journal_dir)
         self.meta_path = os.path.join(self.journal_dir, "meta.json")
@@ -611,7 +611,7 @@ class JournalStore:
 
     def save_region(self, data: bytes) -> None:
         self._region = data
-        if self.backend == "disk":
+        if self.backend in {"disk", "ramdisk"}:
             _atomic_write_bytes(self.blob_path, data)
         # hybrid/memory: keep bytes in RAM only for speed.
 
@@ -715,7 +715,8 @@ def _commit_transaction(store: JournalStore, meta: dict, *, verified: bool) -> N
 
 
 def _recover_interrupted_transaction(media: ReadWriter, store: JournalStore, meta: dict,
-                                     identity_check: Callable[[], None] | None = None) -> dict:
+                                     identity_check: Callable[[], None] | None = None,
+                                     pre_write_check: Callable[[], None] | None = None) -> dict:
     """Fail closed if a transaction cannot be restored; never lose its journal."""
     tx = meta.get("transaction")
     if not tx:
@@ -740,6 +741,8 @@ def _recover_interrupted_transaction(media: ReadWriter, store: JournalStore, met
     elif state not in {STATE_SAVED, STATE_WRITING}:
         raise RuntimeError(f"Unknown transaction state {state!r}")
     if state in {STATE_WRITING, STATE_VERIFIED}:
+        if pre_write_check:
+            pre_write_check()
         # Previous write may be torn. Keep the saved bytes until confirmed restored.
         _write_all_at(media, offset, data)
         if media.read_at(offset, length) != data:
@@ -778,6 +781,7 @@ def refresh_media(
     auto_escalate: bool = True,
     progress: Callable[[dict], None] | None = None,
     identity_check: Callable[[], None] | None = None,
+    pre_write_check: Callable[[], None] | None = None,
 ) -> dict:
     if mode not in {"adaptive", "full"}:
         raise ValueError("mode must be adaptive or full")
@@ -806,7 +810,7 @@ def refresh_media(
             raise RuntimeError("Verification/consistency settings changed on resume")
         if meta.get("journal_backend") not in {None, journal_backend}:
             raise RuntimeError("Journal backend changed on resume")
-        meta = _recover_interrupted_transaction(media, store, meta, identity_check)
+        meta = _recover_interrupted_transaction(media, store, meta, identity_check, pre_write_check)
     else:
         store.prepare_new()
         meta = _default_meta(
@@ -822,7 +826,7 @@ def refresh_media(
                 progress=progress,
             )
             probe_elapsed = round(time.monotonic() - probe_started, 3)
-            meta["queue"] = [[o, l] for o, l in targets]
+            meta["queue"] = [[offset, length] for offset, length in targets]
             meta.update(probe_stats)
             meta["probe_elapsed_seconds"] = probe_elapsed
         else:
@@ -884,6 +888,8 @@ def refresh_media(
                 data = store.load_region(length, tx["sha256"])
                 if identity_check:
                     identity_check()
+                if pre_write_check:
+                    pre_write_check()
                 tx["state"] = STATE_WRITING
                 save()  # Durable WRITING state before patient mutation.
                 try:

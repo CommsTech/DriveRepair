@@ -10,7 +10,7 @@ import errno
 import json
 import os
 import stat
-from pathlib import Path
+import time
 from typing import Callable
 
 from .compat import binary_open_flags, pwrite
@@ -142,7 +142,7 @@ def rescue_reader(reader: Reader, *, size: int, sector: int, output: str,
     original file checksums. Persist output *before* recording its recovery.
     """
     if (size <= 0 or sector <= 0 or size % sector or chunk < sector or
-            chunk % sector or chunk > 16 * 1024 * 1024 or
+            chunk % sector or chunk > 64 * 1024 * 1024 or
             not 1 <= max_failed_reads <= 100000 or not source_token):
         raise ValueError('Invalid size, alignment, chunk, source token or failure budget')
     output = _safe_path(output)
@@ -185,7 +185,7 @@ def rescue_reader(reader: Reader, *, size: int, sector: int, output: str,
         else:
             if state.get('retry_pending_ranges'):
                 raise RuntimeError('Interrupted retry pass; resume with --retry-missing')
-            work = [(p, min(chunk, size - p)) for p in range(state['cursor'], size, chunk)]
+            work = ((p, min(chunk, size - p)) for p in range(state['cursor'], size, chunk))
         processed = 0
         for offset, length in work:
             new_missing: list[list[int]] = []
@@ -204,16 +204,20 @@ def rescue_reader(reader: Reader, *, size: int, sector: int, output: str,
                     attempts += 1
                     if attempts + state['failed_read_attempts'] > max_failed_reads:
                         raise RuntimeError('Read error limit exceeded; progress journal preserved')
-                    # Fast first pass: do not spend limited drive life trying to
-                    # isolate every bad sector. Leave the entire failed chunk
-                    # unknown, collect easy regions, then allow targeted retry.
+                    # Fast first pass: intentionally no sleep/backoff — burning
+                    # patient lifetime isolating every bad sector is worse than
+                    # marking the chunk unknown and finishing readable regions.
+                    # Targeted --retry-missing does binary-split isolation with a
+                    # short backoff so USB bridges can settle between halves.
                     if not retry_missing or n <= sector:
                         new_missing.append([start, n])
                         return
                     half = ((n // sector) // 2) * sector
                     if half <= 0:
                         half = sector
+                    time.sleep(0.005)
                     recover(start, half)
+                    time.sleep(0.005)
                     recover(start + half, n - half)
             recover(offset, length)
             for start, data in segments:

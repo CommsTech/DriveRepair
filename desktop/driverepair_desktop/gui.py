@@ -97,6 +97,7 @@ def launch() -> None:
     }
 
     selected = tk.StringVar(value="No external drive selected")
+    inventory = {}  # Snapshot used only for DISPLAY; CLI rediscovers and verifies before writes.
     image = tk.StringVar()
     dest_file = tk.StringVar()
     dest_dir = tk.StringVar()
@@ -367,8 +368,9 @@ def launch() -> None:
     ttk.Label(tab_drive, text="External whole disks only. Prefer image rescue before any in-place work.",
               style="Muted.TLabel", wraplength=900).pack(anchor="w")
     tree = ttk.Treeview(tab_drive, show="headings",
-                        columns=("id", "model", "size", "bus", "serial"), height=6)
-    for key, width in [("id", 220), ("model", 260), ("size", 120), ("bus", 80), ("serial", 90)]:
+                        columns=("id", "model", "size", "bus", "serial", "location", "verify"), height=6)
+    for key, width in [("id", 190), ("model", 180), ("size", 110), ("bus", 65), ("serial", 90),
+                       ("location", 135), ("verify", 115)]:
         tree.heading(key, text=key.upper())
         tree.column(key, width=width, stretch=(key == "model"))
     tree.pack(fill="x", pady=8)
@@ -473,21 +475,31 @@ def launch() -> None:
     row(tab_refresh, "Journal directory", journal_dir, pick_journal)
     mode_var = tk.StringVar(value="adaptive")
     backend_var = tk.StringVar(value="disk")
+    power_var = tk.StringVar(value="")
     after_var = tk.StringVar(value="ask")
     samples_var = tk.StringVar(value="128")
+    chunk_var = tk.StringVar(value="8")
     opts = ttk.Frame(tab_refresh)
     opts.pack(fill="x", pady=6)
     ttk.Label(opts, text="Mode").pack(side="left")
     ttk.Combobox(opts, textvariable=mode_var, values=["adaptive", "full"], width=10,
                  state="readonly").pack(side="left", padx=6)
     ttk.Label(opts, text="Journal").pack(side="left", padx=(12, 0))
-    ttk.Combobox(opts, textvariable=backend_var, values=["disk"], width=10,
+    ttk.Combobox(opts, textvariable=backend_var, values=["disk", "ramdisk"], width=10,
                  state="readonly").pack(side="left", padx=6)
     ttk.Label(opts, text="After").pack(side="left", padx=(12, 0))
     ttk.Combobox(opts, textvariable=after_var, values=["ask", "keep", "delete"], width=8,
                  state="readonly").pack(side="left", padx=6)
+    ttk.Label(opts, text="Chunk (MiB)").pack(side="left", padx=(12, 0))
+    ttk.Combobox(opts, textvariable=chunk_var, values=["1", "4", "8", "16", "32", "64"],
+                 width=4, state="readonly").pack(side="left", padx=6)
     ttk.Label(opts, text="Samples").pack(side="left", padx=(12, 0))
     ttk.Entry(opts, textvariable=samples_var, width=6).pack(side="left", padx=6)
+
+    row(tab_refresh, "RAM power source (nut:UPSNAME or battery)", power_var)
+    ttk.Label(tab_refresh, text="RAM mode is Linux-only and VOLATILE even with UPS. "
+              "Use a tmpfs/ramfs mount with swap disabled; both host and dock need battery backup.",
+              style="Muted.TLabel", wraplength=920).pack(anchor="w")
 
     def run_refresh() -> None:
         try:
@@ -498,11 +510,22 @@ def launch() -> None:
                 "refresh-external", "--device", dev, "--journal", journal,
                 "--mode", mode_var.get(), "--journal-backend", backend_var.get(),
                 "--adaptive-samples", str(samples), "--after-run", after_var.get(),
+                "--chunk-mib", chunk_var.get(),
                 # GUI owns the map/health UI — disable TTY panel, keep JSONL only.
                 "--no-live-dashboard", "--progress-jsonl",
                 "--ack-risk", "--ack-destructive", "--ack-no-backup", "--ack-data-loss-risk",
                 "--ack-usb-bridge-risk", "--ack-unvalidated-hardware", "--json",
             ]
+            if dev not in inventory:
+                raise ValueError('Rescan device inventory before attempting patient writes')
+            args.extend(["--confirm-identity", inventory[dev].fingerprint[:12]])
+            if backend_var.get() == 'ramdisk':
+                if not messagebox.askyesno('VOLATILE RAM JOURNAL',
+                        'Host restart, RAM loss or dock failure can permanently damage the disk. '
+                        'Do you accept this risk and confirm BOTH laptop/UPS and dock are powered?'):
+                    return
+                args.extend(['--power-source', require(power_var, 'UPS/battery telemetry'),
+                             '--ack-volatile-journal', '--ack-dock-power-backed'])
             stats["size"] = 0
             # Best-effort size from tree selection text is unknown; engine events fill it.
             start(args, f"In-place refresh ({mode_var.get()})", risky=True, destructive=True)
@@ -575,6 +598,8 @@ def launch() -> None:
                     if line.strip():
                         write(line + "\n")
                 elif kind == "devices":
+                    inventory.clear()
+                    inventory.update({d.id: d for d in value})
                     selected.set("No external drive selected")
                     for item in tree.get_children():
                         tree.delete(item)
@@ -583,6 +608,7 @@ def launch() -> None:
                         tree.insert("", "end", iid=device.id, values=(
                             device.id, device.model, f"{device.size_bytes / 10**9:.2f} GB",
                             device.bus, public["serial_suffix"],
+                            public["location"], public["identity_hint"],
                         ))
                         if stats["size"] == 0 and tree.selection() == ():
                             pass

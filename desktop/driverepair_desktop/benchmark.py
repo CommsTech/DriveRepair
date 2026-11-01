@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import errno
 import time
-from typing import Protocol
 
 from .scanner import Reader, scan_offsets
 

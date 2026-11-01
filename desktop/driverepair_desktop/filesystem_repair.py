@@ -10,7 +10,6 @@ import os
 import shutil
 import stat
 import subprocess
-from pathlib import Path
 
 
 def _source_image(image: str) -> tuple[str, os.stat_result]:

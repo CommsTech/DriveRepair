@@ -2,7 +2,6 @@ import errno
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
 
 from driverepair_desktop.scanner import ImageReader, scan_offsets, scan_reader
 
