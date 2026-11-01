@@ -1,10 +1,21 @@
 # DriveRepair
 
-**Experimental cross-platform disk diagnostics, image-first data rescue, and file recovery toolkit.**
+**Experimental desktop drive diagnostics, image-first rescue, filesystem-aware undelete, and clone-only repair toolkit.**
 
-DriveRepair is intended to grow into a single desktop/bootable workflow for inspecting drives, rescuing readable sectors, recovering files, repairing filesystems, assessing media reliability and measuring maintenance outcomes. **It does not yet do all of those things**. The current supported desktop CLI runs from Python 3.10+ without rebooting; the historical Rust BIOS/UEFI code remains experimental and is not the desktop recovery engine.
+DriveRepair is intended to grow into a single desktop/bootable workflow for inspecting drives, rescuing readable sectors, recovering files, repairing filesystems, assessing media reliability and measuring maintenance outcomes. **It does not yet do all of those things**. The current supported desktop CLI runs from Python 3.10+ without rebooting; the historical Rust BIOS/UEFI code remains experimental and is not the desktop recovery engine. A Tkinter graphical interface now connects the supported desktop features.
 
 **Release status: PRIVATE TEST ONLY.** This implementation has synthetic unit tests but no validated Windows/macOS physical-device rescue, no physically failing-disk recovery benchmarks and no verified firmware-level remediation.
+
+## Install and run (desktop, without restarting)
+
+```bash
+cd desktop
+python -m pip install .
+python -m driverepair_desktop gui
+# or: driverepair-gui
+```
+
+`tkinter` may require your OS Python/Tk package. Windows and macOS can use regular-file recovery and read-only external-drive scanning; Linux also has experimental physical-disk image rescue.
 
 ## Implemented desktop commands
 
@@ -18,9 +29,13 @@ DriveRepair is intended to grow into a single desktop/bootable workflow for insp
 | `benchmark-image` / `benchmark-external` | Read throughput, percentile latency and slow-zone measurements | None |
 | `compare-benchmarks` | Compare two same-source benchmark JSON files; *does not prove improved lifespan* | None |
 | `carve-image` | Extract intact PNGs with CRC checks; best-effort JPEGs from disk images | None to image; output files created |
+| `undelete-fat32` | Recover contiguous, apparently unallocated FAT32 deleted files; names/content unverified | None to image; output files created |
+| `verify-images` | Byte-compare a stable source image and recovered image; report SHA-256/mismatches | None |
+| `check-ext-image` | Non-modifying ext2/3/4 filesystem check through e2fsck | None |
+| `repair-ext-image` | Clone ext filesystem image and run e2fsck repair on **the copy** | None to original; copy modified |
 | `salvage-zip` | Recover CRC-valid, intact ZIP members even if other ZIP members are corrupt | None to archive; output files created |
 
-**Not yet implemented:** full NTFS/exFAT/APFS/ext4 undelete, partition-table repair, damaged-file reconstruction without redundant copies, production-ready raw sector remapping or media refresh, secure erase, physical-wear reversal, an integrated GUI, signed native installers, and a fully bootable modern rescue environment. Optional `health` uses local `smartctl` when present; absence or `unknown` does not mean healthy.
+**Not yet implemented:** NTFS/exFAT/APFS/ext4 undelete, fragmented FAT32 recovery, whole-disk partition-table repair, damaged-file reconstruction without redundancy, production-ready hardware media refresh, physical-wear reversal, native signed installers, and a fully integrated modern bootable environment. The desktop GUI is present but needs real-platform testing. Optional `health` uses local `smartctl` when present; absence or `unknown` does not mean healthy.
 
 ## Get started
 
@@ -45,7 +60,7 @@ See [desktop guide](desktop/README.md), [project status](docs/PROJECT_STATUS.md)
 ## Safety
 
 - Diagnostics and rescue use read-only source handles. All writes go to **new output files**.
-- No command in the supported desktop CLI rewrites/reassigns/erases physical sectors.
+- No command in the supported desktop CLI rewrites/reassigns/erases physical sectors. `repair-ext-image` repairs a **new output copy** using optional `e2fsck`.
 - Read errors can be recoverable later; continued reads and SMART queries can stress or wake a mechanically failing drive. For valuable failing media, professional recovery or a proven imaging tool may be preferable.
 - Image-first recovery does not magically reconstruct lost data or reverse wear. The user must verify backups and destination identity.
 - **This code has not undergone physical-hardware validation or security review sufficient for public release.**

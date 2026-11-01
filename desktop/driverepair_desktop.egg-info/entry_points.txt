@@ -1,0 +1,3 @@
+[console_scripts]
+driverepair-desktop = driverepair_desktop.cli:main
+driverepair-gui = driverepair_desktop.gui:launch

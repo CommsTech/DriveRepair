@@ -2,6 +2,14 @@
 
 **PRIVATE TEST ONLY. PUBLIC RELEASE NOT APPROVED.**
 
+## Desktop development update — 0.2.0
+
+- GUI: implemented with stdlib Tk and CLI subprocess workers, not yet smoke-tested on physical Windows/macOS/Linux desktops.
+- FAT32 undelete: implemented for plausibly contiguous, unallocated cluster sequences from raw volume or MBR FAT32 image; every recovered file marked **UNVERIFIED**. Does not recover original first filename letter, fragmented or overwritten files.
+- Image correctness: added whole-file SHA-256 and bytewise comparison against a stable original image; refuses sparse/incomplete recovery journals.
+- Filesystem repair: implemented an ext2/3/4 workflow that clones a regular filesystem image and runs installed `e2fsck -f -y` **only on the clone**, after explicit acknowledgment. No physical-source writes or in-place drive repair.
+- The expanded synthetic suite passes 65 tests in this environment; no actual HDD/SSD hardware tests and no Rust boot build were performed here.
+
 ## Verified in source and synthetic tests
 
 - External-drive discovery (existing mock tests), read-only surface scans.
@@ -11,7 +19,7 @@
 - Optional smartctl JSON health snapshots with unknown/failing status handling; no silent healthy result from missing data.
 - PNG/JPEG signature carving from regular-file images, with PNG chunk CRC verification.
 - Intact-member extraction from partially corrupted ZIP archives using standard-library ZIP CRC verification.
-- Windows host portability for image workflows: binary `O_BINARY` opens, portable `pwrite` fallback; **48 unit tests passed** on Windows workstation (2026-11-01).
+- Windows host portability for image workflows: binary `O_BINARY` opens, portable `pwrite` fallback; **65 unit tests passed** on Windows workstation (2026-11-01).
 
 ## Not verified
 
@@ -36,4 +44,4 @@ P2: Build metadata-aware undelete on FAT/exFAT/NTFS/ext4/APFS as read-only plugi
 
 P3: Develop a **separately authorized** media-refresh / targeted-remap experiment only for backed-up, non-critical disks; evaluate outcome using randomized before/after measurements and drive health indicators. Do not market improvements as physical-wear reversal.
 
-P4: Native desktop GUI, properly signed installers, portable bootable Linux distribution, reproducible builds and release docs.
+P4: Validate desktop GUI on real Windows/macOS/Linux, provide signed native installers, bootable Linux distribution, reproducible builds and release docs.

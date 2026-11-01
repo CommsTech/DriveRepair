@@ -1,55 +1,73 @@
-# DriveRepair Desktop (experimental)
+# DriveRepair desktop (0.2.0, experimental)
 
-Standard-library Python 3.10+ CLI; optional smartctl executable for health snapshots. Windows, macOS and Linux **do not need a reboot** for supported scanning, read benchmarks, image rescue, image carving and ZIP salvage. Only **Linux** currently permits experimental rescue from a real external disk, with mandatory read-risk acknowledgment and destination-block-device separation checks. Elevated privileges are usually needed for raw-disk reads.
+DriveRepair provides a **native-desktop graphical interface** and a programmable CLI on Python 3.10+ for Windows, macOS and Linux. It runs **without rebooting**. The interface is Tk (`tkinter`, included in many Python installs but an extra OS package on some Linux distributions). It is not a signed Windows `.exe`, macOS `.app`, or bootable ISO.
 
-## Commands
+## Install and launch
 
 ```bash
 cd desktop
-python3 -m driverepair_desktop list
-python3 -m driverepair_desktop health --device linux:/dev/sdX --json  # requires smartctl
-python3 -m driverepair_desktop scan --device linux:/dev/sdX --mode sample
-python3 -m driverepair_desktop benchmark-external --device linux:/dev/sdX --ack-risk --json > before.json
-python3 -m driverepair_desktop rescue-external --device linux:/dev/sdX --output /mnt/other-disk/recovered.img --ack-risk --json
-python3 -m driverepair_desktop rescue-image --image disk-original.img --output disk-copy.img --json
-python3 -m driverepair_desktop rescue-image --image disk-original.img --output disk-copy.img --resume --retry-missing --json
-python3 -m driverepair_desktop carve-image --image disk-copy.img --output-dir carved-files --json
-python3 -m driverepair_desktop salvage-zip --archive damaged.zip --output-dir recovered-zip-files --json
-python3 -m driverepair_desktop compare-benchmarks --before before.json --after after.json
+python -m pip install .
+python -m driverepair_desktop gui
+# or: driverepair-gui
 ```
 
-SMART mode reads telemetry, does not start drive self-tests, but can wake sleeping drives. A passed SMART flag is not proof of perfect health.
+Run with `python3` on systems where `python` is Python 2 or not present. If Tk is unavailable, use `python -m driverepair_desktop --help` (no GUI dependency is required for the CLI). Linux packages may call Tk `python3-tk`. You can also run directly from this folder without installation.
 
-Substitute the **real discovered identifier**, never blindly type `/dev/sdX`. On Windows use `py -3 -m driverepair_desktop`; identifiers resemble `windows:PhysicalDrive2`. On macOS use `python3` and identifiers resemble `macos:disk4`.
+## Functional capabilities
 
-**For live rescue on Linux**, the destination must be a **new regular file on a physically separate mounted block device**. The command verifies sysfs ancestry and fails closed if it cannot prove separation (for example network, tmpfs or unsupported mapping). The system drive may be the destination if distinct and sufficiently large. There is no direct disk-to-disk cloning mode.
+| Command | Result | Writes source disk? | Prerequisites / limits |
+|---|---|---|---|
+| `list` | Enumerate conservatively filtered external physical whole disks | No | Host OS discovery tools |
+| `scan` | Read-only sampled/full external-disk scans | No | OS disk read permission |
+| `health` | SMART/NVMe device-health snapshot | No | Optional `smartctl`; drive/bridge support varies |
+| `benchmark-external` | Sampled/full read performance | No | Explicit acknowledgment; can stress failing media |
+| `rescue-external` | Image readable regions of external disk | No to source | **Linux only**; separate physical destination verified |
+| `scan-image` | Readability scan of a regular-file image | No | Any supported desktop OS |
+| `rescue-image` | Sparse image rescue, journal, resume, bounded retry | No | New destination image, same source on resume |
+| `verify-images` | Byte-for-byte comparison and SHA-256 against stable original file | No | Original source file must still be readable/stable |
+| `benchmark-image` | Regular-image read metrics | No | Cache affected |
+| `carve-image` | PNG CRC-validated / heuristic JPEG carving | No | May include undeleted or fragmented content |
+| `undelete-fat32` | Recover plausible contiguous FAT32 deleted files | No | Raw FAT32 volume or MBR FAT32 partition image |
+| `salvage-zip` | CRC-validated intact ZIP members | No | ZIP central directory still readable |
+| `check-ext-image` | `e2fsck -f -n` read-only ext2/3/4 filesystem check | No | `e2fsck` from e2fsprogs installed |
+| `repair-ext-image` | Clone ext2/3/4 image and run `e2fsck -f -y` on the **clone only** | No | `e2fsck`, new path, `--ack-repair` |
 
-## Recovery data interpretation
+**Critical distinction:** Undelete is *speculative*. FAT32 directory entries preserve the size and starting cluster, but not the first filename character. A contiguous unallocated region can already have been overwritten or may originally have been fragmented. Every file is marked **UNVERIFIED**. Recovered image sectors likewise are not independently correct unless compared to known-good hashes/data.
 
-- The journal `<output>.rescue.json` is mandatory. `cursor` marks completed first-pass acquisition, `missing_ranges` contains unreadable/unverified extents, and `retry_pending_ranges` contains still-unattempted targeted retries.
-- `completed` means the operating system returned bytes for all requested ranges. It is **not** an end-to-end correctness proof without original hashes or other independent validation.
-- `completed_with_missing_data` means the output image is **incomplete**. Sparse holes are typically zero when read, but **must never be reported as recovered zeros**.
-- `retry_in_progress` or `in_progress` indicates a resumable partial operation, provided the same source identity remains accessible.
-- The first pass prioritizes easy-to-read regions; failed chunks remain unknown until an explicitly requested targeted retry, which uses bounded subdivision. This is not yet benchmarked against established tools.
-- Image source identity includes filesystem metadata; modifications to the source cause resume to refuse stale journals.
-
-## Carving/ZIP limitations
-
-- PNG carving validates per-chunk CRC and IEND, but **does not reconstruct damaged chunks** or prove an image is visually correct.
-- JPEG carving looks for a start signature and end marker; embedded markers or fragmentation can produce false positives.
-- Carving may find files still present in a filesystem as well as deleted files. It does not recover original names, folder structures or fragmented file chains.
-- ZIP salvage requires an intact central directory and checks individual member CRCs. It cannot recover members when the central directory is lost. ZIP member filenames are sanitized and flattened to avoid traversal.
-- All output directories are newly created; no existing destination is overwritten.
-
-## Benchmark limitations
-
-Read benchmarks include percentile latencies and ten device zones. Results depend on caching, background I/O, transport, power management, temperature and filesystem state. The `compare-benchmarks` command requires the same device fingerprint and comparable run coverage. **No result is evidence of increased NAND program/erase endurance or repaired heads/platter damage.**
-
-## Tests and packaging
+## Examples
 
 ```bash
-python3 -m unittest discover -s tests -v
-python3 -m compileall -q driverepair_desktop
+python -m driverepair_desktop list
+python -m driverepair_desktop scan --device linux:/dev/sdX --mode sample --json
+python -m driverepair_desktop rescue-image --image input.img --output rescued.img --json
+python -m driverepair_desktop rescue-image --image input.img --output rescued.img --resume --retry-missing --json
+python -m driverepair_desktop verify-images --image input.img --output rescued.img --json
+python -m driverepair_desktop carve-image --image rescued.img --output-dir recovered_photos --json
+python -m driverepair_desktop undelete-fat32 --image fat32.img --output-dir deleted_files --json
+python -m driverepair_desktop salvage-zip --archive broken.zip --output-dir valid_members --json
+python -m driverepair_desktop check-ext-image --image ext4_volume.img --json
+python -m driverepair_desktop repair-ext-image --image ext4_volume.img --output ext4_repaired_copy.img --ack-repair --json
 ```
 
-Hardware-free tests are not substitutes for controlled Windows, macOS and Linux device tests. There is no signed standalone installer or production-quality GUI yet.
+Use **IDs reported by `list`**, not a guessed device path. `rescue-external` currently requires a separately mounted physical destination on Linux and fails closed on unsupported storage layouts. Windows/macOS physical-disk rescue is **not implemented**; image-based recovery and external-disk scans are available without restarting.
+
+## Safety and fidelity
+
+- No supported CLI operation opens a physical source drive for writing. Filesystem repair modifies a **newly created image copy**, never the input image. There is no in-place drive rejuvenation/remapping yet.
+- Any attempt to recover an unstable drive adds read stress. When the data is irreplaceable or the drive makes mechanical noises, consult a professional before repeated scans/retries.
+- The `.rescue.json` journal is required to interpret missing/sparse sectors. **A zero in a sparse rescue output is not evidence of successfully recovered zeroes**. `verify-images` explicitly refuses incomplete recovery journals.
+- A byte-exact comparison to a known source image is not evidence that the original media was free of corruption.
+- The ext repair command only accepts *unpartitioned ext filesystem images*. It rejects partitioned whole-disk images; do not use it on mounted or active block devices. `e2fsck` repair can discard inconsistent metadata or file references **on the copy**. Preserve the original, the map, and any available backups.
+- No deleted-file recovery claims apply to APFS, exFAT, NTFS, ext4, or fragmented FAT32 files at this stage. ZIP salvage needs a usable central directory.
+- These are software tests and simulated media; actual desktop/raw-hardware validation is still outstanding.
+
+## Tests/build
+
+```bash
+cd desktop
+python -m unittest discover -s tests -v
+python -m compileall -q driverepair_desktop
+python -m pip wheel . --no-deps -w dist
+```
+
+The `.whl` is portable Python, **not** a native bundled executable. Windows, Linux and macOS should each undergo physical hardware compatibility and GUI smoke tests before public release.
