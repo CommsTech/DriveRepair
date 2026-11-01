@@ -302,7 +302,10 @@ def require_destructive_acknowledgements(
 
 def assert_stable_identity(expected: Device, observed: Device) -> None:
     if expected.fingerprint != observed.fingerprint:
-        raise RuntimeError("Patient identity changed (model/size/serial/bus/path)")
+        raise RuntimeError(
+            "Patient identity changed (model/size/serial/bus/path); "
+            "USB location/topology alone is ignored"
+        )
     if expected.size_bytes != observed.size_bytes or expected.sector_size != observed.sector_size:
         raise RuntimeError("Patient capacity or sector size changed")
 

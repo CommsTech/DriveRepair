@@ -66,6 +66,14 @@ class DiscoveryTests(unittest.TestCase):
         self.assertNotEqual(d.fingerprint,
                             Device(d.id, d.path, d.model, d.size_bytes, d.sector_size, d.bus, "xyz").fingerprint)
 
+    def test_identity_ignores_usb_location_flapping(self):
+        a = Device("windows:PhysicalDrive2", r"\\.\PhysicalDrive2", "SSD", 256060514304, 512,
+                   "usb", "0001", location="Bus 0 Port 0")
+        b = Device("windows:PhysicalDrive2", r"\\.\PhysicalDrive2", "SSD", 256060514304, 512,
+                   "usb", "0001", location="Bus 0 Port 1")
+        self.assertEqual(a.fingerprint, b.fingerprint)
+        self.assertEqual(a.fingerprint[:12], b.fingerprint[:12])
+
 
 if __name__ == "__main__":
     unittest.main()
