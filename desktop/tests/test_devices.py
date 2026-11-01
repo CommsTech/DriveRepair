@@ -1,7 +1,6 @@
 import json
 import plistlib
 import unittest
-from unittest.mock import Mock
 
 from driverepair_desktop.devices import (
     Device, linux_devices, macos_devices, select_external_device, windows_devices,

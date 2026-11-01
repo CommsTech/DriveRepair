@@ -32,7 +32,7 @@ class RecoveryTests(unittest.TestCase):
 
     def recover(self, reader, **kw):
         return rescue_reader(reader, size=len(self.raw), sector=512,
-                             output=self.out, source_token='source-X',
+                             output=self.out, source_token='test-token-alpha',
                              chunk=1024, **kw)
 
     def test_clean_byte_exact_and_complete(self):
@@ -83,7 +83,7 @@ class RecoveryTests(unittest.TestCase):
         self.recover(PatternReader(self.raw), max_chunks=1)
         with self.assertRaises(RuntimeError):
             rescue_reader(PatternReader(self.raw), size=len(self.raw), sector=512,
-                          output=self.out, source_token='different',
+                          output=self.out, source_token='test-token-beta',
                           chunk=1024, resume=True)
 
     def test_invalid_journal_accounting_rejected(self):

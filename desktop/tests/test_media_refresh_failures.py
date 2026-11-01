@@ -214,6 +214,27 @@ class FaultTests(unittest.TestCase):
                     '--journal', self.journal, '--no-verify'])
         self.assertEqual(code, 1)
 
+    def test_live_requires_confirm_identity_flag(self):
+        """Physical writes must demand --confirm-identity before device open."""
+        import io
+        from contextlib import redirect_stderr
+        err = io.StringIO()
+        with redirect_stderr(err):
+            code = run([
+                'refresh-external', '--device', 'windows:PhysicalDrive99',
+                '--journal', self.journal, '--journal-backend', 'disk',
+                '--ack-risk', '--ack-destructive', '--ack-no-backup',
+                '--ack-data-loss-risk', '--ack-usb-bridge-risk',
+                '--ack-unvalidated-hardware',
+            ])
+        self.assertEqual(code, 1)
+        message = err.getvalue().lower()
+        self.assertTrue(
+            'confirm-identity' in message
+            or 'not found' in message
+            or 'inventory' in message
+        )
+
     def test_changed_journal_policy_rejected_on_resume(self):
         media = ImageReadWriter(str(self.patient))
         try:

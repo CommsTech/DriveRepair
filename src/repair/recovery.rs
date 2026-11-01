@@ -103,8 +103,7 @@ impl ErrorRecovery {
                     if attempt + 1 < self.max_attempts {
                         let delay = self.strategy.delay_for_attempt(attempt);
                         if delay > 0 {
-                            // EXPERIMENTAL/UNSUPPORTED: platform-specific delay not wired yet
-                            let _ = delay;
+                            std::thread::sleep(std::time::Duration::from_millis(delay as u64));
                         }
                     }
                 }

@@ -76,7 +76,7 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
   desktop-tests:
-    name: Read-only desktop scanner tests
+    name: Desktop synthetic safety and recovery tests
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -89,3 +89,6 @@ jobs:
       - name: Run offline synthetic tests (no real disks)
         working-directory: desktop
         run: python -m unittest discover -s tests -v
+
+      - name: Smoke check portable desktop build
+        run: python scripts/build_desktop.py --no-wheel

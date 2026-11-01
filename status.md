@@ -1,16 +1,17 @@
 # Status — 2026-11-01
 
-PRIVATE TEST ONLY — **0.2.8** readable PowerShell CLI dashboard.
+PRIVATE TEST ONLY — **0.2.9b1** + findings remediation.
 
-## CLI UX
+## Applied
 
-- In-place ANSI panel for live Adaptive/Full refresh (no scrolling probe wall)
-- Compact throttled line mode when redirected
-- Human `list` table + scan progress bar; ASCII-only status (no cp1252 mojibake)
-- Windows USB discovery falls back to WMIC/CIM when `Get-Disk` hangs after dock reseat
-- Internal one-off lab scripts stay local (not shipped in the repo tree)
+- Identity fingerprint + `--confirm-identity` for physical writes
+- Get-Disk-preferred Windows discovery; Linux-only RAM journal + power guard
+- Chunk sizes up to 64 MiB; lazy large-image rescue jobs
+- Repository Detective export validated: DriveRepair open findings repaired; nettech/RD rows out of scope
+- Unit suite: **106 tests, OK (skipped=2)**
 
-## Live notes
+## Live hardware notes
 
 - 12 TB Seagate USB: Adaptive disk-journal completed (0.2.7)
-- Sandisk 500 GB USB: reads OK; writes failed WinError 1117/121 (dock/drive) — not write-certified
+- SanDisk 500 GB #1/#2: reads OK; writes failed WinError 1117/121 (dock/drive)
+- SanDisk 500 GB #3 (`e8985dc11d53`): write probe OK; Adaptive completed with 0 rewritten (no slow probes) — supports hardware/dock fault on prior units, not a software write-path bug

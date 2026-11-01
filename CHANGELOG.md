@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.9b1 — Public-beta candidate safety and throughput groundwork (2026-11-01)
+
+- Repository Detective export `findings-20261101T180217Z.json`: DriveRepair open findings remediated (ambiguous loop names, unused imports, Rust retry sleep wired, recovery retry settle delay, opaque test tokens). Mixed-repo nettech/RD rows were not in scope. See `docs/FINDINGS_REMEDIATION_20261101.md`.
+- Live lab: third SanDisk SDSSDH3 500 G Adaptive with `--confirm-identity` completed; identical-rewrite probe OK (contrasts prior units’ WinError 1117/121).
+- Disk enumeration now reports a 12-character patient fingerprint, location hint (when supplied by OS), capacity, model, bus, and masked serial. Raw writes require the matching `--confirm-identity` fingerprint; duplicate USB-bridge serials are blocked.
+- Windows discovery now prefers Get-Disk (boot/system metadata) rather than WMI; legacy-only enumeration cannot authorize destructive refresh. Fixed a previously failing cross-platform mock.
+- Added **opt-in Linux RAM-filesystem journal** (`ramdisk`). The active original bytes and metadata are written to a verified tmpfs/ramfs, not unprotected Python heap, with swap fail-closed, local USB-connected NUT UPS or laptop battery checks, and power rechecks before every write. Requires `--ack-volatile-journal`, `--ack-dock-power-backed`, and the usual destructive acknowledgements. Does NOT survive host power loss/reboot and cannot prove the dock is actually UPS-backed.
+- Added read-only `ram-journal-check` command and GUI selection for disk vs RAM journal with extra warnings.
+- Increased selectable refresh and rescue chunk sizes up to 64 MiB for lab benchmarking; larger chunks trade more in-flight exposure for fewer syncs. GUI offers configurable chunk size, default 8 MiB.
+- Eliminated eager construction of all image rescue jobs: sparse 12 TB images now start in bounded memory. Fixed recursive Linux holder checks for active partitions.
+- New RAM-policy, interrupted-write, 12 TB sparse image tests. Baseline 98 tests included one previously failing Windows device discovery test; updated suite includes 105 tests (one platform skip on Linux).
+- Desktop build and CI portable-archive smoke check updated. Rust boot prototype remains experimental and is not used in the desktop I/O implementation.
+- No physical devices or UPS were tested. Public beta remains blocked pending real hardware, platform, and competitive benchmarks.
+
 ## 0.2.8 — Readable PowerShell CLI dashboard (2026-11-01)
 
 - In-place color panel for live refresh (Windows VT / PowerShell / Windows Terminal); no scrolling probe wall.

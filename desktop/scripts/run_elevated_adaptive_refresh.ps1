@@ -9,6 +9,7 @@
 # This script must be started elevated. It keeps Python on the console (no pipe).
 param(
     [Parameter(Mandatory=$true)][string]$Device,
+    [Parameter(Mandatory=$true)][string]$ConfirmIdentity,
     [int]$Samples = 96,
     [string]$Mode = "adaptive",
     [string]$JournalBackend = "disk",
@@ -64,6 +65,10 @@ Write-Host ""
 try { Stop-Transcript | Out-Null } catch {}
 Start-Transcript -Path $Log -Append | Out-Null
 
+if (-not $ConfirmIdentity -or $ConfirmIdentity.Length -ne 12) {
+    throw "Pass -ConfirmIdentity with the current 12-character identity_hint from list --json."
+}
+
 $pyArgs = @(
     "-3", "-u", "-m", "driverepair_desktop", "refresh-external",
     "--device", $Device,
@@ -76,6 +81,7 @@ $pyArgs = @(
     "--consistency-reads", "2",
     "--after-run", $AfterRun,
     "--live-dashboard",
+    "--confirm-identity", $ConfirmIdentity,
     "--ack-risk", "--ack-destructive", "--ack-no-backup", "--ack-data-loss-risk",
     "--ack-usb-bridge-risk", "--ack-unvalidated-hardware"
 )

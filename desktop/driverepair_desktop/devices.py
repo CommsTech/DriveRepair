@@ -25,11 +25,13 @@ class Device:
     sector_size: int
     bus: str
     serial: str = ""
+    location: str = ""
+    provenance: str = "native"
 
     @property
     def fingerprint(self) -> str:
         data = (self.id, self.path, self.model, str(self.size_bytes),
-                str(self.sector_size), self.bus, self.serial)
+                str(self.sector_size), self.bus, self.serial, self.location)
         return hashlib.sha256("\0".join(data).encode("utf-8")).hexdigest()
 
     def public(self) -> dict:
@@ -38,6 +40,9 @@ class Device:
             "id": self.id, "model": self.model, "size_bytes": self.size_bytes,
             "sector_size": self.sector_size, "bus": self.bus,
             "serial_suffix": ("***" + self.serial[-4:]) if self.serial else "unavailable",
+            "location": self.location or "not reported",
+            "discovery": self.provenance,
+            "identity_hint": self.fingerprint[:12],
         }
 
 
@@ -65,7 +70,7 @@ def _positive_int(value: object, default: int = 0) -> int:
 
 def linux_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
     command = ["lsblk", "--json", "--bytes", "--nodeps", "--output",
-               "PATH,TYPE,TRAN,HOTPLUG,RM,SIZE,LOG-SEC,MODEL,SERIAL"]
+               "PATH,TYPE,TRAN,HOTPLUG,RM,SIZE,LOG-SEC,MODEL,SERIAL,WWN,HCTL"]
     records = json.loads(run(command).decode("utf-8"))["blockdevices"]
     devices: list[Device] = []
     for record in records:
@@ -84,7 +89,8 @@ def linux_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
             continue
         devices.append(Device("linux:" + path, path,
                               str(record.get("model") or "Unknown disk").strip(),
-                              size, sector, bus, str(record.get("serial") or "").strip()))
+                              size, sector, bus, str(record.get("serial") or "").strip(),
+                              ("HCTL " + str(record["hctl"])) if record.get("hctl") else "", "lsblk"))
     return devices
 
 
@@ -108,17 +114,26 @@ def macos_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
         devices.append(Device("macos:" + disk, "/dev/r" + disk,
                               str(info.get("MediaName") or "External disk"),
                               size, sector, str(info.get("Protocol") or "external"),
-                              str(info.get("DiskUUID") or info.get("MediaUUID") or "")))
+                              str(info.get("DiskUUID") or info.get("MediaUUID") or ""),
+                              str(info.get("DeviceLocation") or "").strip(), "diskutil"))
     return devices
+
+
+def _invoke(run: Callable[..., bytes], command: list[str], timeout: float) -> bytes:
+    try:
+        return run(command, timeout=timeout)
+    except TypeError as exc:
+        if "unexpected keyword argument 'timeout'" not in str(exc):
+            raise
+        return run(command)
 
 
 def _windows_devices_from_get_disk(run: Callable[..., bytes]) -> list[Device]:
     # Preferred path when Storage cmdlets are healthy.
     script = ("Get-Disk | Select-Object Number,FriendlyName,SerialNumber,UniqueId,"
-              "Size,LogicalSectorSize,BusType,IsBoot,IsSystem,IsOffline | "
+              "Size,LogicalSectorSize,BusType,IsBoot,IsSystem,IsOffline,Location | "
               "ConvertTo-Json -Compress -Depth 3")
-    data = run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-               timeout=12)
+    data = _invoke(run, ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], 12)
     records = json.loads(data.decode("utf-8-sig"))
     if isinstance(records, dict):
         records = [records]
@@ -147,7 +162,8 @@ def _windows_devices_from_get_disk(run: Callable[..., bytes]) -> list[Device]:
         devices.append(Device(f"windows:PhysicalDrive{number}", path,
                               str(record.get("FriendlyName") or "External disk"),
                               size, sector, "usb" if bus in {"usb", "7"} else bus,
-                              str(record.get("SerialNumber") or record.get("UniqueId") or "")))
+                              str(record.get("SerialNumber") or record.get("UniqueId") or ""),
+                              str(record.get("Location") or "").strip(), "Get-Disk"))
     return devices
 
 
@@ -174,7 +190,7 @@ def _parse_usb_disk_records(records: list[dict]) -> list[Device]:
         model = str(record.get("Model") or record.get("FriendlyName") or "External USB disk").strip()
         serial = str(record.get("SerialNumber") or record.get("UniqueId") or "").strip()
         devices.append(Device(
-            f"windows:PhysicalDrive{number}", path, model, size, sector, "usb", serial,
+            f"windows:PhysicalDrive{number}", path, model, size, sector, "usb", serial, "", "legacy-inventory",
         ))
     return devices
 
@@ -186,8 +202,7 @@ def _windows_devices_from_cim(run: Callable[..., bytes]) -> list[Device]:
         "Select-Object Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector | "
         "ConvertTo-Json -Compress -Depth 3"
     )
-    data = run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-               timeout=20)
+    data = _invoke(run, ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], 20)
     records = json.loads(data.decode("utf-8-sig"))
     if isinstance(records, dict):
         records = [records]
@@ -196,11 +211,9 @@ def _windows_devices_from_cim(run: Callable[..., bytes]) -> list[Device]:
 
 def _windows_devices_from_wmic(run: Callable[..., bytes]) -> list[Device]:
     """Last-resort fallback: WMIC avoids nested PowerShell / Storage-cmdlet hangs."""
-    data = run(
+    data = _invoke(run,
         ["wmic", "diskdrive", "get",
-         "Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector", "/format:csv"],
-        timeout=20,
-    )
+         "Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector", "/format:csv"], 20)
     text = data.decode("utf-8-sig", errors="replace").strip()
     lines = [ln for ln in text.splitlines() if ln.strip()]
     if len(lines) < 2:
@@ -217,12 +230,12 @@ def _windows_devices_from_wmic(run: Callable[..., bytes]) -> list[Device]:
 
 
 def windows_devices(run: Callable[..., bytes] = _run) -> list[Device]:
-    # WMIC first: Get-Disk/CIM often hang or return empty right after USB dock reseat.
-    # Fall back to CIM then Get-Disk for environments without WMIC.
+    # Prefer authoritative Get-Disk: it identifies boot/system disks.
+    # Legacy enumeration remains informational and MUST NOT authorize patient writes.
     errors: list[str] = []
     last_empty: list[Device] | None = None
-    for finder in (_windows_devices_from_wmic, _windows_devices_from_cim,
-                   _windows_devices_from_get_disk):
+    for finder in (_windows_devices_from_get_disk, _windows_devices_from_cim,
+                   _windows_devices_from_wmic):
         try:
             found = finder(run)
             if found:

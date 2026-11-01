@@ -10,3 +10,5 @@
 8. True acoustic sensing unavailable over USB; mechanical* remains a latency/error proxy.
 9. BitLocker detection is signature-based on images; live PhysicalDrive inspect-encryption path still limited — prefer imaging then inspect.
 10. PowerShell must not pipe live dashboard stderr under ErrorAction Stop (kills UI).
+11. Some SanDisk SDSSDH3 500 G units on the current USB dock refuse writes (WinError 1117/121) while a third identical model passes write probe + Adaptive — treat as media/dock variance until interrupt matrix exists.
+12. Mixed Repository Detective exports that include `nettech` / `Repository-Detective` rows must be filtered by `RepoFullName` before DriveRepair remediation.

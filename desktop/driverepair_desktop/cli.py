@@ -33,6 +33,7 @@ from .media_refresh import (
     refresh_media,
     require_destructive_acknowledgements,
 )
+from .power_guard import VolatilePowerGuard, PowerGuardError
 from .refresh_display import RefreshDashboard
 from .progress_events import ProgressEmitter
 from .encryption import (
@@ -150,11 +151,11 @@ def parser() -> argparse.ArgumentParser:
                          help='Directory for the rolling journal; keep OFF the patient')
         cmd.add_argument('--mode', choices=['adaptive', 'full'], default='adaptive',
                          help='adaptive=refresh slow readable regions; full=whole surface (high risk)')
-        cmd.add_argument('--journal-backend', choices=['hybrid', 'disk', 'memory'], default='disk',
-                         help='disk=crash-resumable, required for live media; hybrid=RAM region (image tests only); '
-                              'memory=RAM region with tiny meta checkpoint (fastest, weakest resume)')
+        cmd.add_argument('--journal-backend', choices=['hybrid', 'disk', 'memory', 'ramdisk'], default='disk',
+                         help='disk=safest; ramdisk=Linux tmpfs plus verified live power, VOLATILE; '
+                              'hybrid/memory=only synthetic images; process-local RAM is unsafe on raw drives')
         cmd.add_argument('--resume', action='store_true')
-        cmd.add_argument('--chunk-mib', type=int, choices=[1, 2, 4, 8], default=1)
+        cmd.add_argument('--chunk-mib', type=int, choices=[1, 2, 4, 8, 16, 32, 64], default=1)
         cmd.add_argument('--max-errors', type=int, default=4096)
         cmd.add_argument('--consistency-reads', type=int, default=2,
                          help='Identical reads required before journaling a region (min 2)')
@@ -177,11 +178,22 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument('--ack-data-loss-risk', action='store_true',
                          help='Confirm understanding that in-place writes can destroy remaining recoverable data')
         if name == 'refresh-external':
+            cmd.add_argument('--confirm-identity', help='12-character fingerprint shown by list --json')
+            cmd.add_argument('--power-source', help='For volatile RAM: nut:UPSNAME (local USB NUT) or battery (Linux laptop)')
+            cmd.add_argument('--ack-volatile-journal', action='store_true',
+                             help='Accept complete original-sector journal loss on host crash/power failure')
+            cmd.add_argument('--ack-dock-power-backed', action='store_true',
+                             help='Confirm external USB dock is independently battery/UPS powered')
             cmd.add_argument('--ack-usb-bridge-risk', action='store_true',
                              help='Required for USB/dock patients: bridges may drop, hide SMART, or fake serials')
             cmd.add_argument('--ack-unvalidated-hardware', action='store_true',
                              help='Required: live hardware refresh is still unvalidated (sacrificial tests pending)')
         cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser('ram-journal-check', help='Validate Linux RAM mount + local UPS/battery; READ-ONLY')
+    cmd.add_argument('--journal', required=True, help='Proposed journal path under tmpfs/ramfs')
+    cmd.add_argument('--power-source', required=True, help='nut:UPSNAME or battery')
+    cmd.add_argument('--chunk-mib', type=int, choices=[1, 2, 4, 8, 16, 32, 64], default=8)
+    cmd.add_argument('--json', action='store_true')
     sub.add_parser('gui', help='Launch the desktop graphical interface')
     return cli
 
@@ -208,16 +220,20 @@ def _refresh_image_token(path: str) -> tuple[str, int]:
     return hashlib.sha256(repr(fields).encode()).hexdigest(), st.st_size
 
 
-def _validate_live_refresh_preflight(device, journal: str) -> None:
+def _validate_live_refresh_preflight(device, journal: str, *, ramdisk: bool = False) -> None:
     """Fail closed unless journal is on demonstrably separate storage."""
     if not device.serial:
         raise RuntimeError("Destructive refresh requires a stable hardware serial")
+    if sys.platform == 'win32' and device.provenance != 'Get-Disk':
+        raise RuntimeError('Live refresh requires verified Get-Disk discovery; legacy WMI inventory is read-only')
     if sys.platform.startswith("linux"):
         _verify_linux_patient_not_in_use(device)
         # The journal has not been created yet; inspect its nearest parent mount.
         check_path = os.path.join(os.path.dirname(os.path.abspath(journal)),
                                   "__driverepair_storage_check__")
-        _separate_linux_destination(device, check_path)
+        if not ramdisk:
+            _separate_linux_destination(device, check_path)
+        # RAM journal location validated with tmpfs+swap and power guard below.
     elif sys.platform == "win32":
         # Drive-letter destinations can be mapped to a disk number. Reject other
         # paths instead of guessing whether the journal shares the patient medium.
@@ -297,6 +313,20 @@ def _verify_linux_patient_not_in_use(device) -> None:
         raise RuntimeError('Cannot inspect source holders')
     if os.listdir(holders):
         raise RuntimeError('Source belongs to an active device-mapper/RAID stack')
+    # An unmounted partition can still be an active encrypted, RAID or LVM
+    # *component*. Checking only the whole-disk holders misses that hazard.
+    def check_child_holders(entry):
+        name = entry.get('name')
+        if not isinstance(name, str) or not name:
+            raise RuntimeError('Cannot identify patient child partition')
+        holder_path = os.path.join('/sys/class/block', name, 'holders')
+        if not os.path.isdir(holder_path):
+            raise RuntimeError(f'Cannot inspect active holders for {name}')
+        if os.listdir(holder_path):
+            raise RuntimeError(f'Patient device {name} is in use by a mapper/RAID/volume')
+        for child in entry.get('children') or []:
+            check_child_holders(child)
+    check_child_holders(records[0])
 
 
 def _run_extras(args) -> int:
@@ -306,6 +336,12 @@ def _run_extras(args) -> int:
         if latest.fingerprint != selected.fingerprint:
             raise RuntimeError('Patient device changed before SMART query')
         result = health_snapshot(selected)
+    elif args.command == 'ram-journal-check':
+        guard = VolatilePowerGuard(args.power_source, args.journal, args.chunk_mib * 1024 * 1024)
+        result = {'operation': 'ram_journal_check',
+                  **guard.check(force=True),
+                  'status': 'power_and_ram_verified',
+                  'note': 'This does not prove dock power, media health, or protection from host restart.'}
     elif args.command == 'compare-benchmarks':
         with open(args.before, encoding='utf-8') as f:
             before = json.load(f)
@@ -370,8 +406,8 @@ def _run_extras(args) -> int:
         is_device = args.command == 'refresh-external'
         if args.consistency_reads < 2:
             raise ValueError('--consistency-reads must be >= 2')
-        if is_device and args.journal_backend != 'disk':
-            raise ValueError('Physical-device refresh requires --journal-backend disk; RAM journals lose in-flight bytes after a crash')
+        if is_device and args.journal_backend not in {'disk', 'ramdisk'}:
+            raise ValueError('Physical refresh supports only disk or explicitly verified ramdisk journaling')
         if is_device and args.no_verify:
             raise ValueError('Physical-device refresh cannot disable read-back verification')
         # Paint something immediately — device open / identity checks can take seconds.
@@ -383,6 +419,7 @@ def _run_extras(args) -> int:
                 file=sys.stderr, flush=True,
             )
         device_label = ""
+        guard = None
         if is_device:
             selected = select_external_device(args.device)
             device_label = f"{selected.id}  {selected.model[:28]}  {cui.fmt_bytes(selected.size_bytes)}"
@@ -397,7 +434,20 @@ def _run_extras(args) -> int:
                 require_unvalidated=True,
             )
             assert_patient_idle_windows(selected)
-            _validate_live_refresh_preflight(selected, args.journal)
+            if not args.confirm_identity or args.confirm_identity != selected.fingerprint[:12]:
+                raise ValueError('Physical writes require --confirm-identity with the current list --json identity_hint')
+            # Duplicate bridge serials can identify distinct drives; fail closed.
+            for other in list_external_devices():
+                if other.id != selected.id and other.serial == selected.serial:
+                    raise RuntimeError('More than one disk reports the same bridge serial; identity is ambiguous')
+            if args.journal_backend == 'ramdisk':
+                if not args.ack_volatile_journal or not args.ack_dock_power_backed:
+                    raise ValueError('RAM journal requires --ack-volatile-journal and --ack-dock-power-backed')
+                guard = VolatilePowerGuard(args.power_source or '', args.journal,
+                                           args.chunk_mib * 1024 * 1024)
+                guard.check(force=True)
+            _validate_live_refresh_preflight(selected, args.journal,
+                                             ramdisk=args.journal_backend == 'ramdisk')
             reread = select_external_device(args.device)
             assert_stable_identity(selected, reread)
             if args.live_dashboard:
@@ -480,6 +530,7 @@ def _run_extras(args) -> int:
                 adaptive_samples=args.adaptive_samples, slow_multiplier=args.slow_multiplier,
                 journal_backend=args.journal_backend, auto_escalate=args.auto_escalate,
                 progress=check_progress, identity_check=identity_check,
+                pre_write_check=(lambda: guard.check()) if guard else None,
             )
             if not args.json:
                 dashboard.finish(result)
@@ -567,7 +618,8 @@ def _run_extras(args) -> int:
         return 0 if result.get('status') == 'completed' else 2
     return 0 if result.get('status') in {'completed', 'comparison_only', 'smart_passed_limited',
                                          'clean', 'corrected', 'corrected_reboot_flag', 'verified_byte_exact',
-                                         'completed_with_skips_or_verify_failures'} else 2
+                                         'completed_with_skips_or_verify_failures',
+                                         'power_and_ram_verified'} else 2
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -581,6 +633,7 @@ def run(argv: list[str] | None = None) -> int:
                             'benchmark-external', 'carve-image', 'salvage-zip',
                             'undelete-fat32', 'verify-images', 'check-ext-image', 'repair-ext-image',
                             'compare-benchmarks', 'health', 'refresh-image', 'refresh-external',
+                            'ram-journal-check',
                             'inspect-encryption'}:
             return _run_extras(args)
         if args.command == "list":
@@ -595,13 +648,14 @@ def run(argv: list[str] | None = None) -> int:
                 out = sys.stderr if args.json else sys.stdout
                 cui.enable_windows_vt()
                 print(cui.paint("External whole disks", cui.BOLD, cui.CYAN, stream=out), file=out)
-                print(f"{'ID':<28} {'SIZE':>10} {'BUS':<6} {'SERIAL':<10} MODEL", file=out)
-                print("-" * 78, file=out)
+                print(f"{'ID':<28} {'SIZE':>10} {'BUS':<9} {'SERIAL':<10} {'VERIFY':<12} MODEL / LOCATION", file=out)
+                print("-" * 108, file=out)
                 for device in devices:
                     pub = device.public()
                     print(
                         f"{device.id:<28} {cui.fmt_bytes(device.size_bytes):>10} "
-                        f"{device.bus:<6} {pub['serial_suffix']:<10} {device.model}",
+                        f"{device.bus:<9} {pub['serial_suffix']:<10} {pub['identity_hint']:<12} "
+                        f"{device.model} / {pub['location']}",
                         file=out,
                     )
             return 0
