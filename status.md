@@ -1,9 +1,8 @@
 # Status — 2026-11-01
 
-PRIVATE TEST ONLY. DriveRepair **0.2.1** adds experimental gated in-place refresh.
+PRIVATE TEST ONLY. **0.2.2** rolling-journal In-Place Media Refresh.
 
-- Unit tests expanded for media refresh (image path)
-- `refresh-external` available after multi-ack; USB dock patients require `--ack-usb-bridge-risk`
-- physical validation of refresh: NOT DONE
-- does NOT claim wear reversal; unread sectors are skipped, not invented
-- Rust boot environment: experimental, not verified
+- Unit tests including fault-injected WRITING resume: PASS
+- Modes: `adaptive` (default), `full`
+- Live 12 TB USB patient: **not cleared** — requires sacrificial interrupt/USB-disconnect validation first
+- Rolling journal ≠ full backup; unread/inconsistent sectors skipped

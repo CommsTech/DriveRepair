@@ -34,7 +34,7 @@ python -m driverepair_desktop gui
 | `check-ext-image` | Non-modifying ext2/3/4 filesystem check through e2fsck | None |
 | `repair-ext-image` | Clone ext filesystem image and run e2fsck repair on **the copy** | None to original; copy modified |
 | `salvage-zip` | Recover CRC-valid, intact ZIP members even if other ZIP members are corrupt | None to archive; output files created |
-| `refresh-image` / `refresh-external` | **EXPERIMENTAL DESTRUCTIVE:** rewrite only fully readable sectors onto the same media; skipped ranges are left untouched | **Writes patient media** after multi-flag acknowledgement |
+| `refresh-image` / `refresh-external` | **In-Place Media Refresh (experimental):** rolling journal `SAVED→WRITING→VERIFIED→COMMITTED`; `--mode adaptive` (default) or `full`; skips unreadable/inconsistent regions | **Writes patient media** after multi-flag acknowledgement; journal holds only the active region |
 
 **Not yet implemented:** NTFS/exFAT/APFS/ext4 undelete, fragmented FAT32 recovery, whole-disk partition-table repair, damaged-file reconstruction without redundancy, proven hardware media rejuvenation, physical-wear reversal, native signed installers, and a fully integrated modern bootable environment. In-place refresh is experimental and does **not** claim wear reversal. The desktop GUI is present but needs real-platform testing. Optional `health` uses local `smartctl` when present; absence or `unknown` does not mean healthy.
 
@@ -62,7 +62,7 @@ See [desktop guide](desktop/README.md), [project status](docs/PROJECT_STATUS.md)
 
 - Diagnostics and rescue use read-only source handles. All writes go to **new output files**.
 - Default recovery commands do not rewrite physical sectors. `repair-ext-image` repairs a **new output copy** using optional `e2fsck`.
-- `refresh-external` / `refresh-image` are opt-in destructive exceptions: they require `--ack-destructive --ack-no-backup --ack-data-loss-risk` (and `--ack-usb-bridge-risk` on USB/dock patients). They rewrite only sectors that fully read; they never invent zeros for unread ranges.
+- `refresh-external` / `refresh-image` are a dedicated In-Place Media Refresh mode alongside image recovery—not a replacement for it. They use a rolling journal on healthy storage, require multi-flag acknowledgement (plus `--ack-unvalidated-hardware` for live disks), rewrite only consistently readable regions, and never invent data for unread sectors. A rolling journal is **not** a full backup.
 - Read errors can be recoverable later; continued reads and SMART queries can stress or wake a mechanically failing drive. For valuable failing media, professional recovery or a proven imaging tool may be preferable.
 - Image-first recovery does not magically reconstruct lost data or reverse wear. The user must verify backups and destination identity.
 - **This code has not undergone physical-hardware validation or security review sufficient for public release.**
