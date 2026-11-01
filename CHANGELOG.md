@@ -2,6 +2,8 @@
 
 ## 0.2.9b1 — Public-beta candidate safety and throughput groundwork (2026-11-01)
 
+- `carve-image` now supports **MP4**, **PDF**, legacy Office **OLE** (`.doc`/`.xls`), and OOXML **`.docx`/`.xlsx`** in addition to PNG/JPEG. Plain `.txt` is intentionally not signature-carved (too many false positives); recover named deleted text with `undelete-fat32` after imaging. Windows raw volume reads use 512-byte aligned I/O.
+- New **`detect-filesystems`** and unified **`recover-image`** (`--mode auto|filesystem|raw`): FAT32/NTFS/exFAT filesystem undelete plus RAW signature carve. Btrfs/ZFS/APFS/ext are detected and routed to RAW until FS-aware undelete exists.
 - Repository Detective export `findings-20261101T180217Z.json`: DriveRepair open findings remediated (ambiguous loop names, unused imports, Rust retry sleep wired, recovery retry settle delay, opaque test tokens). Mixed-repo nettech/RD rows were not in scope. See `docs/FINDINGS_REMEDIATION_20261101.md`.
 - Live lab: third SanDisk SDSSDH3 500 G Adaptive with `--confirm-identity` completed; identical-rewrite probe OK (contrasts prior units’ WinError 1117/121).
 - Disk enumeration now reports a 12-character patient fingerprint, location hint (when supplied by OS), capacity, model, bus, and masked serial. Raw writes require the matching `--confirm-identity` fingerprint; duplicate USB-bridge serials are blocked.

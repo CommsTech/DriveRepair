@@ -26,8 +26,10 @@ Run with `python3` on systems where `python` is Python 2 or not present. If Tk i
 | `rescue-image` | Sparse image rescue, journal, resume, bounded retry | No | New destination image, same source on resume |
 | `verify-images` | Byte-for-byte comparison and SHA-256 against stable original file | No | Original source file must still be readable/stable |
 | `benchmark-image` | Regular-image read metrics | No | Cache affected |
-| `carve-image` | PNG CRC-validated / heuristic JPEG carving | No | May include undeleted or fragmented content |
-| `undelete-fat32` | Recover plausible contiguous FAT32 deleted files | No | Raw FAT32 volume or MBR FAT32 partition image |
+| `carve-image` | PNG/JPEG/MP4/PDF/Office (OLE+OOXML) signature carving | No | May include undeleted or fragmented content; plain `.txt` not carved |
+| `detect-filesystems` | Identify FAT/NTFS/exFAT/ext/Btrfs/ZFS/APFS on an image | No | Signature-based; GPT/MBR aware |
+| `recover-image` | Unified FS undelete + RAW carve (`auto`/`filesystem`/`raw`) | No | FS undelete: FAT32/NTFS/exFAT; Btrfs/ZFS/APFS/ext → RAW fallback |
+| `undelete-fat32` | Recover plausible contiguous FAT32 deleted files (incl. `.txt`/docs by name) | No | Raw FAT32 volume or MBR FAT32 partition image |
 | `salvage-zip` | CRC-validated intact ZIP members | No | ZIP central directory still readable |
 | `check-ext-image` | `e2fsck -f -n` read-only ext2/3/4 filesystem check | No | `e2fsck` from e2fsprogs installed |
 | `repair-ext-image` | Clone ext2/3/4 image and run `e2fsck -f -y` on the **clone only** | No | `e2fsck`, new path, `--ack-repair` |
@@ -43,6 +45,8 @@ python -m driverepair_desktop rescue-image --image input.img --output rescued.im
 python -m driverepair_desktop rescue-image --image input.img --output rescued.img --resume --retry-missing --json
 python -m driverepair_desktop verify-images --image input.img --output rescued.img --json
 python -m driverepair_desktop carve-image --image rescued.img --output-dir recovered_photos --json
+python -m driverepair_desktop detect-filesystems --image rescued.img --json
+python -m driverepair_desktop recover-image --image rescued.img --output-dir recovered --mode auto --json
 python -m driverepair_desktop undelete-fat32 --image fat32.img --output-dir deleted_files --json
 python -m driverepair_desktop salvage-zip --archive broken.zip --output-dir valid_members --json
 python -m driverepair_desktop check-ext-image --image ext4_volume.img --json

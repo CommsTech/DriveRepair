@@ -22,6 +22,7 @@ from .archive_recovery import salvage_zip
 from .health import health_snapshot
 from .recovery import rescue_reader
 from .fat32_undelete import undelete_fat32
+from .filesystems import detect_filesystems, recover_image
 from .filesystem_repair import check_ext_image, repair_ext_image
 from .verification import verify_images
 from .media_refresh import (
@@ -86,10 +87,17 @@ def parser() -> argparse.ArgumentParser:
         if name == "benchmark-external":
             cmd.add_argument("--ack-risk", action="store_true")
         cmd.add_argument("--json", action="store_true")
-    cmd = sub.add_parser("carve-image", help="Extract intact JPEG/PNG signatures from a regular-file image")
+    cmd = sub.add_parser(
+        "carve-image",
+        help="Extract JPEG/PNG/MP4/PDF/Office signatures from a regular-file image",
+    )
     cmd.add_argument("--image", required=True)
     cmd.add_argument("--output-dir", required=True)
-    cmd.add_argument("--formats", nargs="+", choices=["png", "jpeg"], default=["png", "jpeg"])
+    cmd.add_argument(
+        "--formats", nargs="+",
+        choices=["png", "jpeg", "mp4", "pdf", "ole", "doc", "xls", "docx", "xlsx"],
+        default=["png", "jpeg"],
+    )
     cmd.add_argument("--max-files", type=int, default=100)
     cmd.add_argument("--max-file-mib", type=int, default=32)
     cmd.add_argument("--allow-incomplete-image", action="store_true")
@@ -128,6 +136,29 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument('--allow-incomplete-image', action='store_true')
     cmd.add_argument('--ack-encrypted-volume', action='store_true',
                      help='Allow undelete even if BitLocker/LUKS signatures are present (usually wrong)')
+    cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser(
+        'detect-filesystems',
+        help='Identify FAT/NTFS/exFAT/ext/Btrfs/ZFS/APFS signatures on a disk image',
+    )
+    cmd.add_argument('--image', required=True)
+    cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser(
+        'recover-image',
+        help='Unified recovery: FS undelete (FAT32/NTFS/exFAT) and/or RAW signature carve',
+    )
+    cmd.add_argument('--image', required=True)
+    cmd.add_argument('--output-dir', required=True)
+    cmd.add_argument('--mode', choices=['auto', 'filesystem', 'raw'], default='auto',
+                     help='auto=FS undelete when supported + RAW; filesystem=FS only; raw=carve only')
+    cmd.add_argument('--max-files', type=int, default=100)
+    cmd.add_argument('--max-file-mib', type=int, default=128)
+    cmd.add_argument('--formats', nargs='+',
+                     choices=['png', 'jpeg', 'mp4', 'pdf', 'ole', 'doc', 'xls', 'docx', 'xlsx'],
+                     default=['png', 'jpeg', 'mp4', 'pdf', 'ole', 'docx', 'xlsx'],
+                     help='RAW carve formats when mode is auto/raw')
+    cmd.add_argument('--allow-incomplete-image', action='store_true')
+    cmd.add_argument('--ack-encrypted-volume', action='store_true')
     cmd.add_argument('--json', action='store_true')
     cmd = sub.add_parser('check-ext-image', help='Read-only ext2/3/4 filesystem check using e2fsck -n')
     cmd.add_argument('--image', required=True)
@@ -372,6 +403,32 @@ def _run_extras(args) -> int:
         result = undelete_fat32(args.image, args.output_dir, max_files=args.max_files,
                                 max_file_mib=args.max_file_mib,
                                 allow_incomplete=args.allow_incomplete_image)
+        if enc:
+            result = {**result, "encryption_warnings": [f.public() for f in enc],
+                      "guidance": encryption_guidance(enc)}
+    elif args.command == 'detect-filesystems':
+        detected = detect_filesystems(args.image)
+        result = {
+            "schema": 1,
+            "operation": "detect_filesystems",
+            "status": "completed",
+            "image": args.image,
+            "filesystems": [
+                {"kind": d.kind, "offset": d.offset, "size_hint": d.size_hint,
+                 "confidence": d.confidence, "notes": d.notes}
+                for d in detected
+            ],
+        }
+    elif args.command == 'recover-image':
+        enc = require_plaintext_filesystem(
+            args.image, ack_encrypted_volume=args.ack_encrypted_volume,
+            operation="unified image recovery",
+        )
+        result = recover_image(
+            args.image, args.output_dir, mode=args.mode, max_files=args.max_files,
+            max_file_mib=args.max_file_mib, allow_incomplete=args.allow_incomplete_image,
+            raw_formats=tuple(args.formats),
+        )
         if enc:
             result = {**result, "encryption_warnings": [f.public() for f in enc],
                       "guidance": encryption_guidance(enc)}
@@ -631,7 +688,8 @@ def run(argv: list[str] | None = None) -> int:
             return 0
         if args.command in {'rescue-image', 'rescue-external', 'benchmark-image',
                             'benchmark-external', 'carve-image', 'salvage-zip',
-                            'undelete-fat32', 'verify-images', 'check-ext-image', 'repair-ext-image',
+                            'undelete-fat32', 'detect-filesystems', 'recover-image',
+                            'verify-images', 'check-ext-image', 'repair-ext-image',
                             'compare-benchmarks', 'health', 'refresh-image', 'refresh-external',
                             'ram-journal-check',
                             'inspect-encryption'}:

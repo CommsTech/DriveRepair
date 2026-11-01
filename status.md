@@ -1,6 +1,6 @@
 # Status — 2026-11-01
 
-PRIVATE TEST ONLY — **0.2.9b1** + findings remediation.
+PRIVATE TEST ONLY — **0.2.9b1** + findings remediation + multi-FS recover.
 
 ## Applied
 

@@ -2,7 +2,7 @@
 
 1. No physical-disk validation (disconnection, power-loss, destination isolation, timeouts).
 2. External rescue still Linux-only; Windows/macOS need equivalent safe acquisition paths.
-3. FAT32 undelete is contiguous/unallocated only; no NTFS/exFAT/APFS/ext4 undelete.
+3. FS undelete: FAT32 + NTFS + exFAT (contiguous/simple) shipped via `recover-image`; Btrfs/ZFS/APFS/ext still RAW-only; fragmented/encrypted volumes incomplete.
 4. ext repair requires host `e2fsck` and only mutates clones; mocked on Windows without the tool.
 5. GUI needs real Windows/macOS/Linux smoke testing; no signed native installers; Tk is interim until Rust presentation shell.
 6. Media-refresh is gated PRIVATE TEST ONLY; interrupt/USB-dock sacrificial matrix still incomplete.
