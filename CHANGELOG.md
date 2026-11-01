@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 — Experimental in-place refresh (2026-11-01) — PRIVATE TEST ONLY
+
+- Added gated `refresh-image` / `refresh-external` commands: read → rewrite same bytes → optional verify.
+- Unreadable sectors are skipped and never overwritten with fabricated data.
+- Requires `--ack-risk --ack-destructive --ack-no-backup --ack-data-loss-risk` (+ `--ack-usb-bridge-risk` for USB/dock).
+- Does not claim physical-wear reversal; journaled and resumable.
+
 ## 0.2.0 — Desktop workflow and clone-only repair (2026-11-01) — PRIVATE TEST ONLY
 
 - Added Tkinter graphical desktop frontend with asynchronous commands, cancellation, device discovery, external scans, health, read benchmarks, rescue, ZIP salvage and file recovery.

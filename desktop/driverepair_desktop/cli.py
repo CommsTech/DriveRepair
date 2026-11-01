@@ -1,4 +1,9 @@
-"""DriveRepair desktop CLI; no operation opens a raw source for writing."""
+"""DriveRepair desktop CLI.
+
+Default recovery paths keep patient sources read-only. Experimental in-place
+refresh commands can open a device for writing only after multiple explicit
+destructive acknowledgements.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +23,12 @@ from .recovery import rescue_reader
 from .fat32_undelete import undelete_fat32
 from .filesystem_repair import check_ext_image, repair_ext_image
 from .verification import verify_images
+from .media_refresh import (
+    ImageReadWriter,
+    open_device_readwrite,
+    refresh_media,
+    require_destructive_acknowledgements,
+)
 
 
 
@@ -103,6 +114,26 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument('--output', required=True, help='New, nonexistent filesystem image copy')
     cmd.add_argument('--ack-repair', action='store_true', help='Required: agree that repair on a clone may lose damaged files')
     cmd.add_argument('--json', action='store_true')
+    for name, help_text in (
+        ('refresh-image', 'EXPERIMENTAL destructive: rewrite readable sectors onto the same image file'),
+        ('refresh-external', 'EXPERIMENTAL destructive: rewrite readable sectors onto the same external disk'),
+    ):
+        cmd = sub.add_parser(name, help=help_text)
+        cmd.add_argument('--image' if name == 'refresh-image' else '--device', required=True)
+        cmd.add_argument('--journal', required=True, help='Path for the refresh progress journal (NOT on the patient disk if possible)')
+        cmd.add_argument('--resume', action='store_true')
+        cmd.add_argument('--chunk-mib', type=int, choices=[1, 2, 4, 8], default=1)
+        cmd.add_argument('--max-errors', type=int, default=4096)
+        cmd.add_argument('--no-verify', action='store_true', help='Skip post-write reread comparison')
+        cmd.add_argument('--ack-risk', action='store_true', help='Accept stress on failing media')
+        cmd.add_argument('--ack-destructive', action='store_true', help='Accept patient-media writes')
+        cmd.add_argument('--ack-no-backup', action='store_true', help='Confirm proceeding without a verified backup')
+        cmd.add_argument('--ack-data-loss-risk', action='store_true',
+                         help='Confirm understanding that in-place writes can destroy remaining recoverable data')
+        if name == 'refresh-external':
+            cmd.add_argument('--ack-usb-bridge-risk', action='store_true',
+                             help='Required for USB/dock patients: bridges may drop, hide SMART, or fake serials')
+        cmd.add_argument('--json', action='store_true')
     sub.add_parser('gui', help='Launch the desktop graphical interface')
     return cli
 
@@ -203,6 +234,62 @@ def _run_extras(args) -> int:
         result = carve_image(args.image, args.output_dir, formats=tuple(args.formats),
                              max_files=args.max_files, max_file_mib=args.max_file_mib,
                              allow_incomplete=args.allow_incomplete_image)
+    elif args.command in {'refresh-image', 'refresh-external'}:
+        is_device = args.command == 'refresh-external'
+        if is_device:
+            selected = select_external_device(args.device)
+            require_destructive_acknowledgements(
+                ack_risk=args.ack_risk,
+                ack_destructive=args.ack_destructive,
+                ack_no_backup=args.ack_no_backup,
+                ack_data_loss_risk=args.ack_data_loss_risk,
+                ack_usb_bridge_risk=getattr(args, 'ack_usb_bridge_risk', False),
+                bus=selected.bus,
+            )
+            reread = select_external_device(args.device)
+            if selected.fingerprint != reread.fingerprint:
+                raise RuntimeError('Source identity changed before refresh')
+            # Journal must not live on the patient when we can detect drive letters.
+            media = open_device_readwrite(selected)
+            size, sector = selected.size_bytes, selected.sector_size
+            source_token = selected.fingerprint
+        else:
+            require_destructive_acknowledgements(
+                ack_risk=args.ack_risk,
+                ack_destructive=args.ack_destructive,
+                ack_no_backup=args.ack_no_backup,
+                ack_data_loss_risk=args.ack_data_loss_risk,
+                ack_usb_bridge_risk=True,  # not a USB patient
+                bus='file',
+            )
+            source_token, size = _source_image_token(args.image)
+            media = ImageReadWriter(args.image)
+            sector = 512 if size % 512 == 0 else 1
+        try:
+            if not args.json:
+                print('DESTRUCTIVE in-place refresh. Unreadable sectors are skipped, not invented.',
+                      file=sys.stderr)
+
+            def check_progress(state):
+                if is_device:
+                    latest = select_external_device(args.device)
+                    if latest.fingerprint != source_token:
+                        raise RuntimeError('Patient device changed mid-refresh; job halted')
+                if not args.json and state['cursor'] % (64 * 1024 * 1024) < state['chunk']:
+                    print(f"Refresh cursor {state['cursor']:,}/{size:,}", file=sys.stderr)
+
+            result = refresh_media(
+                media, size=size, sector=sector, source_token=source_token,
+                journal=args.journal, chunk=args.chunk_mib * 1024 * 1024,
+                verify=not args.no_verify, resume=args.resume,
+                max_errors=args.max_errors, progress=check_progress,
+            )
+        finally:
+            media.close()
+        if is_device:
+            latest = select_external_device(args.device)
+            if latest.fingerprint != source_token:
+                result['status'] = 'aborted_device_identity_changed'
     else:
         is_device = args.command.endswith('-external')
         if is_device:
@@ -256,7 +343,8 @@ def _run_extras(args) -> int:
     else:
         print(json.dumps(result, indent=2))
     return 0 if result.get('status') in {'completed', 'comparison_only', 'smart_passed_limited',
-                                         'clean', 'corrected', 'corrected_reboot_flag', 'verified_byte_exact'} else 2
+                                         'clean', 'corrected', 'corrected_reboot_flag', 'verified_byte_exact',
+                                         'completed_with_skips_or_verify_failures'} else 2
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -269,7 +357,7 @@ def run(argv: list[str] | None = None) -> int:
         if args.command in {'rescue-image', 'rescue-external', 'benchmark-image',
                             'benchmark-external', 'carve-image', 'salvage-zip',
                             'undelete-fat32', 'verify-images', 'check-ext-image', 'repair-ext-image',
-                            'compare-benchmarks', 'health'}:
+                            'compare-benchmarks', 'health', 'refresh-image', 'refresh-external'}:
             return _run_extras(args)
         if args.command == "list":
             devices = list_external_devices()

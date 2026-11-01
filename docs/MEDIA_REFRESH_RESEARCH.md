@@ -46,4 +46,4 @@ F. Failure: any unexpected disconnect, rising reallocated/uncorrectable counts, 
 - Media type: HDD CMR/SMR, SATA SSD, NVMe, USB thumb drives and SD cards need distinct write/refresh policies. Do not blanket-rewrite all media types.
 - Measurement: track **data correctness**, **remaining hardware wear**, **risk of further damage**, **time to recover**, and **workload performance** independently.
 
-**Current code deliberately implements measurement and source-preserving rescue but not invasive media refresh.**
+**Current code** implements measurement, source-preserving rescue, and an **experimental** gated in-place refresh (`refresh-image` / `refresh-external`) that rewrites only fully readable chunks after multiple acknowledgements. It is PRIVATE TEST ONLY, does not claim wear reversal, and must not be treated as a substitute for imaging when a verified backup destination exists.
