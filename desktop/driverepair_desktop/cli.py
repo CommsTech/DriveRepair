@@ -229,6 +229,8 @@ def parser() -> argparse.ArgumentParser:
          'In-Place Media Refresh on a regular image (rolling journal; adaptive|full)'),
         ('refresh-external',
          'In-Place Media Refresh on an external disk (rolling journal; NOT a backup substitute)'),
+        ('refresh-system',
+         'EXPERIMENTAL: in-place refresh of an OFFLINE internal disk from Linux live USB'),
     ):
         cmd = sub.add_parser(name, help=help_text)
         cmd.add_argument('--image' if name == 'refresh-image' else '--device', required=True)
@@ -262,7 +264,7 @@ def parser() -> argparse.ArgumentParser:
                          help='Confirm proceeding without a full verified backup')
         cmd.add_argument('--ack-data-loss-risk', action='store_true',
                          help='Confirm understanding that in-place writes can destroy remaining recoverable data')
-        if name == 'refresh-external':
+        if name in {'refresh-external', 'refresh-system'}:
             cmd.add_argument('--confirm-identity', help='12-character fingerprint shown by list --json')
             cmd.add_argument('--power-source', help='For volatile RAM: nut:UPSNAME (local USB NUT) or battery (Linux laptop)')
             cmd.add_argument('--ack-volatile-journal', action='store_true',
@@ -273,6 +275,9 @@ def parser() -> argparse.ArgumentParser:
                              help='Required for USB/dock patients: bridges may drop, hide SMART, or fake serials')
             cmd.add_argument('--ack-unvalidated-hardware', action='store_true',
                              help='Required: live hardware refresh is still unvalidated (sacrificial tests pending)')
+            if name == 'refresh-system':
+                cmd.add_argument('--ack-offline-system', action='store_true',
+                                 help='Confirm the installed OS is NOT running: booted trusted Linux live USB')
         cmd.add_argument('--acoustic-watch', action='store_true',
                          help='Optional soft acoustic WATCH (needs sounddevice); not a wear meter')
         cmd.add_argument('--shock-guard', action='store_true',
@@ -385,6 +390,45 @@ def _verified_linux_remote_destination(parent: str) -> bool:
         return False
 
 
+def _separate_windows_destination(device, output: str) -> None:
+    """Require the rescue/image destination to sit on a different Windows disk number."""
+    import re
+    import subprocess
+    absolute = os.path.abspath(output)
+    drive, _ = os.path.splitdrive(absolute)
+    if not re.fullmatch(r"[A-Za-z]:", drive):
+        raise RuntimeError("Windows rescue destination must be on a separate local drive letter")
+    if "PhysicalDrive" not in device.path:
+        raise RuntimeError("Windows live rescue requires a PhysicalDrive path")
+    number = int(device.path.rsplit("PhysicalDrive", 1)[-1])
+    command = (
+        f"(Get-Partition -DriveLetter '{drive[0]}' -ErrorAction Stop | "
+        "Select-Object -ExpandProperty DiskNumber) | ConvertTo-Json -Compress"
+    )
+    completed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+        capture_output=True, check=True, timeout=25,
+    )
+    target = json.loads(completed.stdout.decode("utf-8-sig"))
+    if not isinstance(target, int):
+        raise RuntimeError("Could not identify the destination's physical disk")
+    if target == number:
+        raise RuntimeError("Destination is stored on patient disk; refusing live rescue")
+
+
+def _separate_live_destination(device, output: str) -> None:
+    """Platform-specific destination isolation for live-device rescue/monitor state."""
+    if sys.platform.startswith("linux"):
+        _separate_linux_destination(device, output)
+    elif sys.platform == "win32":
+        _separate_windows_destination(device, output)
+    else:
+        raise RuntimeError(
+            "Live-device rescue destination isolation is not validated on this OS; "
+            "use image rescue from an already-copied image"
+        )
+
+
 def _separate_linux_destination(device, output: str) -> None:
     """Require a mounted destination backed by a different Linux block device."""
     if not sys.platform.startswith('linux'):
@@ -464,10 +508,9 @@ def _run_extras(args) -> int:
         selected = select_external_device(args.device)
         if selected.fingerprint[:12] != args.expect_fingerprint:
             raise RuntimeError('Drive identity confirmation changed')
-        if sys.platform.startswith('linux'):
-            # The monitor writes history. NEVER allow that state file to
-            # resolve to the patient disk, even if the patient is mounted.
-            _separate_linux_destination(selected, args.state)
+        # The monitor writes history. NEVER allow that state file to
+        # resolve to the patient disk, even if the patient is mounted.
+        _separate_live_destination(selected, args.state)
         try:
             snapshot = health_snapshot(selected)
         except RuntimeError as exc:
@@ -630,8 +673,9 @@ def _run_extras(args) -> int:
         if enc:
             result = {**result, "encryption_warnings": [f.public() for f in enc],
                       "guidance": encryption_guidance(enc)}
-    elif args.command in {'refresh-image', 'refresh-external'}:
-        is_device = args.command == 'refresh-external'
+    elif args.command in {'refresh-image', 'refresh-external', 'refresh-system'}:
+        is_device = args.command != 'refresh-image'
+        is_system = args.command == 'refresh-system'
         if args.consistency_reads < 2:
             raise ValueError('--consistency-reads must be >= 2')
         if is_device and args.journal_backend not in {'disk', 'ramdisk'}:
@@ -649,7 +693,14 @@ def _run_extras(args) -> int:
         device_label = ""
         guard = None
         if is_device:
-            selected = select_external_device(args.device)
+            if is_system:
+                if not sys.platform.startswith('linux'):
+                    raise RuntimeError('Offline system refresh requires a trusted Linux live environment')
+                if not args.ack_offline_system:
+                    raise ValueError('Offline system refresh requires --ack-offline-system')
+                selected = select_linux_any_disk(args.device)
+            else:
+                selected = select_external_device(args.device)
             device_label = f"{selected.id}  {selected.model[:28]}  {cui.fmt_bytes(selected.size_bytes)}"
             require_destructive_acknowledgements(
                 ack_risk=args.ack_risk,
@@ -665,18 +716,22 @@ def _run_extras(args) -> int:
             if not args.confirm_identity or args.confirm_identity != selected.fingerprint[:12]:
                 raise ValueError('Physical writes require --confirm-identity with the current list --json identity_hint')
             # Duplicate bridge serials can identify distinct drives; fail closed.
-            for other in list_external_devices():
+            inventory = linux_all_devices() if is_system else list_external_devices()
+            for other in inventory:
                 if other.id != selected.id and other.serial == selected.serial:
-                    raise RuntimeError('More than one disk reports the same bridge serial; identity is ambiguous')
+                    raise RuntimeError('Multiple disks report the same hardware serial; identity is ambiguous')
             if args.journal_backend == 'ramdisk':
-                if not args.ack_volatile_journal or not args.ack_dock_power_backed:
-                    raise ValueError('RAM journal requires --ack-volatile-journal and --ack-dock-power-backed')
+                if not args.ack_volatile_journal:
+                    raise ValueError('RAM journal requires --ack-volatile-journal')
+                if (not is_system or selected.bus.lower() in {'usb', 'firewire', 'thunderbolt'}) and not args.ack_dock_power_backed:
+                    raise ValueError('USB/dock RAM journal requires --ack-dock-power-backed')
                 guard = VolatilePowerGuard(args.power_source or '', args.journal,
                                            args.chunk_mib * 1024 * 1024)
                 guard.check(force=True)
             _validate_live_refresh_preflight(selected, args.journal,
                                              ramdisk=args.journal_backend == 'ramdisk')
-            reread = select_external_device(args.device)
+            reread = (select_linux_any_disk(args.device) if is_system
+                      else select_external_device(args.device))
             assert_stable_identity(selected, reread)
             if args.live_dashboard:
                 print(
@@ -756,7 +811,8 @@ def _run_extras(args) -> int:
 
             def identity_check() -> None:
                 if is_device:
-                    latest = select_external_device(args.device)
+                    latest = (select_linux_any_disk(args.device) if is_system
+                              else select_external_device(args.device))
                     assert_stable_identity(selected, latest)
 
             def pre_write() -> None:
@@ -812,7 +868,7 @@ def _run_extras(args) -> int:
         finally:
             media.close()
         if is_device:
-            latest = (select_linux_any_disk(args.device) if args.command == 'rescue-system'
+            latest = (select_linux_any_disk(args.device) if is_system
                       else select_external_device(args.device))
             if latest.fingerprint != source_token:
                 result['status'] = 'aborted_device_identity_changed'
@@ -852,8 +908,9 @@ def _run_extras(args) -> int:
             else:
                 selected = select_external_device(args.device)
             if args.command in {'rescue-external', 'rescue-system'}:
-                _verify_linux_patient_not_in_use(selected)
-                _separate_linux_destination(selected, args.output)
+                if sys.platform.startswith('linux'):
+                    _verify_linux_patient_not_in_use(selected)
+                _separate_live_destination(selected, args.output)
             reread = (select_linux_any_disk(args.device) if args.command == 'rescue-system'
                       else select_external_device(args.device))
             if selected.fingerprint != reread.fingerprint:
@@ -911,7 +968,7 @@ def _run_extras(args) -> int:
         print(json.dumps(result, indent=2))
     else:
         print(json.dumps(result, indent=2))
-    if args.command in {'refresh-image', 'refresh-external'}:
+    if args.command in {'refresh-image', 'refresh-external', 'refresh-system'}:
         return 0 if result.get('status') == 'completed' else 2
     return 0 if result.get('status') in {'completed', 'comparison_only', 'smart_passed_limited',
                                          'clean', 'corrected', 'corrected_reboot_flag', 'verified_byte_exact',
@@ -951,7 +1008,7 @@ def run(argv: list[str] | None = None) -> int:
                             'list-deleted-tsk', 'recover-selected-tsk',
                             'detect-filesystems', 'recover-image',
                             'verify-images', 'check-ext-image', 'repair-ext-image',
-                            'compare-benchmarks', 'health', 'refresh-image', 'refresh-external',
+                            'compare-benchmarks', 'health', 'refresh-image', 'refresh-external', 'refresh-system',
                             'ram-journal-check', 'monitor-external', 'evidence-image',
                             'inspect-encryption'}:
             return _run_extras(args)

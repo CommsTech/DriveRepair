@@ -89,3 +89,16 @@ Physical USB-docked recovery on Windows/macOS, boot-tested BIOS/UEFI boot ISO, 7
 python3 -m unittest discover -s tests -v
 python3 ../scripts/build_desktop.py
 ```
+
+## No second disk? Experimental emergency option
+
+For a single internal HDD with no image destination, `refresh-system` permits
+**an explicitly consented in-place adaptive rewrite of consistently readable
+regions only**, from a trusted Linux live USB. The rolling journal can reside
+in a verified `tmpfs` RAM mount with protected power. It does not recover
+unreadable sectors, restore accidentally deleted files, or replace a backup;
+loss of host RAM during a write may permanently destroy the active region.
+Start in GUI → **Recover OS drive → Last resort**. See
+[`../docs/ONE_DRIVE_RECOVERY.md`](../docs/ONE_DRIVE_RECOVERY.md) for required
+checks and exact CLI flags. The experimental feature is not approved for
+irreplaceable data or automatic operation.

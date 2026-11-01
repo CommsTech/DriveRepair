@@ -61,3 +61,26 @@ Patient: Seagate ST12000N ~12 TB via USB dock (`windows:PhysicalDrive2`, fake 
 - Live Linux requires the source to have a serial, no mounted children/holders, and a demonstrably separate journal filesystem. Windows requires a distinct locally mapped journal disk and no drive letters mounted on the patient.
 - GUI defaults to disk journaling and requires the user to type the selected device ID before starting.
 - Fault-injection tests cover torn writes, failed readback, VERIFY/COMMIT resume, and adaptive queue resume. Physical USB power-loss/disconnect verification is **NOT PROVEN**.
+
+## Offline system disk: last-resort volatile RAM journal (0.3.1b1 follow-up)
+
+`refresh-system` provides an opt-in route for a computer with only one internal
+hard drive, after booting a **separate trusted Linux live USB**. This is not an
+active-OS repair command and does not create a full backup. The patient is
+required to be unmounted, without active holders, and is selected from the
+separate `list-all-linux` inventory with an exact 12-character fingerprint.
+
+For a no-second-storage use case, a RAM-backed (`tmpfs`) journal protects **only
+the current region**; its metadata and bytes remain in RAM. Default chunk size
+is 1 MiB. Each region is read consistently, stored, rewritten and verified
+before moving on. The saved data can survive an application crash as long as
+the **same live OS and RAM filesystem remain running**, but cannot survive a
+host restart, RAM corruption or external-device failure. The UPS/battery check
+is a risk-reduction measure, not a durability guarantee. USB docks also need
+independent protected power. Full-disk rewrite is not a default or advised
+response to possible hardware failure.
+
+The mode stays `EXPERIMENTAL` / `NOT APPROVED FOR VALUABLE MEDIA`. It must never
+be advertised as lost-file recovery, a proven rejuvenation treatment, or a
+verified filesystem repair. See `ONE_DRIVE_RECOVERY.md` for an example and
+preconditions.

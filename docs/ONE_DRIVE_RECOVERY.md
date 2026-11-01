@@ -94,3 +94,81 @@ It never writes a USB or disk. **The resulting ISO name contains UNVERIFIED
 until BIOS, UEFI, NVMe/SATA/USB, Wi-Fi/network, mount-safety and crash/restore
 hardware tests have passed.** Secure Boot is not independently established.
 The old custom firmware loaders remain experimental.
+
+## Last resort: no destination large enough for an image
+
+**EXPERIMENTAL: in-place media refresh is not a substitute for file/data recovery.**
+The user may deliberately accept a higher risk when there is no second disk or
+network destination. DriveRepair now provides a separately confirmed
+`refresh-system` workflow on **Linux booted from trusted live media only**.
+It can *re-record original bytes that have already been read consistently*,
+using a small rolling journal in Linux RAM, then flush and verify each rewrite.
+It **cannot** reconstruct missing/deleted/overwritten bytes or save an entire
+12 TB disk in ordinary laptop memory. It does not undo physical wear or ensure
+future drive reliability. The original filesystem must be unmounted and not
+held by LVM, RAID, or encryption mappings.
+
+### Prefer these choices, in this order
+
+1. Recover the most important files to even a **small** reliable destination,
+   if possible. A 64 GB USB drive or mounted NAS can be more valuable than an
+   unsafe full-disk rewrite. The boot USB is not automatically a safe recovery
+   destination.
+2. For an unreadable or unstable disk, stop and consider professional recovery.
+   **Never overwrite unreadable sectors in the hope that the old bytes can later
+   be recovered.** Repeatedly testing a failing head or USB dock can make it
+   worse.
+3. Only for consistently readable regions and fully informed user consent,
+   consider adaptive in-place refresh. Expect that a host shutdown, disk
+   controller crash, or unexpected drive failure can still permanently destroy
+   data being rewritten, even when a UPS is connected. Never call this a backup.
+4. After refresh, check filesystem consistency **only after** recovering
+   important files when possible. A successful byte-for-byte rewrite is not
+   proof that the original contents are correct.
+
+### Emergency Linux live example (expert testing only)
+
+This example does **not** format a disk. It assumes a separate trusted live USB
+is running and an **internal disk** is safely offline. It requires a RAM-backed
+journal mount. Commands are illustrative and **not approved for valuable
+hardware** until physical failure testing passes.
+
+```sh
+# Create a RAM-only journal mount *in the live operating system*.
+sudo install -d -m 0700 /run/driverepair-journal
+sudo mount -t tmpfs -o size=256M,noswap,mode=0700 tmpfs /run/driverepair-journal
+# If your Linux kernel does not support "noswap", do NOT silently fall back
+# with swap enabled. The application's preflight rejects unsafe configurations.
+
+python3 -m driverepair_desktop list-all-linux --json
+# Copy the EXACT ID and identity_hint matching model, size and serial.
+python3 -m driverepair_desktop ram-journal-check \
+  --journal /run/driverepair-journal/emergency-001 \
+  --power-source battery --chunk-mib 1 --json
+
+# LAST RESORT, destructive and explicitly unvalidated on live hardware.
+python3 -m driverepair_desktop refresh-system \
+  --device linux:/dev/sdX --confirm-identity 12HEXCHARS \
+  --journal /run/driverepair-journal/emergency-001 \
+  --journal-backend ramdisk --mode adaptive --chunk-mib 1 \
+  --power-source battery --after-run keep \
+  --ack-offline-system --ack-risk --ack-destructive \
+  --ack-no-backup --ack-data-loss-risk \
+  --ack-unvalidated-hardware --ack-volatile-journal --json
+```
+
+If the patient is in a powered USB dock, you must additionally attest that the
+**dock is on protected power** using `--ack-dock-power-backed` and acknowledge
+USB bridge uncertainty with `--ack-usb-bridge-risk`.
+
+`ram-journal-check` does not rewrite anything. It requires an actual local
+`tmpfs`/`ramfs` mount, prevents swapping journal data to disk, checks capacity
+for the active region, and validates live UPS/battery telemetry. On resumption,
+RAM journal bytes are available only while the host OS still retains that RAM
+filesystem. **If the host reboots in the middle of a write, the journal may be
+lost, and the partially written sector may be irrecoverable.** There is no
+software fix for that lack of independent storage. The safest choice for truly
+precious data remains to preserve the source and image it to another location.
+
+The GUI exposes the same experiment under **Recover OS drive → Last resort**.
+The operation is never automatic or scheduled.
