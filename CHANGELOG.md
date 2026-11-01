@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2 — Rolling-journal In-Place Media Refresh (2026-11-01) — PRIVATE TEST ONLY
+
+- Replaced simple rewrite with transactional rolling journal: `SAVED → WRITING → VERIFIED → COMMITTED`.
+- Journal stores only the active region (`meta.json` + `region.bin`) on separate healthy storage.
+- Added `--mode adaptive` (default; slow readable regions) and `--mode full` (whole surface).
+- Consistency multi-read before rewrite; unreadable/inconsistent sectors skipped, never invented.
+- Windows volume idle check + FSCTL lock/dismount when letters exist; Linux `O_EXCL`.
+- Live external refresh also requires `--ack-unvalidated-hardware` until sacrificial interrupt/USB tests pass.
+- Does not claim wear reversal or equivalence to a full backup.
+
 ## 0.2.1 — Experimental in-place refresh (2026-11-01) — PRIVATE TEST ONLY
 
 - Added gated `refresh-image` / `refresh-external` commands: read → rewrite same bytes → optional verify.

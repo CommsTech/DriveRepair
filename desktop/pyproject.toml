@@ -1,6 +1,6 @@
 [project]
 name = "driverepair-desktop"
-version = "0.2.1"
+version = "0.2.2"
 description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -25,6 +25,8 @@ from .filesystem_repair import check_ext_image, repair_ext_image
 from .verification import verify_images
 from .media_refresh import (
     ImageReadWriter,
+    assert_patient_idle_windows,
+    assert_stable_identity,
     open_device_readwrite,
     refresh_media,
     require_destructive_acknowledgements,
@@ -115,24 +117,37 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument('--ack-repair', action='store_true', help='Required: agree that repair on a clone may lose damaged files')
     cmd.add_argument('--json', action='store_true')
     for name, help_text in (
-        ('refresh-image', 'EXPERIMENTAL destructive: rewrite readable sectors onto the same image file'),
-        ('refresh-external', 'EXPERIMENTAL destructive: rewrite readable sectors onto the same external disk'),
+        ('refresh-image',
+         'In-Place Media Refresh on a regular image (rolling journal; adaptive|full)'),
+        ('refresh-external',
+         'In-Place Media Refresh on an external disk (rolling journal; NOT a backup substitute)'),
     ):
         cmd = sub.add_parser(name, help=help_text)
         cmd.add_argument('--image' if name == 'refresh-image' else '--device', required=True)
-        cmd.add_argument('--journal', required=True, help='Path for the refresh progress journal (NOT on the patient disk if possible)')
+        cmd.add_argument('--journal', required=True,
+                         help='Directory for the rolling journal (meta.json + region.bin); keep OFF the patient')
+        cmd.add_argument('--mode', choices=['adaptive', 'full'], default='adaptive',
+                         help='adaptive=refresh slow readable regions; full=whole surface (high risk)')
         cmd.add_argument('--resume', action='store_true')
         cmd.add_argument('--chunk-mib', type=int, choices=[1, 2, 4, 8], default=1)
         cmd.add_argument('--max-errors', type=int, default=4096)
+        cmd.add_argument('--consistency-reads', type=int, default=2,
+                         help='Identical reads required before journaling a region (min 2)')
+        cmd.add_argument('--adaptive-samples', type=int, default=256)
+        cmd.add_argument('--slow-multiplier', type=float, default=2.0,
+                         help='Adaptive: refresh regions at/above median_latency * multiplier')
         cmd.add_argument('--no-verify', action='store_true', help='Skip post-write reread comparison')
         cmd.add_argument('--ack-risk', action='store_true', help='Accept stress on failing media')
         cmd.add_argument('--ack-destructive', action='store_true', help='Accept patient-media writes')
-        cmd.add_argument('--ack-no-backup', action='store_true', help='Confirm proceeding without a verified backup')
+        cmd.add_argument('--ack-no-backup', action='store_true',
+                         help='Confirm proceeding without a full verified backup')
         cmd.add_argument('--ack-data-loss-risk', action='store_true',
                          help='Confirm understanding that in-place writes can destroy remaining recoverable data')
         if name == 'refresh-external':
             cmd.add_argument('--ack-usb-bridge-risk', action='store_true',
                              help='Required for USB/dock patients: bridges may drop, hide SMART, or fake serials')
+            cmd.add_argument('--ack-unvalidated-hardware', action='store_true',
+                             help='Required: live hardware refresh is still unvalidated (sacrificial tests pending)')
         cmd.add_argument('--json', action='store_true')
     sub.add_parser('gui', help='Launch the desktop graphical interface')
     return cli
@@ -236,6 +251,8 @@ def _run_extras(args) -> int:
                              allow_incomplete=args.allow_incomplete_image)
     elif args.command in {'refresh-image', 'refresh-external'}:
         is_device = args.command == 'refresh-external'
+        if args.consistency_reads < 2:
+            raise ValueError('--consistency-reads must be >= 2')
         if is_device:
             selected = select_external_device(args.device)
             require_destructive_acknowledgements(
@@ -245,11 +262,12 @@ def _run_extras(args) -> int:
                 ack_data_loss_risk=args.ack_data_loss_risk,
                 ack_usb_bridge_risk=getattr(args, 'ack_usb_bridge_risk', False),
                 bus=selected.bus,
+                ack_unvalidated_hardware=getattr(args, 'ack_unvalidated_hardware', False),
+                require_unvalidated=True,
             )
+            assert_patient_idle_windows(selected)
             reread = select_external_device(args.device)
-            if selected.fingerprint != reread.fingerprint:
-                raise RuntimeError('Source identity changed before refresh')
-            # Journal must not live on the patient when we can detect drive letters.
+            assert_stable_identity(selected, reread)
             media = open_device_readwrite(selected)
             size, sector = selected.size_bytes, selected.sector_size
             source_token = selected.fingerprint
@@ -259,30 +277,40 @@ def _run_extras(args) -> int:
                 ack_destructive=args.ack_destructive,
                 ack_no_backup=args.ack_no_backup,
                 ack_data_loss_risk=args.ack_data_loss_risk,
-                ack_usb_bridge_risk=True,  # not a USB patient
+                ack_usb_bridge_risk=True,
                 bus='file',
+                require_unvalidated=False,
             )
             source_token, size = _source_image_token(args.image)
             media = ImageReadWriter(args.image)
             sector = 512 if size % 512 == 0 else 1
         try:
             if not args.json:
-                print('DESTRUCTIVE in-place refresh. Unreadable sectors are skipped, not invented.',
-                      file=sys.stderr)
+                print(
+                    f'DESTRUCTIVE In-Place Media Refresh ({args.mode}). '
+                    'Rolling journal protects only the active region. '
+                    'Unreadable/inconsistent sectors are skipped, not invented.',
+                    file=sys.stderr,
+                )
 
-            def check_progress(state):
+            def identity_check() -> None:
                 if is_device:
                     latest = select_external_device(args.device)
-                    if latest.fingerprint != source_token:
-                        raise RuntimeError('Patient device changed mid-refresh; job halted')
-                if not args.json and state['cursor'] % (64 * 1024 * 1024) < state['chunk']:
-                    print(f"Refresh cursor {state['cursor']:,}/{size:,}", file=sys.stderr)
+                    assert_stable_identity(selected, latest)
+
+            def check_progress(state):
+                identity_check()
+                cursor = int(state.get('cursor') or 0)
+                if not args.json and cursor % (64 * 1024 * 1024) < int(state.get('chunk') or 1):
+                    print(f"Refresh cursor {cursor:,}/{size:,} mode={args.mode}", file=sys.stderr)
 
             result = refresh_media(
                 media, size=size, sector=sector, source_token=source_token,
                 journal=args.journal, chunk=args.chunk_mib * 1024 * 1024,
-                verify=not args.no_verify, resume=args.resume,
-                max_errors=args.max_errors, progress=check_progress,
+                mode=args.mode, verify=not args.no_verify, resume=args.resume,
+                max_errors=args.max_errors, consistency_reads=args.consistency_reads,
+                adaptive_samples=args.adaptive_samples, slow_multiplier=args.slow_multiplier,
+                progress=check_progress, identity_check=identity_check,
             )
         finally:
             media.close()
