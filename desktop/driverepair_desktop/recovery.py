@@ -67,16 +67,15 @@ def _write_all(fd: int, data: bytes, offset: int | None = None) -> None:
         pos += n
 
 
-def _mark_output_sparse(fd: int) -> None:
-    """Mark a new rescue image sparse before sizing it.
+def _windows_sparse_resize(fd: int, size: int) -> None:
+    """Mark sparse and set EOF without zero-filling the logical range.
 
-    Linux sparse files leave holes cheaply. On Windows, SetEndOfFile without
-    FSCTL_SET_SPARSE can allocate (or slowly extend) the full logical size,
-    which blocks --max-chunks lab bounds and can fill the destination volume
-    before any patient bytes are copied.
+    Python's ``os.ftruncate`` + ``os.fsync`` on NTFS can still advance Valid
+    Data Length across a multi-terabyte image (minutes to hours) even after
+    FSCTL_SET_SPARSE. That blocks ``--max-chunks`` lab bounds because the
+    journal is not created until sizing finishes. Use SetFilePointerEx +
+    SetEndOfFile and skip a full-file fsync after the initial sparse extend.
     """
-    if os.name != 'nt':
-        return
     import ctypes
     import msvcrt
     from ctypes import wintypes
@@ -89,10 +88,22 @@ def _mark_output_sparse(fd: int) -> None:
         ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p,
     ]
     kernel.DeviceIoControl.restype = wintypes.BOOL
+    kernel.SetFilePointerEx.argtypes = [
+        wintypes.HANDLE, ctypes.c_longlong, ctypes.POINTER(ctypes.c_longlong), wintypes.DWORD,
+    ]
+    kernel.SetFilePointerEx.restype = wintypes.BOOL
+    kernel.SetEndOfFile.argtypes = [wintypes.HANDLE]
+    kernel.SetEndOfFile.restype = wintypes.BOOL
     returned = wintypes.DWORD(0)
     if not kernel.DeviceIoControl(handle, FSCTL_SET_SPARSE, None, 0, None, 0,
                                   ctypes.byref(returned), None):
         raise OSError(ctypes.get_last_error(), 'FSCTL_SET_SPARSE failed for rescue image')
+    new_pos = ctypes.c_longlong(0)
+    if not kernel.SetFilePointerEx(handle, ctypes.c_longlong(size),
+                                   ctypes.byref(new_pos), 0):
+        raise OSError(ctypes.get_last_error(), 'SetFilePointerEx failed for rescue image')
+    if not kernel.SetEndOfFile(handle):
+        raise OSError(ctypes.get_last_error(), 'SetEndOfFile failed for rescue image')
 
 
 def _open_output(path: str, size: int, resume: bool) -> int:
@@ -108,9 +119,11 @@ def _open_output(path: str, size: int, resume: bool) -> int:
         if resume and st.st_size != size:
             raise RuntimeError('Destination image size changed; refusing resume')
         if not resume:
-            _mark_output_sparse(fd)
-            os.ftruncate(fd, size)
-            os.fsync(fd)
+            if os.name == 'nt':
+                _windows_sparse_resize(fd, size)
+            else:
+                os.ftruncate(fd, size)
+                os.fsync(fd)
         return fd
     except BaseException:
         os.close(fd)

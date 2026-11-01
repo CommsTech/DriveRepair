@@ -125,14 +125,17 @@ class RecoveryTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'Windows sparse preallocation behavior')
     def test_windows_new_image_is_sparse_before_full_size_truncate(self):
         import subprocess
+        import time
         size = 64 * 1024 * 1024
         data = b'\x5a' * 4096
         reader = PatternReader(data + (b'\0' * (size - len(data))))
         # Only copy the first chunk; logical image size remains large.
+        t0 = time.perf_counter()
         state = rescue_reader(
             reader, size=size, sector=512, output=self.out,
             source_token='test-token-sparse', chunk=4096, max_chunks=1,
         )
+        self.assertLess(time.perf_counter() - t0, 5.0)
         self.assertEqual(state['status'], 'in_progress')
         self.assertEqual(state['cursor'], 4096)
         self.assertEqual(os.path.getsize(self.out), size)
@@ -141,6 +144,38 @@ class RecoveryTests(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
         self.assertIn('is set as sparse', (probe.stdout + probe.stderr).lower())
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows sparse multi-TB sizing')
+    def test_windows_sparse_resize_does_not_zero_fill_large_eof(self):
+        import subprocess
+        import time
+        from driverepair_desktop.recovery import _windows_sparse_resize
+        path = os.path.join(self.temp.name, 'huge_sparse.img')
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_BINARY, 0o600)
+        try:
+            size = 1000204886016  # ~931 GiB Seagate-class logical size
+            t0 = time.perf_counter()
+            _windows_sparse_resize(fd, size)
+            elapsed = time.perf_counter() - t0
+        finally:
+            os.close(fd)
+        self.assertLess(elapsed, 2.0, f'sparse resize took {elapsed:.2f}s')
+        self.assertEqual(os.path.getsize(path), size)
+        probe = subprocess.run(
+            ['fsutil', 'sparse', 'queryflag', path],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertIn('is set as sparse', (probe.stdout + probe.stderr).lower())
+        # Valid data length must stay tiny — not a multi-GB zero-fill.
+        vdl = subprocess.run(
+            ['fsutil', 'file', 'queryvaliddata', path],
+            capture_output=True, text=True, check=False,
+        )
+        combined = (vdl.stdout + vdl.stderr).lower()
+        self.assertTrue(
+            '0x0' in combined or '(0)' in combined.replace(' ', ''),
+            msg=combined,
+        )
 
 if __name__ == '__main__':
     unittest.main()
