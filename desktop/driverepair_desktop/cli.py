@@ -300,8 +300,16 @@ def _run_extras(args) -> int:
 
             def check_progress(state):
                 identity_check()
+                if args.json:
+                    return
+                if state.get('status') == 'probing' and state.get('message'):
+                    print(state['message'], file=sys.stderr)
+                    return
                 cursor = int(state.get('cursor') or 0)
-                if not args.json and cursor % (64 * 1024 * 1024) < int(state.get('chunk') or 1):
+                rewritten = int(state.get('rewritten_bytes') or 0)
+                if rewritten and rewritten % (8 * 1024 * 1024) < int(state.get('chunk') or 1):
+                    print(f"Refresh rewritten {rewritten:,} bytes mode={args.mode}", file=sys.stderr)
+                elif args.mode == 'full' and cursor % (64 * 1024 * 1024) < int(state.get('chunk') or 1):
                     print(f"Refresh cursor {cursor:,}/{size:,} mode={args.mode}", file=sys.stderr)
 
             result = refresh_media(
