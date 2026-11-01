@@ -21,14 +21,40 @@ function Invoke-Step([string]$Name, [string[]]$ArgList) {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     Write-Host "=== $Name ===" -ForegroundColor Cyan
     $outFile = Join-Path $LabRoot "metrics\$Name.json"
-    $argLine = ($ArgList | ForEach-Object {
-        if ($_ -match '\s') { '"' + ($_ -replace '"','`"') + '"' } else { $_ }
-    }) -join ' '
-    cmd /c "python -m driverepair_desktop $argLine > `"$outFile`" 2>&1"
-    $code = $LASTEXITCODE
+    $errFile = Join-Path $LabRoot "metrics\$Name.stderr.log"
+    # Live stderr to console (RESCUE progress), stdout captured for JSON metrics.
+    $p = Start-Process -FilePath "python" -ArgumentList (@("-u","-m","driverepair_desktop") + $ArgList) `
+        -WorkingDirectory $Desktop -NoNewWindow -PassThru `
+        -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+    # Tail stderr live so the Admin window is not blank during long rescues.
+    $tailJob = Start-Job -ScriptBlock {
+        param($path)
+        $pos = 0
+        while ($true) {
+            Start-Sleep -Milliseconds 500
+            if (-not (Test-Path $path)) { continue }
+            $fs = [IO.File]::Open($path, 'Open', 'Read', 'ReadWrite')
+            try {
+                $fs.Seek($pos, 'Begin') | Out-Null
+                $sr = New-Object IO.StreamReader($fs)
+                $chunk = $sr.ReadToEnd()
+                $pos = $fs.Position
+                if ($chunk) { Write-Output $chunk }
+            } finally { $fs.Close() }
+        }
+    } -ArgumentList $errFile
+    while (-not $p.HasExited) {
+        Receive-Job $tailJob | ForEach-Object { Write-Host $_ -NoNewline }
+        Start-Sleep -Milliseconds 400
+    }
+    Start-Sleep -Milliseconds 600
+    Receive-Job $tailJob | ForEach-Object { Write-Host $_ -NoNewline }
+    Stop-Job $tailJob -ErrorAction SilentlyContinue
+    Remove-Job $tailJob -Force -ErrorAction SilentlyContinue
+    $code = $p.ExitCode
     "elapsed_s=$([math]::Round($sw.Elapsed.TotalSeconds,2)) exit=$code" |
         Set-Content (Join-Path $LabRoot "metrics\$Name.time.txt")
-    Get-Content $outFile -Tail 30 -ErrorAction SilentlyContinue
+    Write-Host ""
     Write-Host "$Name done exit=$code elapsed=$([math]::Round($sw.Elapsed.TotalSeconds,2))s"
     return $code
 }

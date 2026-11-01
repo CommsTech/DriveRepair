@@ -30,8 +30,11 @@ class Device:
 
     @property
     def fingerprint(self) -> str:
+        # Location/topology strings (especially USB) can flap between discovery
+        # calls on the same physical disk. Identity must ignore them or mid-job
+        # rechecks abort healthy rescues with "device changed".
         data = (self.id, self.path, self.model, str(self.size_bytes),
-                str(self.sector_size), self.bus, self.serial, self.location)
+                str(self.sector_size), self.bus, self.serial)
         return hashlib.sha256("\0".join(data).encode("utf-8")).hexdigest()
 
     def public(self) -> dict:
