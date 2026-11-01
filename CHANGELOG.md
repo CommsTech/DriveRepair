@@ -1,3 +1,12 @@
+## 0.3.3b2 — Journal-backed rescue status and lab safety hotfix (experimental)
+
+- Added OS-held exclusive writer lock across forward and retry passes; simultaneous jobs against one image/map are rejected while monitoring remains read-only.
+- Added read-only `rescue-status --output IMAGE --json`: verifies recovery journal accounting and reports committed cursor, missing/unprocessed regions, and clean first-pass completion. **Image file length is never a completion signal.**
+- Removed silent automatic `refresh-external` calls from Windows acquisition/resume/watch scripts; destructive media maintenance must be a separate authorized workflow.
+- Replaced forced process killing and stale hard-coded patient/destination defaults with explicit operator choices; watcher reads journals only and manual resume uses structured progress.
+- Separated script JSON results from diagnostic logs; added synthetic regression tests for sparse preallocation, invalid/missing maps and lab-script safety.
+- These changes do not prove raw-device data correctness, cross-platform hardware support, or external-drive write safety.
+
 ## 0.3.3b1 — Integrity-aware image recovery (experimental)
 
 - Added per-chunk SHA-256 reference baselines, image audits, and only-if-reference-matches restoration into a NEW image.

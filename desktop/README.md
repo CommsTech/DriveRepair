@@ -1,6 +1,15 @@
-# DriveRepair desktop — 0.3.3b1
+# DriveRepair desktop — 0.3.3b2
 
 A privacy-first guided Python 3.10+ desktop UI/CLI, with incremental Rust recovery-core migration. This is not a signed standalone native installer. The GUI requires Tk. Raw-device repair remains experimental; do not operate on irreplaceable disks.
+
+## Recovery progress for large sparse images
+
+`rescue-status --output IMAGE --json` reports committed progress from the
+`IMAGE.rescue.json` journal. A 256 GB image can report a 256 GB logical length
+immediately after creation, even when only 1% is copied. Never use file length
+to decide a recovery succeeded; check `clean_rescue_complete` and separately
+verify the recovered file contents. Lab scripts no longer automatically start
+in-place refresh. See `../docs/RESCUE_PROGRESS_AND_LAB_SAFETY.md`.
 
 ## Image integrity and targeted hash-verified repair
 

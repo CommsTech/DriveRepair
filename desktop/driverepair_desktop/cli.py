@@ -23,7 +23,8 @@ from .benchmark import read_benchmark, compare_benchmarks
 from .carving import carve_image
 from .archive_recovery import salvage_zip
 from .health import health_snapshot
-from .recovery import rescue_reader
+from .recovery import (rescue_reader, inspect_rescue_status,
+                       _rescue_writer_lock, _rescue_reader_locked)
 from .fat32_undelete import undelete_fat32, list_deleted_fat32
 from .filesystem_repair import check_ext_image, repair_ext_image
 from .verification import verify_images
@@ -84,6 +85,10 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument("--ack-risk", action="store_true",
                          help="Required for full hardware scans; reading failing disks can worsen damage")
         cmd.add_argument("--json", action="store_true")
+    rescue_status = sub.add_parser(
+        'rescue-status', help='READ-ONLY: inspect recovery journal (image size is NOT progress)')
+    rescue_status.add_argument('--output', required=True, help='Existing rescued image file')
+    rescue_status.add_argument('--json', action='store_true')
     for name in ("rescue-image", "rescue-external", "rescue-system"):
         cmd = sub.add_parser(name, help="Rescue readable sectors to a separate regular-file image")
         cmd.add_argument("--image" if name == "rescue-image" else "--device", required=True)
@@ -560,7 +565,9 @@ def _verify_linux_patient_not_in_use(device) -> None:
 
 
 def _run_extras(args) -> int:
-    if args.command == 'monitor-external':
+    if args.command == 'rescue-status':
+        result = inspect_rescue_status(args.output)
+    elif args.command == 'monitor-external':
         selected = select_external_device(args.device)
         if selected.fingerprint[:12] != args.expect_fingerprint:
             raise RuntimeError('Drive identity confirmation changed')
@@ -1046,27 +1053,30 @@ def _run_extras(args) -> int:
                     rescue_emitter.emit(event, force=force)
                     if rescue_console:
                         rescue_console.show(event, force=force)
-                result = rescue_reader(reader, size=size, sector=sector,
-                                       output=args.output, source_token=source_token,
-                                       chunk=args.chunk_mib * 1024 * 1024,
-                                       max_failed_reads=args.max_read_errors,
-                                       resume=args.resume, retry_missing=args.retry_missing,
-                                       progress=check_progress,
-                                       max_chunks=getattr(args, 'max_chunks', None))
-                if args.multi_pass and result.get('status') == 'completed_with_missing_data':
-                    # Revalidate device immediately before targeted retries.
-                    check_progress(result, force=True)
-                    rescue_phase[0] = 'RETRY'
-                    result = rescue_reader(reader, size=size, sector=sector,
+                # Hold a single OS lock over BOTH passes; another resume
+                # process must never enter between forward and targeted retries.
+                with _rescue_writer_lock(args.output):
+                    result = _rescue_reader_locked(reader, size=size, sector=sector,
                                            output=args.output, source_token=source_token,
                                            chunk=args.chunk_mib * 1024 * 1024,
                                            max_failed_reads=args.max_read_errors,
-                                           resume=True, retry_missing=True,
+                                           resume=args.resume, retry_missing=args.retry_missing,
                                            progress=check_progress,
                                            max_chunks=getattr(args, 'max_chunks', None))
-                check_progress(result, force=True)
-                if rescue_console:
-                    rescue_console.finish()
+                    if args.multi_pass and result.get('status') == 'completed_with_missing_data':
+                        # Revalidate device immediately before targeted retries.
+                        check_progress(result, force=True)
+                        rescue_phase[0] = 'RETRY'
+                        result = _rescue_reader_locked(reader, size=size, sector=sector,
+                                               output=args.output, source_token=source_token,
+                                               chunk=args.chunk_mib * 1024 * 1024,
+                                               max_failed_reads=args.max_read_errors,
+                                               resume=True, retry_missing=True,
+                                               progress=check_progress,
+                                               max_chunks=getattr(args, 'max_chunks', None))
+                    check_progress(result, force=True)
+                    if rescue_console:
+                        rescue_console.finish()
             else:
                 result = read_benchmark(reader, size=size, sector=sector,
                                         mode=args.mode, samples=args.samples,
@@ -1085,6 +1095,8 @@ def _run_extras(args) -> int:
         print(json.dumps(result, indent=2))
     else:
         print(json.dumps(result, indent=2))
+    if args.command == 'rescue-status':
+        return 0 if result['clean_rescue_complete'] else 2
     if args.command in {'integrity-baseline', 'integrity-audit', 'integrity-restore-copy'}:
         return 0 if result.get('status') in {'manifest_created_unattested', 'matches_unattested_manifest', 'verified_restored_copy'} else 2
     if args.command in {'refresh-image', 'refresh-external', 'refresh-system'}:
@@ -1123,7 +1135,7 @@ def run(argv: list[str] | None = None) -> int:
                                'Boot trusted live media first; do not run on an active system disk.'}
             print(json.dumps(report, indent=2))
             return 0 if free >= selected.size_bytes else 2
-        if args.command in {'rescue-image', 'rescue-external', 'rescue-system', 'benchmark-image',
+        if args.command in {'rescue-status', 'rescue-image', 'rescue-external', 'rescue-system', 'benchmark-image',
                             'benchmark-external', 'carve-image', 'salvage-zip',
                             'undelete-fat32', 'list-deleted-fat32',
                             'list-deleted-tsk', 'recover-selected-tsk',

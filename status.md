@@ -1,20 +1,19 @@
 # Status — 2026-11-01
 
-PRIVATE TEST — Seagate ST1000LM048 1TB USB lab **complete** on 0.3.3b1 + Windows sparse/O_BINARY fixes.
+PRIVATE TEST — **0.3.3b2** journal-safe rescue status on `main` candidate; Seagate 1 TB USB still sacrificial write-verify target.
 
-## Merged follow-ups
-| PR | Fix |
-|----|-----|
-| #89 | Sparse SetEndOfFile (no zero-fill) |
-| (pending this) | Integrity restore O_BINARY + lab prefix workflow |
+## Product
 
-## Seagate results (`138b614ad5ea`)
-| Step | Result |
+- Version `0.3.3b2`: `rescue-status`, exclusive rescue writer lock, journal-authoritative completion
+- Lab/PowerShell dock helpers **removed from the repo** — use CLI/GUI only
+- Windows fixes retained: sparse EOF, integrity `O_BINARY`, RAW-disk idle for refresh
+
+## Seagate ST1000LM048 1 TB (USB / PhysicalDrive2 / `138b614ad5ea`)
+
+| Step | State |
 |------|--------|
-| triage/sample | 0 errors |
-| benchmark | ~65 MiB/s |
-| bounded rescue | **32 MiB / 32 chunks in ~19.5s**; sparse logical 1TB; VDL=32MiB |
-| detect (prefix) | no known FS in first 32MiB |
-| integrity | 1 flipped chunk detected → restore → **byte-exact** |
+| Wipe (Clear-Disk) | Done — PartitionStyle **RAW** |
+| Full `refresh-external` write+readback | Pending (must run via elevated CLI, not lab scripts) |
+| Public release | **Blocked** until sacrificial full-surface verify completes |
 
-Lab: `D:\DriveRepairLab\seagate_st1000lm048_1tb_20261101_151108\`
+Lab evidence (out of tree): `D:\DriveRepairLab\seagate_st1000lm048_wipe_refresh_20261101\`

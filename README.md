@@ -2,7 +2,7 @@
 
 **Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
 
-**Current build: 0.3.3b1 / engineering beta candidate — NOT approved for public hardware-repair use.**
+**Current build: 0.3.3b2 / engineering beta candidate — NOT approved for public hardware-repair use.**
 The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
 
 **If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
@@ -177,3 +177,13 @@ verified reference chunks. Baselines created after corruption are not proof of
 original correctness. See [Integrity Recovery](docs/INTEGRITY_RECOVERY.md).
 
 This release does **not** introduce automatic on-disk bit correction.
+
+### Reliable progress and Windows lab safety (0.3.3b2)
+
+The image's **logical file size is not recovery progress**. Inspect the journal:
+
+```sh
+python -m driverepair_desktop rescue-status --output PATH/TO/recovery.img --json
+```
+
+The `clean_rescue_complete` field is authoritative for *completed OS reads*, not independent file-content integrity. Windows lab scripts no longer chain physical refresh automatically. See [rescue progress and lab safety](docs/RESCUE_PROGRESS_AND_LAB_SAFETY.md).
