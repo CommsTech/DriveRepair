@@ -59,3 +59,8 @@ dirty_files.txt
 # Nested crate build trees
 src/boot/**/target/
 
+
+# Python packaging leftovers (never commit)
+desktop/build/
+desktop/*.egg-info/
+*.egg-info/

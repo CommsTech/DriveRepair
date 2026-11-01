@@ -1,7 +1,7 @@
 [project]
 name = "driverepair-desktop"
-version = "0.1.0"
-description = "Experimental cross-platform data rescue, carving, ZIP salvage and disk diagnostics"
+version = "0.2.0"
+description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -10,6 +10,7 @@ keywords = ["disk", "storage", "diagnostic", "recovery", "file-carving"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
+  "Environment :: X11 Applications",
   "Intended Audience :: System Administrators",
   "License :: OSI Approved :: MIT License",
   "Operating System :: MacOS",
@@ -21,6 +22,7 @@ classifiers = [
 
 [project.scripts]
 driverepair-desktop = "driverepair_desktop.cli:main"
+driverepair-gui = "driverepair_desktop.gui:launch"
 
 [build-system]
 requires = ["setuptools>=61"]

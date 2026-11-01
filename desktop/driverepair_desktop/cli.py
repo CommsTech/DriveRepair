@@ -15,6 +15,9 @@ from .carving import carve_image
 from .archive_recovery import salvage_zip
 from .health import health_snapshot
 from .recovery import rescue_reader
+from .fat32_undelete import undelete_fat32
+from .filesystem_repair import check_ext_image, repair_ext_image
+from .verification import verify_images
 
 
 
@@ -81,6 +84,26 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument('--before', required=True)
     cmd.add_argument('--after', required=True)
     cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser('verify-images', help='Compare recovered image byte-for-byte with a stable source image')
+    cmd.add_argument('--image', required=True, help='Original regular-file image')
+    cmd.add_argument('--output', required=True, help='Image to verify')
+    cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser('undelete-fat32', help='Recover contiguous deleted files from FAT32 disk images')
+    cmd.add_argument('--image', required=True)
+    cmd.add_argument('--output-dir', required=True)
+    cmd.add_argument('--max-files', type=int, default=100)
+    cmd.add_argument('--max-file-mib', type=int, default=128)
+    cmd.add_argument('--allow-incomplete-image', action='store_true')
+    cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser('check-ext-image', help='Read-only ext2/3/4 filesystem check using e2fsck -n')
+    cmd.add_argument('--image', required=True)
+    cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser('repair-ext-image', help='Clone an ext filesystem image and repair ONLY the clone')
+    cmd.add_argument('--image', required=True)
+    cmd.add_argument('--output', required=True, help='New, nonexistent filesystem image copy')
+    cmd.add_argument('--ack-repair', action='store_true', help='Required: agree that repair on a clone may lose damaged files')
+    cmd.add_argument('--json', action='store_true')
+    sub.add_parser('gui', help='Launch the desktop graphical interface')
     return cli
 
 
@@ -166,6 +189,16 @@ def _run_extras(args) -> int:
     elif args.command == 'salvage-zip':
         result = salvage_zip(args.archive, args.output_dir, max_files=args.max_files,
                              max_file_mib=args.max_file_mib, max_total_mib=args.max_total_mib)
+    elif args.command == 'verify-images':
+        result = verify_images(args.image, args.output)
+    elif args.command == 'undelete-fat32':
+        result = undelete_fat32(args.image, args.output_dir, max_files=args.max_files,
+                                max_file_mib=args.max_file_mib,
+                                allow_incomplete=args.allow_incomplete_image)
+    elif args.command == 'check-ext-image':
+        result = check_ext_image(args.image)
+    elif args.command == 'repair-ext-image':
+        result = repair_ext_image(args.image, args.output, ack_repair=args.ack_repair)
     elif args.command == 'carve-image':
         result = carve_image(args.image, args.output_dir, formats=tuple(args.formats),
                              max_files=args.max_files, max_file_mib=args.max_file_mib,
@@ -222,14 +255,21 @@ def _run_extras(args) -> int:
         print(json.dumps(result, indent=2))
     else:
         print(json.dumps(result, indent=2))
-    return 0 if result.get('status') in {'completed', 'comparison_only', 'smart_passed_limited'} else 2
+    return 0 if result.get('status') in {'completed', 'comparison_only', 'smart_passed_limited',
+                                         'clean', 'corrected', 'corrected_reboot_flag', 'verified_byte_exact'} else 2
 
 
 def run(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
+        if args.command == 'gui':
+            from .gui import launch
+            launch()
+            return 0
         if args.command in {'rescue-image', 'rescue-external', 'benchmark-image',
-                            'benchmark-external', 'carve-image', 'salvage-zip', 'compare-benchmarks', 'health'}:
+                            'benchmark-external', 'carve-image', 'salvage-zip',
+                            'undelete-fat32', 'verify-images', 'check-ext-image', 'repair-ext-image',
+                            'compare-benchmarks', 'health'}:
             return _run_extras(args)
         if args.command == "list":
             devices = list_external_devices()

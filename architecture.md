@@ -1,9 +1,11 @@
-# Architecture notes — recovery expansion
+# Architecture notes — 0.2.0 desktop
 
-Desktop CLI (`desktop/driverepair_desktop`) is the supported recovery surface. Source devices are opened read-only; all writes create new regular files or extraction directories.
+Three desktop workflows share one Python package (`desktop/driverepair_desktop`):
 
-Key modules: `recovery.py` (image/external rescue + journal), `benchmark.py`, `carving.py`, `archive_recovery.py`, `health.py`, `compat.py` (Windows binary I/O / portable pwrite).
+1. **Diagnose** — `list` / `scan` / `health` / benchmarks (read-only sources).
+2. **Recover** — `rescue-image`, carving, ZIP salvage, FAT32 undelete, `verify-images` (writes only new files/dirs).
+3. **Repair clone** — `check-ext-image` / `repair-ext-image` clone then optional `e2fsck` on the copy only.
 
-Linux `rescue-external` requires risk acknowledgment, unmounted external source with stable serial, and destination on a separately verified block device. Windows/macOS image workflows are supported; live external rescue remains Linux-only.
+GUI (`gui.py`) drives the same CLI as a subprocess. Packaging: `scripts/build_desktop.py` builds a zipapp `.pyz`; wheel entry points are `driverepair-desktop` and `driverepair-gui`.
 
-Rust BIOS/UEFI under `src/` is historical and not the desktop recovery engine. Media refresh remains research-only (`docs/MEDIA_REFRESH_RESEARCH.md`).
+Rust under `src/` remains Gate-0 fail-closed historical code, not the desktop recovery engine. Media refresh remains research-only.
