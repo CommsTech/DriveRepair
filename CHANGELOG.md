@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.4 — Live refresh dashboard, hybrid RAM journal, auto-escalate (2026-11-01)
+
+- Terminal dashboard: phase, progress bar, surface map, latency, media/transport/mechanical* indicators.
+- `--journal-backend hybrid|disk|memory` (default hybrid: region bytes in RAM).
+- `--auto-escalate` subdivides slow/failed probes for deeper testing.
+- `--after-run keep|delete|ask` for journal retention.
+- mechanical* is a latency/error proxy — USB docks do not expose acoustic sensors.
+
 ## 0.2.3 — Live Windows adaptive refresh hardening (2026-11-01) — PRIVATE TEST ONLY
 
 - Clear Administrator requirement when Windows denies physical-drive write access.

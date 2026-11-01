@@ -52,7 +52,7 @@ class RollingJournalTests(unittest.TestCase):
             result = refresh_media(
                 media, size=len(self.raw), sector=512, source_token="tok",
                 journal=self.journal, chunk=1024, mode="full", verify=True,
-                consistency_reads=2,
+                consistency_reads=2, journal_backend="disk",
             )
         finally:
             media.close()
@@ -60,6 +60,20 @@ class RollingJournalTests(unittest.TestCase):
         self.assertEqual(result["rewritten_bytes"], len(self.raw))
         self.assertEqual(self.path.read_bytes(), self.raw)
         self.assertTrue((Path(self.journal) / "meta.json").is_file())
+        self.assertFalse((Path(self.journal) / "region.bin").exists())
+
+    def test_hybrid_journal_keeps_region_in_ram(self):
+        media = ImageReadWriter(str(self.path))
+        try:
+            result = refresh_media(
+                media, size=len(self.raw), sector=512, source_token="tok",
+                journal=self.journal, chunk=1024, mode="full", verify=True,
+                consistency_reads=2, journal_backend="hybrid",
+            )
+        finally:
+            media.close()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["journal_backend"], "hybrid")
         self.assertFalse((Path(self.journal) / "region.bin").exists())
 
     def test_failed_reads_never_rewritten(self):
@@ -74,7 +88,8 @@ class RollingJournalTests(unittest.TestCase):
             result = refresh_media(
                 media, size=len(self.raw), sector=512, source_token="tok",
                 journal=self.journal, chunk=1024, mode="full", verify=False,
-                consistency_reads=2, max_errors=100,
+                consistency_reads=2, max_errors=100, journal_backend="disk",
+                auto_escalate=False,
             )
         finally:
             media.close()
@@ -100,7 +115,7 @@ class RollingJournalTests(unittest.TestCase):
             result = refresh_media(
                 media, size=len(self.raw), sector=512, source_token="tok",
                 journal=self.journal, chunk=1024, mode="full", verify=False,
-                consistency_reads=2,
+                consistency_reads=2, journal_backend="disk", auto_escalate=False,
             )
         finally:
             media.close()
@@ -151,7 +166,7 @@ class RollingJournalTests(unittest.TestCase):
             result = refresh_media(
                 media, size=len(self.raw), sector=512, source_token="tok",
                 journal=self.journal, chunk=1024, mode="full", verify=True,
-                resume=True, consistency_reads=2,
+                resume=True, consistency_reads=2, journal_backend="disk",
             )
         finally:
             media.close()
@@ -173,6 +188,7 @@ class RollingJournalTests(unittest.TestCase):
                 media, size=len(self.raw), sector=512, source_token="tok",
                 journal=self.journal, chunk=1024, mode="adaptive", verify=True,
                 consistency_reads=2, adaptive_samples=8, slow_multiplier=1.5,
+                journal_backend="hybrid", auto_escalate=False,
             )
         finally:
             media.close()
@@ -200,7 +216,8 @@ class RollingJournalTests(unittest.TestCase):
     def test_cli_full_refresh_image(self):
         code = run([
             "refresh-image", "--image", str(self.path), "--journal", self.journal,
-            "--mode", "full",
+            "--mode", "full", "--journal-backend", "disk", "--after-run", "keep",
+            "--no-live-dashboard",
             "--ack-risk", "--ack-destructive", "--ack-no-backup", "--ack-data-loss-risk",
             "--json",
         ])
@@ -209,6 +226,17 @@ class RollingJournalTests(unittest.TestCase):
         state = json.loads((Path(self.journal) / "meta.json").read_text(encoding="utf-8"))
         self.assertEqual(state["operation"], "media_refresh_rolling")
         self.assertEqual(state["mode"], "full")
+
+    def test_cli_can_delete_journal_after_run(self):
+        code = run([
+            "refresh-image", "--image", str(self.path), "--journal", self.journal,
+            "--mode", "full", "--journal-backend", "hybrid", "--after-run", "delete",
+            "--no-live-dashboard",
+            "--ack-risk", "--ack-destructive", "--ack-no-backup", "--ack-data-loss-risk",
+            "--json",
+        ])
+        self.assertEqual(code, 0)
+        self.assertFalse(Path(self.journal).exists())
 
 
 if __name__ == "__main__":

@@ -392,55 +392,247 @@ def _probe_adaptive_targets(
     *,
     size: int,
     chunk: int,
+    sector: int,
     samples: int,
     slow_multiplier: float,
-    progress: Callable[[str], None] | None = None,
+    auto_escalate: bool = True,
+    progress: Callable[[dict], None] | None = None,
 ) -> tuple[list[tuple[int, int]], dict]:
     """Return slow-but-readable regions plus probe telemetry for Adaptive Refresh."""
     blocks = max(1, (size + chunk - 1) // chunk)
     n = min(samples, blocks)
     timings: list[tuple[int, int, float]] = []
     probe_failures = 0
+    escalations = 0
+    mechanical_alerts = 0
+    extreme_streak = 0
+    running_median = None
+
+    def emit(**kwargs) -> None:
+        if progress:
+            progress(kwargs)
+
+    def read_timed(offset: int, length: int) -> tuple[bytes | None, float, str | None]:
+        started = time.perf_counter()
+        try:
+            data = media.read_at(offset, length)
+            elapsed = time.perf_counter() - started
+            if len(data) != length:
+                return None, elapsed, "media_or_io"
+            return data, elapsed, None
+        except OSError as exc:
+            return None, time.perf_counter() - started, _classify_os_error(exc)
+
     for i in range(n):
         index = (i * (blocks - 1) // (n - 1)) if n > 1 else 0
         offset = index * chunk
         length = min(chunk, size - offset)
         if length <= 0:
             continue
-        if progress and (i == 0 or i + 1 == n or (i + 1) % max(1, n // 8) == 0):
-            progress(f"Adaptive probe {i + 1}/{n} @ offset {offset:,}")
-        started = time.perf_counter()
-        try:
-            data = media.read_at(offset, length)
-            if len(data) != length:
-                probe_failures += 1
-                continue
-        except OSError:
+        data, elapsed, err = read_timed(offset, length)
+        if running_median is None and timings:
+            running_median = sorted(t for _, _, t in timings)[len(timings) // 2]
+        elif timings:
+            times_so_far = sorted(t for _, _, t in timings)
+            running_median = times_so_far[len(times_so_far) // 2]
+        thr_guess = None
+        if running_median is not None:
+            thr_guess = max(running_median * slow_multiplier, running_median + 1e-6)
+        mechanical_fail = False
+        if thr_guess and elapsed >= max(thr_guess * 5, 1.0):
+            extreme_streak += 1
+        else:
+            extreme_streak = 0
+        if extreme_streak >= 3:
+            mechanical_fail = True
+            mechanical_alerts += 1
+            extreme_streak = 0
+        emit(
+            status="probing",
+            phase="probe",
+            probe_index=i + 1,
+            probe_total=n,
+            offset=offset,
+            latency_s=elapsed,
+            median_s=running_median,
+            threshold_s=thr_guess,
+            failed=data is None,
+            error_class=err,
+            mechanical_fail=mechanical_fail,
+            message=f"Probe {i + 1}/{n} @ {_fmt_offset(offset)} ({elapsed * 1000:.0f} ms)",
+            force=True,
+        )
+        if data is None:
             probe_failures += 1
+            if auto_escalate and length > sector * 8:
+                escalations += _escalate_region(
+                    media, offset, length, sector, timings, emit
+                )
             continue
-        elapsed = time.perf_counter() - started
         timings.append((offset, length, elapsed))
+        if auto_escalate and thr_guess and elapsed >= max(thr_guess * 3, 0.2):
+            escalations += _escalate_region(
+                media, offset, length, sector, timings, emit
+            )
+
     if not timings:
         return [], {
             "adaptive_samples_requested": samples,
             "adaptive_samples_readable": 0,
             "adaptive_probe_failures": probe_failures,
             "adaptive_targets": 0,
+            "adaptive_escalations": escalations,
+            "adaptive_mechanical_alerts": mechanical_alerts,
             "adaptive_median_seconds": None,
             "adaptive_threshold_seconds": None,
         }
     times = sorted(t for _, _, t in timings)
     median = times[len(times) // 2]
     threshold = max(median * slow_multiplier, median + 1e-6)
-    targets = [(o, l) for o, l, t in timings if t >= threshold]
+    # Deduplicate targets (escalation may add overlapping finer ranges).
+    merged: dict[int, int] = {}
+    for o, l, t in timings:
+        if t >= threshold:
+            merged[o] = max(merged.get(o, 0), l)
+    targets = sorted(merged.items())
     return targets, {
         "adaptive_samples_requested": samples,
         "adaptive_samples_readable": len(timings),
         "adaptive_probe_failures": probe_failures,
         "adaptive_targets": len(targets),
+        "adaptive_escalations": escalations,
+        "adaptive_mechanical_alerts": mechanical_alerts,
         "adaptive_median_seconds": round(median, 6),
         "adaptive_threshold_seconds": round(threshold, 6),
     }
+
+
+def _fmt_offset(offset: int) -> str:
+    if offset >= 1024**4:
+        return f"{offset / 1024**4:.2f} TiB"
+    if offset >= 1024**3:
+        return f"{offset / 1024**3:.2f} GiB"
+    if offset >= 1024**2:
+        return f"{offset / 1024**2:.1f} MiB"
+    return f"{offset} B"
+
+
+def _escalate_region(
+    media: ReadWriter,
+    offset: int,
+    length: int,
+    sector: int,
+    timings: list[tuple[int, int, float]],
+    emit: Callable[..., None],
+) -> int:
+    """Deeper subdivision probe for slow/failed zones; adds readable sub-timings."""
+    parts = 4
+    sub = length // parts
+    sub -= sub % sector
+    if sub < sector * 8:
+        return 0
+    emit(
+        status="escalating",
+        phase="escalate",
+        offset=offset,
+        message=f"Auto-escalate deeper test @ {_fmt_offset(offset)} ({parts} sub-reads)",
+        force=True,
+    )
+    added = 0
+    for i in range(parts):
+        off = offset + i * sub
+        ln = sub if i < parts - 1 else (offset + length - off)
+        ln -= ln % sector
+        if ln < sector:
+            continue
+        started = time.perf_counter()
+        try:
+            data = media.read_at(off, ln)
+            elapsed = time.perf_counter() - started
+            if len(data) != ln:
+                emit(status="probing", offset=off, failed=True, latency_s=elapsed,
+                     error_class="media_or_io", force=True,
+                     message=f"Escalate sub-read short @ {_fmt_offset(off)}")
+                continue
+            timings.append((off, ln, elapsed))
+            added += 1
+            emit(status="probing", offset=off, latency_s=elapsed, failed=False, force=True,
+                 message=f"Escalate sub-read ok @ {_fmt_offset(off)} ({elapsed * 1000:.0f} ms)")
+        except OSError as exc:
+            emit(status="probing", offset=off, failed=True, latency_s=time.perf_counter() - started,
+                 error_class=_classify_os_error(exc), force=True,
+                 message=f"Escalate sub-read error @ {_fmt_offset(off)}")
+    return added
+
+
+class JournalStore:
+    """disk | hybrid (RAM region + disk meta) | memory (RAM region+meta, meta also mirrored lightly)."""
+
+    def __init__(self, journal_dir: str, backend: str) -> None:
+        if backend not in {"disk", "hybrid", "memory"}:
+            raise ValueError("journal backend must be disk, hybrid, or memory")
+        self.backend = backend
+        self.journal_dir = os.path.abspath(journal_dir)
+        self.meta_path = os.path.join(self.journal_dir, "meta.json")
+        self.blob_path = os.path.join(self.journal_dir, "region.bin")
+        self._region: bytes | None = None
+        self._meta: dict | None = None
+
+    def prepare_new(self) -> None:
+        if os.path.lexists(self.journal_dir):
+            raise FileExistsError("Refresh journal already exists; use --resume")
+        os.makedirs(self.journal_dir, mode=0o700)
+
+    def save_meta(self, meta: dict) -> None:
+        self._meta = meta
+        if self.backend == "memory":
+            # Tiny checkpoint so operators can still inspect status if process survives.
+            _state_save(self.meta_path, {**meta, "journal_backend": self.backend, "region_in_ram": True})
+            return
+        _state_save(self.meta_path, {**meta, "journal_backend": self.backend,
+                                     "region_in_ram": self.backend == "hybrid"})
+
+    def save_region(self, data: bytes) -> None:
+        self._region = data
+        if self.backend == "disk":
+            _atomic_write_bytes(self.blob_path, data)
+        # hybrid/memory: keep bytes in RAM only for speed.
+
+    def load_region(self, length: int, digest: str) -> bytes:
+        if self._region is not None:
+            data = self._region
+        elif os.path.isfile(self.blob_path):
+            # Disk fallback enables resume after process restart (disk backend, or
+            # hybrid/memory if a prior durable blob exists).
+            with open(self.blob_path, "rb") as handle:
+                data = handle.read()
+            self._region = data
+        else:
+            raise RuntimeError(
+                "Region journal bytes unavailable (RAM journal lost or missing region.bin). "
+                "Cannot safely resume an in-flight rewrite."
+            )
+        if len(data) != length or _sha256(data) != digest:
+            raise RuntimeError("Journal region blob failed integrity check; refusing resume")
+        return data
+
+    def clear_region(self) -> None:
+        self._region = None
+        if os.path.isfile(self.blob_path):
+            os.unlink(self.blob_path)
+
+    def cleanup(self) -> None:
+        self.clear_region()
+        if os.path.isdir(self.journal_dir):
+            for name in os.listdir(self.journal_dir):
+                try:
+                    os.unlink(os.path.join(self.journal_dir, name))
+                except OSError:
+                    pass
+            try:
+                os.rmdir(self.journal_dir)
+            except OSError:
+                pass
 
 
 def _default_meta(
@@ -480,7 +672,7 @@ def _default_meta(
     }
 
 
-def _recover_interrupted_transaction(media: ReadWriter, journal_dir: str, meta: dict) -> dict:
+def _recover_interrupted_transaction(media: ReadWriter, store: JournalStore, meta: dict) -> dict:
     """Resume policy for a partial transaction; never invents bytes."""
     tx = meta.get("transaction")
     if not tx:
@@ -488,34 +680,18 @@ def _recover_interrupted_transaction(media: ReadWriter, journal_dir: str, meta: 
     state = tx.get("state")
     offset = int(tx["offset"])
     length = int(tx["length"])
-    blob = os.path.join(journal_dir, "region.bin")
     digest = tx.get("sha256")
-    if state == STATE_COMMITTED:
+    if state in {STATE_COMMITTED, STATE_VERIFIED}:
         meta["transaction"] = None
-        if os.path.isfile(blob):
-            os.unlink(blob)
-        return meta
-    if state == STATE_VERIFIED:
-        # Commit: drop blob and advance accounting if needed.
-        meta["transaction"] = None
-        if os.path.isfile(blob):
-            os.unlink(blob)
+        store.clear_region()
         return meta
     if state in {STATE_SAVED, STATE_WRITING}:
-        if not os.path.isfile(blob):
-            raise RuntimeError(
-                f"Interrupted transaction in {state} but region.bin missing; "
-                "manual review required before continuing"
-            )
-        with open(blob, "rb") as handle:
-            data = handle.read()
-        if len(data) != length or _sha256(data) != digest:
-            raise RuntimeError("Journal region blob failed integrity check; refusing resume")
-        # Always restore preserved bytes before continuing after WRITING/SAVED.
+        data = store.load_region(length, digest)
         _write_all_at(media, offset, data)
         tx["state"] = STATE_SAVED
         meta["transaction"] = tx
-        _state_save(os.path.join(journal_dir, "meta.json"), meta)
+        store.save_region(data)
+        store.save_meta(meta)
         return meta
     raise RuntimeError(f"Unknown transaction state {state!r}")
 
@@ -535,6 +711,8 @@ def refresh_media(
     consistency_reads: int = 2,
     adaptive_samples: int = 256,
     slow_multiplier: float = 2.0,
+    journal_backend: str = "hybrid",
+    auto_escalate: bool = True,
     progress: Callable[[dict], None] | None = None,
     identity_check: Callable[[], None] | None = None,
 ) -> dict:
@@ -545,13 +723,15 @@ def refresh_media(
     if not 1 <= max_errors <= 100000 or consistency_reads < 2:
         raise ValueError("Invalid max_errors or consistency_reads")
 
-    journal_dir, meta_path = _journal_paths(journal)
-    blob_path = os.path.join(journal_dir, "region.bin")
+    store = JournalStore(journal, journal_backend)
+    started = time.monotonic()
+    probe_started = started
+    probe_elapsed = 0.0
 
     if resume:
-        if not os.path.isdir(journal_dir) or not os.path.isfile(meta_path):
+        if not os.path.isdir(store.journal_dir) or not os.path.isfile(store.meta_path):
             raise FileNotFoundError("Cannot resume; rolling journal missing")
-        with open(meta_path, encoding="utf-8") as handle:
+        with open(store.meta_path, encoding="utf-8") as handle:
             meta = json.loads(handle.read())
         if meta.get("schema") != 2 or meta.get("operation") != "media_refresh_rolling":
             raise ValueError("Journal is not a rolling media_refresh state directory")
@@ -559,37 +739,44 @@ def refresh_media(
             raise RuntimeError("Journal does not match this media identity/size")
         if meta.get("sector") != sector or meta.get("chunk") != chunk or meta.get("mode") != mode:
             raise RuntimeError("Journal sector/chunk/mode does not match this run")
-        meta = _recover_interrupted_transaction(media, journal_dir, meta)
+        meta = _recover_interrupted_transaction(media, store, meta)
     else:
-        if os.path.lexists(journal_dir):
-            raise FileExistsError("Refresh journal already exists; use --resume")
-        os.makedirs(journal_dir, mode=0o700)
+        store.prepare_new()
         meta = _default_meta(
             source_token=source_token, size=size, sector=sector, chunk=chunk,
             mode=mode, verify=verify, consistency_reads=consistency_reads,
         )
+        meta["journal_backend"] = journal_backend
         if mode == "adaptive":
-            def probe_progress(message: str) -> None:
-                if progress:
-                    progress({"status": "probing", "message": message, "cursor": 0, "chunk": chunk})
-
+            probe_started = time.monotonic()
             targets, probe_stats = _probe_adaptive_targets(
-                media, size=size, chunk=chunk, samples=adaptive_samples,
-                slow_multiplier=slow_multiplier, progress=probe_progress,
+                media, size=size, chunk=chunk, sector=sector, samples=adaptive_samples,
+                slow_multiplier=slow_multiplier, auto_escalate=auto_escalate,
+                progress=progress,
             )
+            probe_elapsed = round(time.monotonic() - probe_started, 3)
             meta["queue"] = [[o, l] for o, l in targets]
             meta.update(probe_stats)
+            meta["probe_elapsed_seconds"] = probe_elapsed
         else:
-            meta["queue"] = None  # sequential via cursor
-        _state_save(meta_path, meta)
+            meta["queue"] = None
+        store.save_meta(meta)
 
-    started = time.monotonic()
     status = "completed"
+    refresh_index = 0
+    refresh_total = len(meta.get("queue") or []) if mode == "adaptive" else max(
+        1, (size + chunk - 1) // chunk
+    )
 
     def save() -> None:
-        _state_save(meta_path, meta)
+        store.save_meta(meta)
         if progress:
-            progress(dict(meta))
+            event = dict(meta)
+            event["status"] = "refreshing"
+            event["phase"] = "refresh"
+            event["refresh_index"] = refresh_index
+            event["refresh_total"] = refresh_total
+            progress(event)
 
     def next_region() -> tuple[int, int] | None:
         if mode == "adaptive":
@@ -610,7 +797,6 @@ def refresh_media(
         return cursor, length
 
     try:
-        # Finish a restored SAVED transaction before selecting new regions.
         while True:
             if identity_check:
                 identity_check()
@@ -618,10 +804,17 @@ def refresh_media(
             if tx and tx.get("state") == STATE_SAVED:
                 offset = int(tx["offset"])
                 length = int(tx["length"])
-                with open(blob_path, "rb") as handle:
-                    data = handle.read()
-                if len(data) != length or _sha256(data) != tx["sha256"]:
-                    raise RuntimeError("SAVED region blob corrupted")
+                data = store.load_region(length, tx["sha256"])
+                if progress:
+                    progress({
+                        "status": "refreshing", "phase": "refresh",
+                        "offset": offset, "refresh_index": refresh_index,
+                        "refresh_total": refresh_total,
+                        "rewritten_bytes": meta["rewritten_bytes"],
+                        "verified_bytes": meta["verified_bytes"],
+                        "message": f"Rewrite+verify @ {_fmt_offset(offset)}",
+                        "force": True,
+                    })
                 tx["state"] = STATE_WRITING
                 meta["transaction"] = tx
                 save()
@@ -630,7 +823,12 @@ def refresh_media(
                 except OSError as exc:
                     meta["failed_write_attempts"] = int(meta["failed_write_attempts"]) + 1
                     meta["last_error_class"] = _classify_os_error(exc)
-                    # Best-effort restore of journaled original bytes after a failed write.
+                    if progress:
+                        progress({
+                            "status": "refreshing", "offset": offset, "failed": True,
+                            "error_class": meta["last_error_class"], "force": True,
+                            "message": f"Write failed @ {_fmt_offset(offset)}",
+                        })
                     try:
                         _write_all_at(media, offset, data)
                     except OSError:
@@ -639,8 +837,7 @@ def refresh_media(
                         list(meta.get("skipped_ranges") or []) + [[offset, length]]
                     )
                     meta["transaction"] = None
-                    if os.path.isfile(blob_path):
-                        os.unlink(blob_path)
+                    store.clear_region()
                     if exc.errno in _FATAL:
                         status = "aborted_device_or_access_error"
                         break
@@ -656,11 +853,9 @@ def refresh_media(
                             meta["skipped_ranges"] = _merge_ranges(
                                 list(meta.get("skipped_ranges") or []) + [[offset, length]]
                             )
-                            # Restore journaled original again — already on disk ideally.
                             _write_all_at(media, offset, data)
                             meta["transaction"] = None
-                            if os.path.isfile(blob_path):
-                                os.unlink(blob_path)
+                            store.clear_region()
                             save()
                             continue
                         meta["verified_bytes"] = int(meta["verified_bytes"]) + length
@@ -668,20 +863,18 @@ def refresh_media(
                         meta["last_error_class"] = _classify_os_error(exc)
                         _write_all_at(media, offset, data)
                         meta["transaction"] = None
-                        if os.path.isfile(blob_path):
-                            os.unlink(blob_path)
+                        store.clear_region()
                         save()
                         continue
                 tx["state"] = STATE_VERIFIED
                 meta["transaction"] = tx
                 save()
                 meta["rewritten_bytes"] = int(meta["rewritten_bytes"]) + length
+                refresh_index += 1
                 if mode == "full":
                     meta["cursor"] = offset + length
-                tx["state"] = STATE_COMMITTED
                 meta["transaction"] = None
-                if os.path.isfile(blob_path):
-                    os.unlink(blob_path)
+                store.clear_region()
                 save()
                 continue
 
@@ -696,6 +889,12 @@ def refresh_media(
                     meta["inconsistent_ranges"] = _merge_ranges(
                         list(meta.get("inconsistent_ranges") or []) + [[offset, length]]
                     )
+                    if progress:
+                        progress({
+                            "status": "refreshing", "offset": offset, "failed": True,
+                            "error_class": "media_or_io", "force": True,
+                            "message": f"Inconsistent reads — skipped @ {_fmt_offset(offset)}",
+                        })
                     if mode == "full":
                         meta["cursor"] = offset + length
                     save()
@@ -707,6 +906,12 @@ def refresh_media(
                     list(meta.get("skipped_ranges") or []) + [[offset, length]]
                 )
                 meta["last_error_class"] = _classify_os_error(exc)
+                if progress:
+                    progress({
+                        "status": "refreshing", "offset": offset, "failed": True,
+                        "error_class": meta["last_error_class"], "force": True,
+                        "message": f"Read failed — skipped @ {_fmt_offset(offset)}",
+                    })
                 if mode == "full":
                     meta["cursor"] = offset + length
                 if exc.errno in _FATAL:
@@ -719,8 +924,7 @@ def refresh_media(
                     break
                 continue
 
-            # SAVED: durable preserve before any patient write.
-            _atomic_write_bytes(blob_path, data)
+            store.save_region(data)
             meta["transaction"] = {
                 "state": STATE_SAVED,
                 "offset": offset,
@@ -728,7 +932,6 @@ def refresh_media(
                 "sha256": _sha256(data),
             }
             save()
-            # Loop continues into SAVED handler above.
     finally:
         pass
 
@@ -754,7 +957,8 @@ def refresh_media(
         "sector": sector,
         "chunk": chunk,
         "source_token": source_token,
-        "journal": journal_dir,
+        "journal": store.journal_dir,
+        "journal_backend": journal_backend,
         "cursor": meta.get("cursor"),
         "queue_remaining": len(meta.get("queue") or []),
         "rewritten_bytes": meta["rewritten_bytes"],
@@ -768,13 +972,17 @@ def refresh_media(
         "verify": verify,
         "consistency_reads": consistency_reads,
         "elapsed_seconds": meta["elapsed_seconds"],
+        "probe_elapsed_seconds": meta.get("probe_elapsed_seconds", probe_elapsed),
+        "total_elapsed_seconds": round(time.monotonic() - started, 3),
         "notes": meta["notes"],
         "windows_admin_required": sys.platform == "win32",
     }
     for key in (
         "adaptive_samples_requested", "adaptive_samples_readable", "adaptive_probe_failures",
         "adaptive_targets", "adaptive_median_seconds", "adaptive_threshold_seconds",
+        "adaptive_escalations", "adaptive_mechanical_alerts",
     ):
         if key in meta:
             result[key] = meta[key]
     return result
+
