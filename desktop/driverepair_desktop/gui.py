@@ -629,7 +629,8 @@ def launch() -> None:
     row(tab_system, 'Image destination', dest_file, pick_output)
     ttk.Label(tab_system, text='NAS destinations must already be mounted by the live OS. '
               'If no separate destination has enough capacity, a full image is not possible; '
-              'consider recovering priority files to separate storage.',
+              'the experimental RAM-journal refresh option below can rewrite CONSISTENTLY READABLE sectors, '
+              'but cannot salvage unreadable files or preserve a full backup.',
               style='Muted.TLabel', wraplength=900).pack(anchor='w', pady=(5, 10))
 
     def list_offline():
@@ -681,6 +682,74 @@ def launch() -> None:
     ttk.Button(row_sys, text='2. Check destination', command=plan_offline).pack(side='left', padx=4)
     ttk.Button(row_sys, text='3. Rescue to image', style='Accent.TButton',
                command=rescue_offline).pack(side='left', padx=4)
+
+    ttk.Separator(tab_system).pack(fill='x', pady=12)
+    ttk.Label(tab_system, text='Last resort: refresh readable sectors without a second drive',
+              font=('Segoe UI', 12, 'bold')).pack(anchor='w')
+    ttk.Label(tab_system,
+              text='EXPERIMENTAL AND DESTRUCTIVE: This rewrites the installed drive, NOT a recovery '
+                   'of unreadable/overwritten files. Requires Linux booted from trusted live USB; '
+                   'the internal drive must be offline. RAM journals can disappear on host shutdown '
+                   'even if a UPS is connected. Preserve critical files elsewhere whenever possible.',
+              style='Muted.TLabel', wraplength=910).pack(anchor='w', pady=(4, 8))
+    offline_ram_journal = tk.StringVar(value='/run/driverepair-journal/system-refresh')
+    offline_ram_power = tk.StringVar(value='battery')
+    row(tab_system, 'RAM journal (pre-mounted tmpfs)', offline_ram_journal)
+    row(tab_system, 'Power telemetry (battery or nut:UPSNAME)', offline_ram_power)
+
+    def refresh_offline_ram():
+        try:
+            chosen = offline_tree.selection()
+            if len(chosen) != 1 or chosen[0] not in offline_inventory:
+                raise ValueError('Select exactly one offline whole disk first')
+            device = offline_inventory[chosen[0]]
+            if not messagebox.askyesno('No-backup in-place rewrite — LAST RESORT',
+                    'This will WRITE to the selected installed hard drive. It does not restore '
+                    'unreadable data and may permanently destroy the remaining recoverable data '
+                    'if the disk, computer, or RAM journal fails. A UPS is NOT a backup. '
+                    'Have you booted a trusted Linux live USB and accepted the risk?'):
+                return
+            if not messagebox.askyesno('Confirm disk identity',
+                    f'About to modify:\n{device.model}\n{device.public()["size_bytes"]} bytes\n'
+                    f'{device.id}\nIdentity: {device.fingerprint[:12]}\n\n'
+                    'This is NOT a data rescue. Confirm the exact drive?'):
+                return
+            args = [
+                'refresh-system', '--device', device.id,
+                '--confirm-identity', device.fingerprint[:12],
+                '--journal', require(offline_ram_journal, 'RAM-backed journal path'),
+                '--journal-backend', 'ramdisk', '--mode', 'adaptive',
+                '--power-source', require(offline_ram_power, 'UPS/battery telemetry'),
+                '--ack-offline-system', '--ack-risk', '--ack-destructive',
+                '--ack-no-backup', '--ack-data-loss-risk', '--ack-unvalidated-hardware',
+                '--ack-volatile-journal', '--after-run', 'keep',
+                '--no-live-dashboard', '--progress-jsonl', '--json',
+            ]
+            if device.bus.lower() in {'usb', 'firewire', 'thunderbolt'}:
+                if not messagebox.askyesno('External dock power',
+                        'Is the USB dock independently UPS/battery powered, too?'):
+                    return
+                args.extend(['--ack-dock-power-backed', '--ack-usb-bridge-risk'])
+            start(args, 'LAST RESORT: offline system refresh', risky=True, destructive=True)
+        except ValueError as exc:
+            messagebox.showerror('Last-resort refresh', str(exc))
+
+    def check_offline_ram():
+        try:
+            start(['ram-journal-check',
+                   '--journal', require(offline_ram_journal, 'RAM-backed journal path'),
+                   '--power-source', require(offline_ram_power, 'UPS/battery telemetry'),
+                   '--chunk-mib', '1', '--json'],
+                  'Read-only RAM/power preflight')
+        except ValueError as exc:
+            messagebox.showerror('RAM preflight', str(exc))
+
+    ram_actions = ttk.Frame(tab_system)
+    ram_actions.pack(anchor='w', pady=8)
+    ttk.Button(ram_actions, text='1. Check RAM and power (read-only)',
+               command=check_offline_ram).pack(side='left', padx=4)
+    ttk.Button(ram_actions, text='2. EXPERIMENTAL: in-place refresh (no image)',
+               command=refresh_offline_ram).pack(side='left', padx=4)
 
     # --- In-place refresh ---
     ttk.Label(

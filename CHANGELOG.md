@@ -1,5 +1,10 @@
-## 0.3.1b1 — 2026-11-01 — Offline system recovery engineering cycle (NOT RELEASE-CLEARED)
+## 0.3.1b1 — 2026-11-01 — Last-resort + offline recovery (NOT RELEASE-CLEARED)
 
+- Last-resort Linux `refresh-system`: experimental Adaptive in-place refresh of an
+  unmounted internal disk with a verified RAM journal and multi-ack gates.
+  Protects only the active chunk; not a backup; Windows/macOS system refresh remains unsupported.
+- Windows live `rescue-external` / monitor history now use PhysicalDrive vs
+  destination drive-letter disk-number isolation (previously Linux-only fail-closed).
 - Added Linux internal whole-disk inventory (`list-all-linux`), explicitly
   offline read-only `rescue-system`, and `plan-system-recovery` preflight.
 - Allows verified mounted network destinations (NFS/NFS4/CIFS/SMB3/SSHFS) for
@@ -154,3 +159,15 @@
 - Production BIOS/UEFI recovery media
 - Signed desktop installers
 - Guaranteed SMART health from hardware
+
+### Experimental follow-up — one-drive in-place refresh
+
+- Added `refresh-system` for explicitly consented, OFFLINE internal disk refresh
+  from trusted Linux live media, reusing the existing transactional media engine.
+- Added no-image last-resort path in the Recover OS drive GUI, with exact device
+  identity confirmation and explicit warnings about volatile data loss.
+- Requires approved RAM filesystem and live UPS/battery checks for volatile
+  journaling. Internal disk mode no longer conflates USB-dock power confirmation
+  with an internal SATA disk; USB bridges still require the separate acknowledgment.
+- Added synthetic CLI safety-path tests. No physical device testing or
+  manufacturer firmware remapping validation has been performed.
