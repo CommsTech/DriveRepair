@@ -36,7 +36,8 @@ class TskTests(unittest.TestCase):
         self.out = Path(self.tmp.name) / 'recovered'
         self.runner = patch('driverepair_desktop.tsk_recovery.subprocess.Popen', side_effect=FakeProcess)
         self.which = patch('driverepair_desktop.tsk_recovery.shutil.which', side_effect=lambda s:s)
-        self.runner.start(); self.which.start()
+        self.runner.start()
+        self.which.start()
         self.addCleanup(self.runner.stop)
         self.addCleanup(self.which.stop)
 

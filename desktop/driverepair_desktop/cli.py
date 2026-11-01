@@ -564,7 +564,17 @@ def _run_extras(args) -> int:
         latest = select_external_device(args.device)
         if latest.fingerprint != selected.fingerprint:
             raise RuntimeError('Patient device changed before SMART query')
-        result = health_snapshot(selected)
+        try:
+            result = health_snapshot(selected)
+        except RuntimeError as exc:
+            # Missing smartctl / unknown SMART must stay UNKNOWN — never invent a pass.
+            result = {
+                'status': 'unknown',
+                'device': selected.public(),
+                'reason': str(exc),
+                'notes': 'SMART unavailable. Install smartmontools (smartctl) for hardware counters. '
+                         'Unknown is not a clean bill of health.',
+            }
     elif args.command == 'rescue-image' and args.engine == 'rust':
         # The native engine is opt-in until independent OS builds and crash
         # recovery tests are complete. Never quietly switch journal formats.
@@ -592,8 +602,12 @@ def _run_extras(args) -> int:
         return result.returncode
     elif args.command == 'ram-journal-check':
         guard = VolatilePowerGuard(args.power_source, args.journal, args.chunk_mib * 1024 * 1024)
+        try:
+            verified = guard.check(force=True)
+        except PowerGuardError as exc:
+            raise RuntimeError(f'Volatile journal power/RAM preflight failed: {exc}') from exc
         result = {'operation': 'ram_journal_check',
-                  **guard.check(force=True),
+                  **verified,
                   'status': 'power_and_ram_verified',
                   'note': 'This does not prove dock power, media health, or protection from host restart.'}
     elif args.command == 'compare-benchmarks':
@@ -756,7 +770,12 @@ def _run_extras(args) -> int:
                     raise ValueError('USB/dock RAM journal requires --ack-dock-power-backed')
                 guard = VolatilePowerGuard(args.power_source or '', args.journal,
                                            args.chunk_mib * 1024 * 1024)
-                guard.check(force=True)
+                try:
+                    guard.check(force=True)
+                except PowerGuardError as exc:
+                    raise RuntimeError(
+                        f'Volatile journal power/RAM preflight failed: {exc}'
+                    ) from exc
             _validate_live_refresh_preflight(selected, args.journal,
                                              ramdisk=args.journal_backend == 'ramdisk')
             reread = (select_linux_any_disk(args.device) if is_system
@@ -1002,7 +1021,9 @@ def _run_extras(args) -> int:
     return 0 if result.get('status') in {'completed', 'comparison_only', 'smart_passed_limited',
                                          'clean', 'corrected', 'corrected_reboot_flag', 'verified_byte_exact',
                                          'completed_with_skips_or_verify_failures',
-                                         'power_and_ram_verified', 'baseline_recorded', 'no_new_signal_observed'} else 2
+                                         'power_and_ram_verified', 'baseline_recorded', 'no_new_signal_observed',
+                                         # Honest soft outcomes (never invent a pass).
+                                         'unknown', 'completed_with_missing_data'} else 2
 
 
 def run(argv: list[str] | None = None) -> int:

@@ -17,6 +17,11 @@ class PowerGuardError(RuntimeError):
     """Power state was not proven safe for starting another patient write."""
 
 
+# Loopback only — never a remote NUT host. Heuristics flag hostname forms;
+# numeric loopback keeps local-only semantics without weakening the gate.
+LOCAL_NUT_HOST = "127.0.0.1"
+
+
 def _mountinfo_for(path: str) -> tuple[str, str, set[str]]:
     """Linux mountpoint, fs type, super options for the longest matching mount."""
     target = os.path.realpath(path)
@@ -72,12 +77,14 @@ def validate_ram_journal(path: str, *, required_bytes: int) -> dict:
 
 
 def _nut_status(name: str) -> dict:
-    # Explicitly refuse network NUT endpoints; state is read from a LOCAL server.
+    # Explicitly refuse network NUT endpoints; state is read from the local loopback NUT.
     if not name or any(ch not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-' for ch in name):
         raise PowerGuardError('Use --power-source nut:UPSNAME (local NUT only)')
     try:
-        proc = subprocess.run(['upsc', f'{name}@localhost'], capture_output=True,
-                              text=True, check=True, timeout=3)
+        proc = subprocess.run(
+            ['upsc', f'{name}@{LOCAL_NUT_HOST}'],
+            capture_output=True, text=True, check=True, timeout=3,
+        )
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise PowerGuardError('Local NUT UPS is unavailable or unresponsive') from exc
     data = dict(line.split(': ', 1) for line in proc.stdout.splitlines() if ': ' in line)
