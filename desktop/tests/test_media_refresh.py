@@ -227,6 +227,27 @@ class RollingJournalTests(unittest.TestCase):
         self.assertEqual(state["operation"], "media_refresh_rolling")
         self.assertEqual(state["mode"], "full")
 
+    def test_cli_progress_jsonl_emits_events(self):
+        import io
+        from contextlib import redirect_stderr
+        err = io.StringIO()
+        with redirect_stderr(err):
+            code = run([
+                "refresh-image", "--image", str(self.path), "--journal", self.journal,
+                "--mode", "full", "--journal-backend", "memory", "--after-run", "delete",
+                "--no-live-dashboard", "--progress-jsonl",
+                "--ack-risk", "--ack-destructive", "--ack-no-backup", "--ack-data-loss-risk",
+                "--json",
+            ])
+        self.assertEqual(code, 0)
+        progress_lines = [
+            json.loads(line) for line in err.getvalue().splitlines()
+            if line.startswith("{") and '"type":"progress"' in line.replace(" ", "")
+        ]
+        self.assertGreaterEqual(len(progress_lines), 1)
+        self.assertIn("health", progress_lines[0])
+        self.assertIn("phase", progress_lines[0])
+
     def test_cli_can_delete_journal_after_run(self):
         code = run([
             "refresh-image", "--image", str(self.path), "--journal", self.journal,

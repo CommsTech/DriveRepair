@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import zipfile
 
 from .devices import list_external_devices, select_external_device
@@ -33,6 +34,12 @@ from .media_refresh import (
     require_destructive_acknowledgements,
 )
 from .refresh_display import RefreshDashboard
+from .progress_events import ProgressEmitter
+from .encryption import (
+    encryption_guidance,
+    require_plaintext_filesystem,
+    scan_path_for_encryption,
+)
 
 
 
@@ -84,6 +91,14 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--max-files", type=int, default=100)
     cmd.add_argument("--max-file-mib", type=int, default=32)
     cmd.add_argument("--allow-incomplete-image", action="store_true")
+    cmd.add_argument("--ack-encrypted-volume", action="store_true",
+                     help="Allow carving even if BitLocker/LUKS signatures are present (usually wrong)")
+    cmd.add_argument("--json", action="store_true")
+    cmd = sub.add_parser(
+        "inspect-encryption",
+        help="Detect BitLocker/LUKS signatures on an image (read-only; does not unlock)",
+    )
+    cmd.add_argument("--image", required=True)
     cmd.add_argument("--json", action="store_true")
     cmd = sub.add_parser('salvage-zip', help='Salvage intact CRC-verified ZIP members')
     cmd.add_argument('--archive', required=True)
@@ -109,14 +124,18 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument('--max-files', type=int, default=100)
     cmd.add_argument('--max-file-mib', type=int, default=128)
     cmd.add_argument('--allow-incomplete-image', action='store_true')
+    cmd.add_argument('--ack-encrypted-volume', action='store_true',
+                     help='Allow undelete even if BitLocker/LUKS signatures are present (usually wrong)')
     cmd.add_argument('--json', action='store_true')
     cmd = sub.add_parser('check-ext-image', help='Read-only ext2/3/4 filesystem check using e2fsck -n')
     cmd.add_argument('--image', required=True)
+    cmd.add_argument('--ack-encrypted-volume', action='store_true')
     cmd.add_argument('--json', action='store_true')
     cmd = sub.add_parser('repair-ext-image', help='Clone an ext filesystem image and repair ONLY the clone')
     cmd.add_argument('--image', required=True)
     cmd.add_argument('--output', required=True, help='New, nonexistent filesystem image copy')
     cmd.add_argument('--ack-repair', action='store_true', help='Required: agree that repair on a clone may lose damaged files')
+    cmd.add_argument('--ack-encrypted-volume', action='store_true')
     cmd.add_argument('--json', action='store_true')
     for name, help_text in (
         ('refresh-image',
@@ -145,7 +164,9 @@ def parser() -> argparse.ArgumentParser:
                          help='On slow/failed probes, automatically subdivide and retest (default: on)')
         cmd.add_argument('--no-verify', action='store_true', help='Skip post-write reread comparison')
         cmd.add_argument('--live-dashboard', action=argparse.BooleanOptionalAction, default=True,
-                         help='Animated terminal dashboard during refresh (default: on; off with --json)')
+                         help='Animated terminal dashboard during refresh (default: on)')
+        cmd.add_argument('--progress-jsonl', action='store_true',
+                         help='Emit throttled JSON progress lines on stderr for GUI consumers')
         cmd.add_argument('--after-run', choices=['keep', 'delete', 'ask'], default='ask',
                          help='Keep or delete the journal directory when the run finishes')
         cmd.add_argument('--ack-risk', action='store_true', help='Accept stress on failing media')
@@ -248,22 +269,66 @@ def _run_extras(args) -> int:
                              max_file_mib=args.max_file_mib, max_total_mib=args.max_total_mib)
     elif args.command == 'verify-images':
         result = verify_images(args.image, args.output)
+    elif args.command == 'inspect-encryption':
+        findings = scan_path_for_encryption(args.image)
+        result = {
+            "schema": 1,
+            "operation": "inspect_encryption",
+            "status": "completed",
+            "image": args.image,
+            "encrypted": bool(findings),
+            "findings": [f.public() for f in findings],
+            "guidance": encryption_guidance(findings),
+        }
     elif args.command == 'undelete-fat32':
+        enc = require_plaintext_filesystem(
+            args.image, ack_encrypted_volume=args.ack_encrypted_volume,
+            operation="FAT32 undelete",
+        )
         result = undelete_fat32(args.image, args.output_dir, max_files=args.max_files,
                                 max_file_mib=args.max_file_mib,
                                 allow_incomplete=args.allow_incomplete_image)
+        if enc:
+            result = {**result, "encryption_warnings": [f.public() for f in enc],
+                      "guidance": encryption_guidance(enc)}
     elif args.command == 'check-ext-image':
+        enc = require_plaintext_filesystem(
+            args.image, ack_encrypted_volume=args.ack_encrypted_volume,
+            operation="ext filesystem check",
+        )
         result = check_ext_image(args.image)
+        if enc:
+            result = {**result, "encryption_warnings": [f.public() for f in enc]}
     elif args.command == 'repair-ext-image':
+        enc = require_plaintext_filesystem(
+            args.image, ack_encrypted_volume=args.ack_encrypted_volume,
+            operation="ext filesystem repair",
+        )
         result = repair_ext_image(args.image, args.output, ack_repair=args.ack_repair)
+        if enc:
+            result = {**result, "encryption_warnings": [f.public() for f in enc]}
     elif args.command == 'carve-image':
+        enc = require_plaintext_filesystem(
+            args.image, ack_encrypted_volume=args.ack_encrypted_volume,
+            operation="file carving",
+        )
         result = carve_image(args.image, args.output_dir, formats=tuple(args.formats),
                              max_files=args.max_files, max_file_mib=args.max_file_mib,
                              allow_incomplete=args.allow_incomplete_image)
+        if enc:
+            result = {**result, "encryption_warnings": [f.public() for f in enc],
+                      "guidance": encryption_guidance(enc)}
     elif args.command in {'refresh-image', 'refresh-external'}:
         is_device = args.command == 'refresh-external'
         if args.consistency_reads < 2:
             raise ValueError('--consistency-reads must be >= 2')
+        # Paint something immediately — device open / identity checks can take seconds.
+        if args.live_dashboard:
+            print(
+                f'[{time.strftime("%H:%M:%S")}] Preparing {args.mode} refresh '
+                f'(journal={args.journal_backend}); opening patient…',
+                file=sys.stderr, flush=True,
+            )
         if is_device:
             selected = select_external_device(args.device)
             require_destructive_acknowledgements(
@@ -279,6 +344,11 @@ def _run_extras(args) -> int:
             assert_patient_idle_windows(selected)
             reread = select_external_device(args.device)
             assert_stable_identity(selected, reread)
+            if args.live_dashboard:
+                print(
+                    f'[{time.strftime("%H:%M:%S")}] Opening read/write handle on {selected.id}…',
+                    file=sys.stderr, flush=True,
+                )
             media = open_device_readwrite(selected)
             size, sector = selected.size_bytes, selected.sector_size
             source_token = selected.fingerprint
@@ -295,20 +365,41 @@ def _run_extras(args) -> int:
             source_token, size = _source_image_token(args.image)
             media = ImageReadWriter(args.image)
             sector = 512 if size % 512 == 0 else 1
-        # Live progress always goes to stderr (TTY dashboard or line-mode for logs).
+        # BitLocker/LUKS: byte-identical refresh is OK; warn so operators do not
+        # follow up with carving/repair against ciphertext.
+        enc_path = args.device if is_device else args.image
+        enc_findings: list = []
+        if not is_device:
+            try:
+                enc_findings = scan_path_for_encryption(enc_path)
+            except OSError:
+                enc_findings = []
+        if enc_findings:
+            print(
+                "NOTE: encryption signature(s) detected — refresh preserves ciphertext bytes only. "
+                "Do NOT carve/undelete/repair this volume until unlocked. "
+                + "; ".join(encryption_guidance(enc_findings)[:2]),
+                file=sys.stderr, flush=True,
+            )
+        emitter = ProgressEmitter(enabled=bool(args.progress_jsonl), min_interval_s=0.1)
+        # Live progress on stderr (TTY panel, line-mode for logs, optional JSONL for GUI).
         dashboard = RefreshDashboard(
             mode=args.mode, size=size, enabled=bool(args.live_dashboard),
-            journal_backend=args.journal_backend,
+            journal_backend=args.journal_backend, emitter=emitter,
         )
+        dashboard.handle({
+            "status": "starting", "force": True,
+            "message": f"Patient open — starting {args.mode} refresh",
+            "offset": 0,
+        })
         try:
-            if not args.json:
-                print(
-                    f'DESTRUCTIVE In-Place Media Refresh ({args.mode}, journal={args.journal_backend}). '
-                    'Rolling journal protects only the active region. '
-                    'Unreadable/inconsistent sectors are skipped, not invented. '
-                    'mechanical*=latency proxy (USB docks have no acoustic mic).',
-                    file=sys.stderr,
-                )
+            print(
+                f'DESTRUCTIVE In-Place Media Refresh ({args.mode}, journal={args.journal_backend}). '
+                'Rolling journal protects only the active region. '
+                'Unreadable/inconsistent sectors are skipped, not invented. '
+                'mechanical*=latency proxy (USB docks have no acoustic mic).',
+                file=sys.stderr, flush=True,
+            )
 
             def identity_check() -> None:
                 if is_device:
@@ -418,7 +509,8 @@ def run(argv: list[str] | None = None) -> int:
         if args.command in {'rescue-image', 'rescue-external', 'benchmark-image',
                             'benchmark-external', 'carve-image', 'salvage-zip',
                             'undelete-fat32', 'verify-images', 'check-ext-image', 'repair-ext-image',
-                            'compare-benchmarks', 'health', 'refresh-image', 'refresh-external'}:
+                            'compare-benchmarks', 'health', 'refresh-image', 'refresh-external',
+                            'inspect-encryption'}:
             return _run_extras(args)
         if args.command == "list":
             devices = list_external_devices()

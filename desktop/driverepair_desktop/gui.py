@@ -1,17 +1,38 @@
-"""Standard-library desktop interface to the DriveRepair CLI.
+"""DriveRepair Recovery Workstation — modern, low-overhead desktop presentation.
 
-The GUI deliberately delegates operations to the same CLI used by tests and
-scripts. Every operation is a foreground child process with explicit cancel;
-no GUI widget writes to a device or bypasses CLI safety preflights.
+Recovery I/O stays in the CLI engine. This GUI only renders throttled progress
+events (~10 Hz max) and never opens patient devices itself. Cross-platform via
+stdlib Tk (Windows / macOS / Linux). Visual language: industrial dark console —
+not DOS blue, not marketing purple.
 """
 from __future__ import annotations
 
+import json
 import os
 import queue
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
+
+
+# Industrial dark palette (high-contrast status colors, no purple/glow stack).
+C = {
+    "bg": "#0f1419",
+    "panel": "#171d25",
+    "panel2": "#1c2430",
+    "border": "#2a3544",
+    "text": "#e8eef5",
+    "muted": "#8b9aab",
+    "accent": "#3d8fd1",
+    "ok": "#3fa76a",
+    "warn": "#d4a017",
+    "fail": "#d14949",
+    "slow": "#c47a20",
+    "pending": "#243041",
+    "current": "#5eb0ef",
+}
 
 
 def launch() -> None:
@@ -19,322 +40,566 @@ def launch() -> None:
         import tkinter as tk
         from tkinter import filedialog, messagebox, simpledialog, ttk
     except ImportError as exc:
-        raise RuntimeError('Tk is unavailable. Install the operating-system Python tkinter package') from exc
+        raise RuntimeError("Tk is unavailable. Install the OS Python tkinter package") from exc
 
     try:
         root = tk.Tk()
     except tk.TclError as exc:
-        raise RuntimeError('No desktop display available. Use the DriveRepair CLI instead') from exc
+        raise RuntimeError("No desktop display available. Use the DriveRepair CLI instead") from exc
 
-    root.title('DriveRepair — Recovery Workstation (Experimental)')
-    root.geometry('1000x790')
-    root.minsize(780, 620)
-    root.option_add('*Font', 'TkDefaultFont')
+    root.title("DriveRepair Recovery Workstation")
+    root.geometry("1180x820")
+    root.minsize(960, 700)
+    root.configure(bg=C["bg"])
+
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except tk.TclError:
+        pass
+    style.configure(".", background=C["bg"], foreground=C["text"], fieldbackground=C["panel2"])
+    style.configure("TFrame", background=C["bg"])
+    style.configure("Card.TFrame", background=C["panel"])
+    style.configure("TLabel", background=C["bg"], foreground=C["text"])
+    style.configure("Muted.TLabel", background=C["bg"], foreground=C["muted"])
+    style.configure("Card.TLabel", background=C["panel"], foreground=C["text"])
+    style.configure("Title.TLabel", background=C["bg"], foreground=C["text"], font=("Segoe UI", 22, "bold"))
+    style.configure("TButton", background=C["panel2"], foreground=C["text"], padding=6)
+    style.map("TButton", background=[("active", C["border"])])
+    style.configure("Accent.TButton", background=C["accent"], foreground="#061018")
+    style.configure("TNotebook", background=C["bg"], borderwidth=0)
+    style.configure("TNotebook.Tab", background=C["panel2"], foreground=C["muted"], padding=(14, 8))
+    style.map("TNotebook.Tab", background=[("selected", C["panel"])], foreground=[("selected", C["text"])])
+    style.configure("Treeview", background=C["panel2"], fieldbackground=C["panel2"],
+                    foreground=C["text"], borderwidth=0, rowheight=26)
+    style.configure("Treeview.Heading", background=C["panel"], foreground=C["muted"])
+    style.configure("Horizontal.TProgressbar", troughcolor=C["panel2"], background=C["accent"])
 
     q: queue.Queue[tuple[str, object]] = queue.Queue()
     process: subprocess.Popen[str] | None = None
     busy = False
-    device_ids: list[str] = []
-    selected = tk.StringVar(value='No external drive selected')
+    map_width, map_height = 64, 18
+    map_cells = ["."] * (map_width * map_height)
+    map_dirty = True
+    last_map_draw = 0.0
+    stats = {
+        "phase": "IDLE",
+        "pct": 0.0,
+        "offset": 0,
+        "size": 0,
+        "latency_ms": None,
+        "median_ms": None,
+        "rewritten": 0,
+        "verified": 0,
+        "message": "Ready",
+        "health": {"media": "OK", "transport": "OK", "mechanical": "OK"},
+        "started": None,
+    }
+
+    selected = tk.StringVar(value="No external drive selected")
     image = tk.StringVar()
     dest_file = tk.StringVar()
     dest_dir = tk.StringVar()
-    status = tk.StringVar(value='Ready — source disks are never opened for writing by desktop recovery.')
+    journal_dir = tk.StringVar(value=str(Path.home() / "DriveRepairJournal"))
+    status = tk.StringVar(value="Recovery engine idle — presentation layer only draws throttled progress")
+    phase_var = tk.StringVar(value="IDLE")
+    health_var = tk.StringVar(value="media OK · transport OK · mechanical* OK")
+    metric_var = tk.StringVar(value="—")
+    msg_var = tk.StringVar(value="Select a workflow. Disk I/O runs in a child process.")
 
-    frame = ttk.Frame(root, padding=12)
-    frame.pack(fill='both', expand=True)
-    ttk.Label(frame, text='DriveRepair', font=('TkDefaultFont', 20, 'bold')).pack(anchor='w')
-    ttk.Label(frame, text='Diagnostics · Image rescue · Deleted-file recovery · Filesystem repair on a COPY',
-              foreground='#566171').pack(anchor='w', pady=(3, 9))
-    notebook = ttk.Notebook(frame)
-    notebook.pack(fill='both', expand=True)
-    drives = ttk.Frame(notebook, padding=12)
-    recovery = ttk.Frame(notebook, padding=12)
-    maintenance = ttk.Frame(notebook, padding=12)
-    notebook.add(drives, text='External drives')
-    notebook.add(recovery, text='Recover files / images')
-    notebook.add(maintenance, text='Repair a filesystem copy')
+    shell = ttk.Frame(root, padding=16)
+    shell.pack(fill="both", expand=True)
 
-    def row(parent, title: str, var: tk.StringVar, picker) -> None:
-        line = ttk.Frame(parent)
-        line.pack(fill='x', pady=5)
-        ttk.Label(line, text=title, width=23).pack(side='left')
-        ttk.Entry(line, textvariable=var).pack(side='left', fill='x', expand=True, padx=4)
-        ttk.Button(line, text='Browse…', command=picker).pack(side='left')
+    header = ttk.Frame(shell)
+    header.pack(fill="x")
+    ttk.Label(header, text="DriveRepair", style="Title.TLabel").pack(side="left")
+    ttk.Label(header, text="  Recovery Workstation", style="Muted.TLabel").pack(side="left", pady=(10, 0))
+    ttk.Label(header, text="90% recovery · 10% presentation · cross-platform",
+              style="Muted.TLabel").pack(side="right", pady=(12, 0))
 
-    def pick_file():
-        chosen = filedialog.askopenfilename(title='Select source image / archive')
-        if chosen:
-            image.set(chosen)
+    # Live ops strip
+    ops = tk.Frame(shell, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
+    ops.pack(fill="x", pady=(14, 10), ipady=8, ipadx=8)
+    left = tk.Frame(ops, bg=C["panel"])
+    left.pack(side="left", fill="both", expand=True, padx=10, pady=6)
+    tk.Label(left, textvariable=phase_var, bg=C["panel"], fg=C["accent"],
+             font=("Segoe UI Semibold", 14)).pack(anchor="w")
+    tk.Label(left, textvariable=msg_var, bg=C["panel"], fg=C["text"],
+             font=("Segoe UI", 10)).pack(anchor="w", pady=(2, 0))
+    tk.Label(left, textvariable=health_var, bg=C["panel"], fg=C["muted"],
+             font=("Segoe UI", 9)).pack(anchor="w", pady=(4, 0))
+    right = tk.Frame(ops, bg=C["panel"])
+    right.pack(side="right", padx=10, pady=6)
+    tk.Label(right, textvariable=metric_var, bg=C["panel"], fg=C["text"],
+             font=("Consolas", 11), justify="right").pack(anchor="e")
+    pbar = ttk.Progressbar(ops, mode="determinate", maximum=1000)
+    pbar.pack(fill="x", padx=10, pady=(0, 8))
 
-    def pick_output():
-        chosen = filedialog.asksaveasfilename(title='Choose a NEW destination image',
-                                               defaultextension='.img')
-        if chosen:
-            dest_file.set(chosen)
+    # Sector map
+    map_frame = tk.Frame(shell, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
+    map_frame.pack(fill="both", expand=False, pady=(0, 10))
+    tk.Label(map_frame, text="Surface activity map  ·  . pending   o ok   S slow   ! escalate   X error",
+             bg=C["panel"], fg=C["muted"], font=("Segoe UI", 9)).pack(anchor="w", padx=10, pady=(8, 2))
+    canvas = tk.Canvas(map_frame, height=170, bg=C["panel2"], highlightthickness=0)
+    canvas.pack(fill="x", padx=10, pady=(0, 10))
 
-    def pick_dir():
-        chosen = filedialog.askdirectory(title='Choose the parent folder for recovered files')
-        if chosen:
-            dest_dir.set(os.path.join(chosen, 'recovered_files'))
+    color_for = {".": C["pending"], "o": C["ok"], "S": C["slow"], "!": C["warn"], "X": C["fail"]}
 
-    log_holder = ttk.LabelFrame(frame, text='Operation log (saved outputs are never overwritten)', padding=8)
-    log_holder.pack(side='bottom', fill='both', expand=True, pady=(10, 0))
-    log = tk.Text(log_holder, height=10, wrap='word', state='disabled', font=('TkFixedFont', 10))
-    scroll = ttk.Scrollbar(log_holder, orient='vertical', command=log.yview)
-    log.configure(yscrollcommand=scroll.set)
-    log.pack(side='left', fill='both', expand=True)
-    scroll.pack(side='right', fill='y')
+    def redraw_map(force: bool = False) -> None:
+        nonlocal map_dirty, last_map_draw
+        now = time.monotonic()
+        if not force and (not map_dirty or now - last_map_draw < 0.15):
+            return
+        map_dirty = False
+        last_map_draw = now
+        canvas.delete("all")
+        w = max(canvas.winfo_width(), 40)
+        h = max(canvas.winfo_height(), 40)
+        cw, ch = w / map_width, h / map_height
+        for y in range(map_height):
+            for x in range(map_width):
+                sym = map_cells[y * map_width + x]
+                canvas.create_rectangle(
+                    x * cw, y * ch, (x + 1) * cw - 1, (y + 1) * ch - 1,
+                    fill=color_for.get(sym, C["pending"]), outline="",
+                )
+
+    def mark_map(offset: int, size: int, symbol: str) -> None:
+        nonlocal map_dirty
+        if size <= 0:
+            return
+        idx = min(len(map_cells) - 1, int(offset * len(map_cells) / size))
+        rank = {".": 0, "o": 1, "S": 2, "!": 3, "X": 4}
+        if rank.get(symbol, 0) >= rank.get(map_cells[idx], 0):
+            map_cells[idx] = symbol
+            map_dirty = True
+
+    def reset_map() -> None:
+        nonlocal map_dirty
+        for i in range(len(map_cells)):
+            map_cells[i] = "."
+        map_dirty = True
+        redraw_map(force=True)
+
+    notebook = ttk.Notebook(shell)
+    notebook.pack(fill="both", expand=True)
+    tab_drive = ttk.Frame(notebook, padding=12)
+    tab_image = ttk.Frame(notebook, padding=12)
+    tab_refresh = ttk.Frame(notebook, padding=12)
+    tab_fs = ttk.Frame(notebook, padding=12)
+    notebook.add(tab_drive, text=" Diagnose / Rescue ")
+    notebook.add(tab_image, text=" Image recovery ")
+    notebook.add(tab_refresh, text=" In-place refresh ")
+    notebook.add(tab_fs, text=" Clone repair ")
+
+    log_holder = tk.Frame(shell, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
+    log_holder.pack(fill="both", expand=True, pady=(10, 0))
+    tk.Label(log_holder, text="Operation log", bg=C["panel"], fg=C["muted"],
+             font=("Segoe UI", 9)).pack(anchor="w", padx=8, pady=(6, 0))
+    log = tk.Text(log_holder, height=8, wrap="word", state="disabled",
+                  bg=C["panel2"], fg=C["text"], insertbackground=C["text"],
+                  font=("Consolas", 9), relief="flat", borderwidth=0)
+    log.pack(fill="both", expand=True, padx=8, pady=6)
 
     def write(text: str) -> None:
-        log.configure(state='normal')
-        log.insert('end', text)
-        log.see('end')
-        log.configure(state='disabled')
+        log.configure(state="normal")
+        log.insert("end", text)
+        log.see("end")
+        log.configure(state="disabled")
 
     def require(var: tk.StringVar, name: str) -> str:
         value = var.get().strip()
         if not value:
-            raise ValueError(f'Select a {name} first.')
+            raise ValueError(f"Select a {name} first.")
         return value
 
-    def start(args: list[str], title: str, *, risky: bool = False) -> None:
+    def row(parent, title: str, var: tk.StringVar, picker=None) -> None:
+        line = ttk.Frame(parent)
+        line.pack(fill="x", pady=4)
+        ttk.Label(line, text=title, width=22).pack(side="left")
+        ttk.Entry(line, textvariable=var).pack(side="left", fill="x", expand=True, padx=4)
+        if picker:
+            ttk.Button(line, text="Browse…", command=picker).pack(side="left")
+
+    def pick_file():
+        chosen = filedialog.askopenfilename(title="Select source image / archive")
+        if chosen:
+            image.set(chosen)
+
+    def pick_output():
+        chosen = filedialog.asksaveasfilename(title="Choose a NEW destination image",
+                                              defaultextension=".img")
+        if chosen:
+            dest_file.set(chosen)
+
+    def pick_dir():
+        chosen = filedialog.askdirectory(title="Choose parent folder for recovered files")
+        if chosen:
+            dest_dir.set(os.path.join(chosen, "recovered_files"))
+
+    def pick_journal():
+        chosen = filedialog.askdirectory(title="Journal directory (healthy storage, not the patient)")
+        if chosen:
+            journal_dir.set(chosen)
+
+    def apply_progress(event: dict) -> None:
+        nonlocal map_dirty
+        phase = str(event.get("phase") or stats["phase"])
+        stats["phase"] = phase
+        phase_var.set(phase)
+        stats["message"] = str(event.get("message") or stats["message"])
+        msg_var.set(stats["message"])
+        stats["offset"] = int(event.get("offset") or 0)
+        stats["size"] = int(event.get("size") or stats["size"] or 0)
+        if event.get("latency_ms") is not None:
+            stats["latency_ms"] = event["latency_ms"]
+        if event.get("median_ms") is not None:
+            stats["median_ms"] = event["median_ms"]
+        stats["rewritten"] = int(event.get("rewritten_bytes") or stats["rewritten"])
+        stats["verified"] = int(event.get("verified_bytes") or stats["verified"])
+        health = event.get("health") or stats["health"]
+        stats["health"] = health
+        health_var.set(
+            f"media {health.get('media', '?')} · transport {health.get('transport', '?')} · "
+            f"mechanical* {health.get('mechanical', '?')}  (*latency proxy; no acoustic mic)"
+        )
+        # Percent from probe or refresh indices.
+        pi, pt = int(event.get("probe_index") or 0), int(event.get("probe_total") or 0)
+        ri, rt = int(event.get("refresh_index") or 0), int(event.get("refresh_total") or 0)
+        if phase == "PROBE" and pt:
+            pct = 100.0 * pi / pt
+        elif rt:
+            pct = 100.0 * ri / rt
+        else:
+            pct = stats["pct"]
+        stats["pct"] = pct
+        pbar["value"] = max(0, min(1000, int(pct * 10)))
+        lat = stats["latency_ms"]
+        med = stats["median_ms"]
+        metric_var.set(
+            f"{pct:5.1f}% done\n"
+            f"lat {('—' if lat is None else f'{lat:.0f} ms'):>8}   med {('—' if med is None else f'{med:.0f} ms'):>8}\n"
+            f"rewritten {stats['rewritten'] / (1024 * 1024):.2f} MiB"
+        )
+        symbol = "o"
+        if event.get("failed"):
+            symbol = "X"
+        elif phase == "ESCALATE":
+            symbol = "!"
+        elif lat is not None and med is not None and lat >= max(med * 2, 1):
+            symbol = "S"
+        if stats["size"]:
+            mark_map(stats["offset"], stats["size"], symbol)
+        compact = event.get("map")
+        if isinstance(compact, str) and compact:
+            for i, ch in enumerate(compact):
+                idx = min(len(map_cells) - 1, int(i * len(map_cells) / max(1, len(compact))))
+                map_cells[idx] = ch if ch in color_for else map_cells[idx]
+            map_dirty = True
+
+    def start(args: list[str], title: str, *, risky: bool = False, destructive: bool = False) -> None:
         nonlocal process, busy
         if busy:
-            messagebox.showwarning('Busy', 'A job is already active. Cancel or complete it first.')
+            messagebox.showwarning("Busy", "A job is already active.")
             return
-        if risky and not messagebox.askyesno('Read risk acknowledgement',
-                    'This operation reads a physical drive. Reading unstable hardware can worsen '
-                    'damage or cause it to disconnect. No source writes will be requested. Continue?'):
+        if risky and not messagebox.askyesno(
+            "Read risk",
+            "This reads a physical drive. Unstable hardware can worsen or disconnect. Continue?",
+        ):
             return
-        command = [sys.executable, '-m', 'driverepair_desktop', *args]
-        write(f'\n--- {title} ---\nCommand: {sys.executable} -m driverepair_desktop ' +
-              ' '.join('<path>' if os.sep in value and value != os.sep else value for value in args) + '\n')
-        status.set(f'Running: {title}')
+        if destructive and not messagebox.askyesno(
+            "Destructive acknowledgement",
+            "In-place refresh WRITES the patient disk for consistently readable regions only.\n"
+            "Unreadable sectors are skipped. This is not a backup. Continue?",
+        ):
+            return
+        command = [sys.executable, "-m", "driverepair_desktop", *args]
+        write(f"\n=== {title} ===\n")
+        status.set(f"Running: {title}")
+        phase_var.set("STARTING")
+        msg_var.set(title)
+        stats["started"] = time.monotonic()
+        reset_map()
         busy = True
-        cancel_button.configure(state='normal')
+        cancel_button.configure(state="normal")
 
         def worker() -> None:
             nonlocal process
             try:
-                child = subprocess.Popen(command, stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT, text=True, bufsize=1)
+                child = subprocess.Popen(
+                    command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, bufsize=1,
+                )
                 process = child
-                assert child.stdout is not None
-                for line in child.stdout:
-                    q.put(('text', line))
+
+                def pump(stream, kind: str) -> None:
+                    assert stream is not None
+                    for line in stream:
+                        q.put((kind, line))
+
+                threading.Thread(target=pump, args=(child.stdout, "stdout"), daemon=True).start()
+                threading.Thread(target=pump, args=(child.stderr, "stderr"), daemon=True).start()
                 code = child.wait()
-                q.put(('done', (title, code)))
+                q.put(("done", (title, code)))
             except (OSError, ValueError) as exc:
-                q.put(('text', f'Unable to start: {exc}\n'))
-                q.put(('done', (title, -1)))
+                q.put(("stdout", f"Unable to start: {exc}\n"))
+                q.put(("done", (title, -1)))
+
         threading.Thread(target=worker, daemon=True).start()
 
     def cancel() -> None:
         if process is not None and process.poll() is None:
-            if messagebox.askyesno('Cancel active job',
-                     'Stop this process? A rescue map may be resumable; a filesystem copy under '
-                     'repair may be inconsistent. The original remains unchanged by the tool.'):
+            if messagebox.askyesno("Cancel", "Stop the active job?"):
                 process.terminate()
-                status.set('Cancellation requested')
+                status.set("Cancellation requested")
 
-    statusbar = ttk.Frame(frame)
-    statusbar.pack(side='bottom', fill='x', pady=(7, 0))
-    ttk.Label(statusbar, textvariable=status).pack(side='left', fill='x', expand=True)
-    cancel_button = ttk.Button(statusbar, text='Cancel active job', command=cancel, state='disabled')
-    cancel_button.pack(side='right')
+    # --- Diagnose / rescue tab ---
+    ttk.Label(tab_drive, text="External whole disks only. Prefer image rescue before any in-place work.",
+              style="Muted.TLabel", wraplength=900).pack(anchor="w")
+    tree = ttk.Treeview(tab_drive, show="headings",
+                        columns=("id", "model", "size", "bus", "serial"), height=6)
+    for key, width in [("id", 220), ("model", 260), ("size", 120), ("bus", 80), ("serial", 90)]:
+        tree.heading(key, text=key.upper())
+        tree.column(key, width=width, stretch=(key == "model"))
+    tree.pack(fill="x", pady=8)
+    tree.bind("<<TreeviewSelect>>", lambda e: selected.set(
+        tree.selection()[0] if tree.selection() else "No external drive selected"))
+    ttk.Label(tab_drive, textvariable=selected).pack(anchor="w")
 
-    # External drive tab
-    ttk.Label(drives, text='Only external WHOLE disks are eligible. Never choose a valuable failing '
-              'drive for benchmarking before rescuing its data.', wraplength=860).pack(anchor='w', pady=(0, 8))
-    tree = ttk.Treeview(drives, show='headings', columns=('id', 'model', 'size', 'bus', 'serial'), height=6)
-    for key, width in [('id', 210), ('model', 250), ('size', 125), ('bus', 80), ('serial', 90)]:
-        tree.heading(key, text=key.title())
-        tree.column(key, width=width, stretch=(key == 'model'))
-    tree.pack(fill='x')
-    tree.bind('<<TreeviewSelect>>', lambda event: selected.set(tree.selection()[0]
-                 if tree.selection() else 'No external drive selected'))
-    ttk.Label(drives, textvariable=selected).pack(anchor='w', pady=6)
-
-    def refresh():
+    def refresh_devices() -> None:
         if busy:
-            messagebox.showwarning('Busy', 'Complete the current job before refreshing devices.')
+            messagebox.showwarning("Busy", "Finish the current job first.")
             return
+
         def worker():
             try:
                 from .devices import list_external_devices
-                q.put(('devices', list_external_devices()))
+                q.put(("devices", list_external_devices()))
             except (OSError, ValueError, RuntimeError) as exc:
-                q.put(('text', f'External disk discovery failed: {exc}\n'))
+                q.put(("stdout", f"Discovery failed: {exc}\n"))
+
         threading.Thread(target=worker, daemon=True).start()
-        status.set('Discovering attached external disks…')
+        status.set("Discovering external disks…")
 
-    ttk.Button(drives, text='Refresh external drives', command=refresh).pack(anchor='w', pady=5)
-    buttons = ttk.Frame(drives)
-    buttons.pack(anchor='w', pady=5)
-
-    def chosen_device():
+    def chosen_device() -> str:
         value = selected.get()
-        if not value.startswith(('linux:', 'windows:', 'macos:')):
-            raise ValueError('Select an external drive from the inventory.')
+        if not value.startswith(("linux:", "windows:", "macos:")):
+            raise ValueError("Select an external drive from the inventory.")
         return value
 
-    def device_action(kind: str):
+    def device_action(kind: str) -> None:
         try:
             dev = chosen_device()
-            if kind == 'health':
-                start(['health', '--device', dev, '--json'], 'SMART health')
-            elif kind == 'sample':
-                start(['scan', '--device', dev, '--mode', 'sample', '--json'], 'Quick drive scan', risky=True)
-            elif kind == 'full':
-                start(['scan', '--device', dev, '--mode', 'full', '--ack-risk', '--json'], 'Full surface scan', risky=True)
-            elif kind == 'benchmark':
-                start(['benchmark-external', '--device', dev, '--ack-risk', '--json'], 'External read benchmark', risky=True)
-            elif kind == 'rescue':
-                if not sys.platform.startswith('linux'):
-                    raise ValueError('Direct external-drive rescue is only supported on Linux in this build.')
-                out = require(dest_file, 'new image destination')
-                start(['rescue-external', '--device', dev, '--output', out,
-                       '--ack-risk', '--json'], 'External drive rescue', risky=True)
+            if kind == "health":
+                start(["health", "--device", dev, "--json"], "SMART health")
+            elif kind == "sample":
+                start(["scan", "--device", dev, "--mode", "sample", "--json"], "Quick scan", risky=True)
+            elif kind == "full":
+                start(["scan", "--device", dev, "--mode", "full", "--ack-risk", "--json"],
+                      "Full scan", risky=True)
+            elif kind == "benchmark":
+                start(["benchmark-external", "--device", dev, "--ack-risk", "--json"],
+                      "Benchmark", risky=True)
+            elif kind == "rescue":
+                if not sys.platform.startswith("linux"):
+                    raise ValueError("Direct external rescue is Linux-only in this build.")
+                out = require(dest_file, "new image destination")
+                start(["rescue-external", "--device", dev, "--output", out, "--ack-risk", "--json"],
+                      "External rescue", risky=True)
         except ValueError as exc:
-            messagebox.showerror('Select required input', str(exc))
+            messagebox.showerror("Input", str(exc))
 
-    for label, kind in [('SMART health', 'health'), ('Quick scan', 'sample'),
-                        ('Full scan', 'full'), ('Read benchmark', 'benchmark'),
-                        ('Rescue to image (Linux)', 'rescue')]:
-        ttk.Button(buttons, text=label, command=lambda k=kind: device_action(k)).pack(side='left', padx=(0, 6))
-    ttk.Label(drives, text='Rescue output image (different physical disk; Linux only):').pack(anchor='w', pady=(15, 0))
-    row(drives, 'New image output', dest_file, pick_output)
-    ttk.Label(drives, text='On Windows/macOS, use this desktop application for scanning, imaging-tool '
-              'imports, and image-based recovery; direct-device rescue is not verified.',
-              wraplength=860).pack(anchor='w', pady=8)
+    bf = ttk.Frame(tab_drive)
+    bf.pack(anchor="w", pady=8)
+    ttk.Button(bf, text="Refresh inventory", command=refresh_devices).pack(side="left", padx=(0, 6))
+    for label, kind in [("SMART", "health"), ("Quick scan", "sample"), ("Full scan", "full"),
+                        ("Benchmark", "benchmark"), ("Rescue (Linux)", "rescue")]:
+        ttk.Button(bf, text=label, command=lambda k=kind: device_action(k)).pack(side="left", padx=(0, 6))
+    row(tab_drive, "Rescue image output", dest_file, pick_output)
 
-    # Image and archive recovery tab
-    ttk.Label(recovery, text='All operations below read a regular image or archive and write to '
-              'a NEW output. Never use the failing source disk for outputs.', wraplength=860).pack(anchor='w')
-    row(recovery, 'Source image / ZIP', image, pick_file)
-    row(recovery, 'New image output', dest_file, pick_output)
-    row(recovery, 'New recovery directory', dest_dir, pick_dir)
-    options = ttk.LabelFrame(recovery, text='Image rescue and analysis', padding=8)
-    options.pack(fill='x', pady=5)
-    fb = ttk.Frame(options)
-    fb.pack(anchor='w')
-    def image_action(kind: str):
+    # --- Image recovery ---
+    ttk.Label(tab_image, text="Read regular files only. Outputs are always new paths.",
+              style="Muted.TLabel").pack(anchor="w")
+    row(tab_image, "Source image / ZIP", image, pick_file)
+    row(tab_image, "New image output", dest_file, pick_output)
+    row(tab_image, "New recovery directory", dest_dir, pick_dir)
+
+    def image_action(kind: str) -> None:
         try:
-            src = require(image, 'source image')
-            if kind == 'scan':
-                start(['scan-image', '--image', src, '--mode', 'sample', '--json'], 'Scan image')
-            elif kind == 'benchmark':
-                start(['benchmark-image', '--image', src, '--json'], 'Benchmark image')
-            elif kind in ('rescue', 'resume', 'retry'):
-                out = require(dest_file, 'new image output')
-                args = ['rescue-image', '--image', src, '--output', out, '--json']
-                if kind in ('resume', 'retry'):
-                    args.append('--resume')
-                if kind == 'retry':
-                    args.append('--retry-missing')
-                start(args, 'Rescue image' if kind == 'rescue' else 'Resume/Retry image rescue')
-            elif kind == 'verify':
-                start(['verify-images', '--image', src, '--output', require(dest_file, 'rescued output image'),
-                       '--json'], 'Compare images byte for byte')
-            elif kind == 'carve':
-                start(['carve-image', '--image', src, '--output-dir', require(dest_dir, 'new directory'),
-                       '--json'], 'Carve JPEG / PNG')
-            elif kind == 'undelete':
-                start(['undelete-fat32', '--image', src, '--output-dir', require(dest_dir, 'new directory'),
-                       '--json'], 'FAT32 deleted-file recovery')
-            elif kind == 'zip':
-                start(['salvage-zip', '--archive', src, '--output-dir', require(dest_dir, 'new directory'),
-                       '--json'], 'Recover intact ZIP members')
+            src = require(image, "source image")
+            if kind == "scan":
+                start(["scan-image", "--image", src, "--mode", "sample", "--json"], "Scan image")
+            elif kind == "rescue":
+                start(["rescue-image", "--image", src, "--output", require(dest_file, "output"),
+                       "--json"], "Rescue image")
+            elif kind == "verify":
+                start(["verify-images", "--image", src,
+                       "--output", require(dest_file, "rescued image"), "--json"], "Verify images")
+            elif kind == "carve":
+                start(["carve-image", "--image", src,
+                       "--output-dir", require(dest_dir, "directory"), "--json"], "Carve photos")
+            elif kind == "undelete":
+                start(["undelete-fat32", "--image", src,
+                       "--output-dir", require(dest_dir, "directory"), "--json"], "FAT32 undelete")
+            elif kind == "zip":
+                start(["salvage-zip", "--archive", src,
+                       "--output-dir", require(dest_dir, "directory"), "--json"], "Salvage ZIP")
         except ValueError as exc:
-            messagebox.showerror('Input needed', str(exc))
-    for label, kind in [('Scan image', 'scan'), ('Benchmark image', 'benchmark'),
-                        ('Rescue', 'rescue'), ('Resume', 'resume'), ('Retry missing', 'retry'),
-                        ('Verify bytes', 'verify')]:
-        ttk.Button(fb, text=label, command=lambda k=kind: image_action(k)).pack(side='left', padx=(0, 6))
-    f2 = ttk.Frame(options)
-    f2.pack(anchor='w', pady=(7, 0))
-    for label, kind in [('Carve photos', 'carve'), ('FAT32 undelete', 'undelete'),
-                        ('Salvage ZIP', 'zip')]:
-        ttk.Button(f2, text=label, command=lambda k=kind: image_action(k)).pack(side='left', padx=(0, 6))
-    ttk.Label(recovery, text='FAT32 undelete retrieves only contiguous, currently unallocated '
-              'clusters. Filenames are partial; extracted content is NOT verified. Carving may find '
-              'live or fragmented files. Consult the JSON results and rescue journal.',
-              wraplength=860).pack(anchor='w', pady=8)
+            messagebox.showerror("Input", str(exc))
 
-    # Filesystem repairs (original always read-only; repair modifies cloned output).
-    ttk.Label(maintenance, text='A true repair operation can discard damaged metadata or files. '
-              'DriveRepair only runs filesystem repair on a NEW CLONE of an ext2/3/4 image. '
-              'It does not currently perform hardware repair or restore physical wear.',
-              wraplength=850).pack(anchor='w', pady=(0, 8))
-    row(maintenance, 'Original ext image', image, pick_file)
-    row(maintenance, 'New repaired copy', dest_file, pick_output)
-    def inspect():
+    ib = ttk.Frame(tab_image)
+    ib.pack(anchor="w", pady=8)
+    for label, kind in [("Scan", "scan"), ("Rescue", "rescue"), ("Verify", "verify"),
+                        ("Carve", "carve"), ("FAT32 undelete", "undelete"), ("ZIP salvage", "zip")]:
+        ttk.Button(ib, text=label, command=lambda k=kind: image_action(k)).pack(side="left", padx=(0, 6))
+
+    # --- In-place refresh ---
+    ttk.Label(
+        tab_refresh,
+        text="Dedicated In-Place Media Refresh. Rolling journal on healthy storage. "
+             "Not a SpinRite clone — Adaptive rewrite of consistently readable regions only.",
+        style="Muted.TLabel", wraplength=920,
+    ).pack(anchor="w")
+    row(tab_refresh, "Journal directory", journal_dir, pick_journal)
+    mode_var = tk.StringVar(value="adaptive")
+    backend_var = tk.StringVar(value="hybrid")
+    after_var = tk.StringVar(value="ask")
+    samples_var = tk.StringVar(value="128")
+    opts = ttk.Frame(tab_refresh)
+    opts.pack(fill="x", pady=6)
+    ttk.Label(opts, text="Mode").pack(side="left")
+    ttk.Combobox(opts, textvariable=mode_var, values=["adaptive", "full"], width=10,
+                 state="readonly").pack(side="left", padx=6)
+    ttk.Label(opts, text="Journal").pack(side="left", padx=(12, 0))
+    ttk.Combobox(opts, textvariable=backend_var, values=["hybrid", "disk", "memory"], width=10,
+                 state="readonly").pack(side="left", padx=6)
+    ttk.Label(opts, text="After").pack(side="left", padx=(12, 0))
+    ttk.Combobox(opts, textvariable=after_var, values=["ask", "keep", "delete"], width=8,
+                 state="readonly").pack(side="left", padx=6)
+    ttk.Label(opts, text="Samples").pack(side="left", padx=(12, 0))
+    ttk.Entry(opts, textvariable=samples_var, width=6).pack(side="left", padx=6)
+
+    def run_refresh() -> None:
         try:
-            start(['check-ext-image', '--image', require(image, 'ext image'), '--json'], 'Read-only ext check')
+            dev = chosen_device()
+            journal = require(journal_dir, "journal directory")
+            samples = max(8, min(4096, int(samples_var.get())))
+            args = [
+                "refresh-external", "--device", dev, "--journal", journal,
+                "--mode", mode_var.get(), "--journal-backend", backend_var.get(),
+                "--adaptive-samples", str(samples), "--after-run", after_var.get(),
+                # GUI owns the map/health UI — disable TTY panel, keep JSONL only.
+                "--no-live-dashboard", "--progress-jsonl",
+                "--ack-risk", "--ack-destructive", "--ack-no-backup", "--ack-data-loss-risk",
+                "--ack-usb-bridge-risk", "--ack-unvalidated-hardware", "--json",
+            ]
+            stats["size"] = 0
+            # Best-effort size from tree selection text is unknown; engine events fill it.
+            start(args, f"In-place refresh ({mode_var.get()})", risky=True, destructive=True)
         except ValueError as exc:
-            messagebox.showerror('Input needed', str(exc))
-    def repair():
+            messagebox.showerror("Input", str(exc))
+        except Exception as exc:  # noqa: BLE001 — show sample parse errors
+            messagebox.showerror("Input", str(exc))
+
+    ttk.Button(tab_refresh, text="Start Adaptive / Full refresh", style="Accent.TButton",
+               command=run_refresh).pack(anchor="w", pady=10)
+    ttk.Label(
+        tab_refresh,
+        text="Windows requires an Administrator session for physical writes. "
+             "mechanical* is inferred from latency/errors — USB docks do not expose acoustic sensors.",
+        style="Muted.TLabel", wraplength=920,
+    ).pack(anchor="w")
+
+    # --- Clone FS repair ---
+    ttk.Label(tab_fs, text="Filesystem repair only on a NEW clone. Original stays read-only.",
+              style="Muted.TLabel").pack(anchor="w")
+    row(tab_fs, "Original ext image", image, pick_file)
+    row(tab_fs, "New repaired copy", dest_file, pick_output)
+
+    def inspect_ext() -> None:
         try:
-            src, out = require(image, 'ext image'), require(dest_file, 'new destination')
-            if not messagebox.askyesno('Confirm image-copy repair',
-                       'This may discard corrupt file references from the NEW COPY. '
-                       'The original image will not be written by this tool. Continue?'):
+            start(["check-ext-image", "--image", require(image, "ext image"), "--json"], "ext check")
+        except ValueError as exc:
+            messagebox.showerror("Input", str(exc))
+
+    def repair_ext() -> None:
+        try:
+            src, out = require(image, "ext image"), require(dest_file, "destination")
+            if not messagebox.askyesno("Confirm", "Repair may discard corrupt references on the COPY only."):
                 return
-            confirmation = simpledialog.askstring('Explicit approval',
-                        'Type REPAIR COPY to create a new image and run e2fsck -y on that copy:')
-            if confirmation != 'REPAIR COPY':
+            if simpledialog.askstring("Approval", "Type REPAIR COPY:") != "REPAIR COPY":
                 return
-            start(['repair-ext-image', '--image', src, '--output', out,
-                   '--ack-repair', '--json'], 'Repair ext filesystem CLONE')
+            start(["repair-ext-image", "--image", src, "--output", out, "--ack-repair", "--json"],
+                  "Repair ext clone")
         except ValueError as exc:
-            messagebox.showerror('Input needed', str(exc))
-    actions = ttk.Frame(maintenance)
-    actions.pack(anchor='w', pady=8)
-    ttk.Button(actions, text='Read-only ext check', command=inspect).pack(side='left', padx=(0, 8))
-    ttk.Button(actions, text='Repair a NEW ext image copy', command=repair).pack(side='left')
-    ttk.Label(maintenance, text='Requires e2fsprogs (e2fsck) installed on the host. '
-              'A filesystem image must begin with the ext superblock: a whole partitioned disk image '
-              'is not accepted. File metadata repair is not proof of correct original contents.',
-              wraplength=850).pack(anchor='w', pady=8)
+            messagebox.showerror("Input", str(exc))
 
-    def poll():
+    fb = ttk.Frame(tab_fs)
+    fb.pack(anchor="w", pady=8)
+    ttk.Button(fb, text="Read-only check", command=inspect_ext).pack(side="left", padx=(0, 6))
+    ttk.Button(fb, text="Repair NEW copy", command=repair_ext).pack(side="left")
+
+    statusbar = ttk.Frame(shell)
+    statusbar.pack(fill="x", pady=(8, 0))
+    ttk.Label(statusbar, textvariable=status).pack(side="left", fill="x", expand=True)
+    cancel_button = ttk.Button(statusbar, text="Cancel job", command=cancel, state="disabled")
+    cancel_button.pack(side="right")
+
+    def poll() -> None:
         nonlocal process, busy
         try:
             while True:
                 kind, value = q.get_nowait()
-                if kind == 'text':
+                if kind == "stdout":
                     write(str(value))
-                elif kind == 'devices':
-                    selected.set('No external drive selected')
+                elif kind == "stderr":
+                    line = str(value).rstrip("\n")
+                    if line.startswith("{"):
+                        try:
+                            event = json.loads(line)
+                            if event.get("type") == "progress":
+                                apply_progress(event)
+                                continue
+                        except json.JSONDecodeError:
+                            pass
+                    if line.strip():
+                        write(line + "\n")
+                elif kind == "devices":
+                    selected.set("No external drive selected")
                     for item in tree.get_children():
                         tree.delete(item)
                     for device in value:
                         public = device.public()
-                        tree.insert('', 'end', iid=device.id, values=(
-                            device.id, device.model, f'{device.size_bytes / 10**9:.2f} GB',
-                            device.bus, public['serial_suffix']))
-                    status.set(f'Found {len(value)} eligible external whole disk(s)')
-                elif kind == 'done':
+                        tree.insert("", "end", iid=device.id, values=(
+                            device.id, device.model, f"{device.size_bytes / 10**9:.2f} GB",
+                            device.bus, public["serial_suffix"],
+                        ))
+                        if stats["size"] == 0 and tree.selection() == ():
+                            pass
+                    status.set(f"Found {len(value)} external whole disk(s)")
+                elif kind == "done":
                     title, code = value
                     process = None
                     busy = False
-                    cancel_button.configure(state='disabled')
-                    status.set(f'{title}: ' + ('finished' if code == 0 else f'exited {code} — inspect log'))
-                    write(f'--- Finished: exit code {code} ---\n')
+                    cancel_button.configure(state="disabled")
+                    phase_var.set("DONE" if code == 0 else f"EXIT {code}")
+                    status.set(f"{title}: {'finished' if code == 0 else f'exited {code}'}")
+                    write(f"--- Finished: exit code {code} ---\n")
+                    redraw_map(force=True)
         except queue.Empty:
             pass
-        root.after(120, poll)
+        redraw_map()
+        root.after(100, poll)
 
-    def on_close():
+    def on_close() -> None:
         if process is not None and process.poll() is None:
-            if not messagebox.askyesno('Active recovery job',
-                                      'A job is still running. Cancel it and exit?'):
+            if not messagebox.askyesno("Active job", "Cancel the running job and exit?"):
                 return
             process.terminate()
         root.destroy()
 
-    root.protocol('WM_DELETE_WINDOW', on_close)
+    root.protocol("WM_DELETE_WINDOW", on_close)
+    canvas.bind("<Configure>", lambda e: redraw_map(force=True))
     poll()
-    refresh()
+    refresh_devices()
     root.mainloop()
