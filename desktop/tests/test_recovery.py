@@ -122,5 +122,25 @@ class RecoveryTests(unittest.TestCase):
         s = json.loads(Path(self.out + '.rescue.json').read_text())
         self.assertEqual(s['cursor'], 0)
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows sparse preallocation behavior')
+    def test_windows_new_image_is_sparse_before_full_size_truncate(self):
+        import subprocess
+        size = 64 * 1024 * 1024
+        data = b'\x5a' * 4096
+        reader = PatternReader(data + (b'\0' * (size - len(data))))
+        # Only copy the first chunk; logical image size remains large.
+        state = rescue_reader(
+            reader, size=size, sector=512, output=self.out,
+            source_token='test-token-sparse', chunk=4096, max_chunks=1,
+        )
+        self.assertEqual(state['status'], 'in_progress')
+        self.assertEqual(state['cursor'], 4096)
+        self.assertEqual(os.path.getsize(self.out), size)
+        probe = subprocess.run(
+            ['fsutil', 'sparse', 'queryflag', self.out],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertIn('is set as sparse', (probe.stdout + probe.stderr).lower())
+
 if __name__ == '__main__':
     unittest.main()

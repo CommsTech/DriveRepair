@@ -20,3 +20,4 @@
 18. Integrity workflow is **image + trusted reference** only — no automatic silent-bit correction on physical disks; cannot reconstruct bits without a good reference/redundancy (ZFS/Btrfs principle).
 19. Readable OS copy ≠ checksum-verified; first-pass rescue still counts successful reads as copied, not as original-content verified.
 20. Filesystem-aware integrity (map chunks → files; use FS checksums/redundancy) and Rust hot-path still pending.
+21. ~~Windows rescue `ftruncate` without sparse allocated full logical size~~ — fixed via `FSCTL_SET_SPARSE` before sizing (PR follow-up to 0.3.3b1).
