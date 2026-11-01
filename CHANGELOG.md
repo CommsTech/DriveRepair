@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.6 — BitLocker-aware gates + reliable elevated CLI dashboard (2026-11-01)
+
+- Fail-closed BitLocker/LUKS detection for carve/undelete/ext check-repair (`inspect-encryption`, `--ack-encrypted-volume`).
+- Elevated Adaptive launcher no longer pipes stderr through PowerShell ErrorAction Stop (that killed the live UI).
+- Immediate “opening patient…” stderr lines so the CLI is never blank during device open.
+
+## 0.2.5 — Modern Recovery Workstation GUI + progress JSONL (2026-11-01)
+
+- Replaced legacy Tk layout with an industrial dark Recovery Workstation (sector map, health strip, metrics).
+- Added `--progress-jsonl` / `ProgressEmitter` (~10 Hz) so presentation stays low-overhead and GUI-friendly.
+- Documented presentation vs recovery split and Rust UI migration path (`docs/PRESENTATION_LAYER.md`).
+- GUI launches refresh with JSONL progress; never opens patient devices itself.
+
 ## 0.2.4 — Live refresh dashboard, hybrid RAM journal, auto-escalate (2026-11-01)
 
 - Terminal dashboard: phase, progress bar, surface map, latency, media/transport/mechanical* indicators.

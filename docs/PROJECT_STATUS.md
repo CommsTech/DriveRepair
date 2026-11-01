@@ -2,9 +2,9 @@
 
 **PRIVATE TEST ONLY. PUBLIC RELEASE NOT APPROVED.**
 
-## Desktop development update — 0.2.0
+## Desktop development update — 0.2.5
 
-- GUI: implemented with stdlib Tk and CLI subprocess workers, not yet smoke-tested on physical Windows/macOS/Linux desktops.
+- GUI: industrial dark Recovery Workstation (sector map, health strip, metrics); CLI subprocess workers; `--progress-jsonl` at ~10 Hz. Not yet smoke-tested across all desktop OSes.
 - FAT32 undelete: implemented for plausibly contiguous, unallocated cluster sequences from raw volume or MBR FAT32 image; every recovered file marked **UNVERIFIED**. Does not recover original first filename letter, fragmented or overwritten files.
 - Image correctness: added whole-file SHA-256 and bytewise comparison against a stable original image; refuses sparse/incomplete recovery journals.
 - Filesystem repair: implemented an ext2/3/4 workflow that clones a regular filesystem image and runs installed `e2fsck -f -y` **only on the clone**, after explicit acknowledgment. No physical-source writes or in-place drive repair.

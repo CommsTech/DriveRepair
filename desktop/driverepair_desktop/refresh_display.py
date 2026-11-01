@@ -6,6 +6,7 @@ latency spikes, variance, and I/O error patterns.
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -48,6 +49,7 @@ class RefreshDashboard:
     size: int
     enabled: bool = True
     stream: object = field(default_factory=lambda: sys.stderr)
+    emitter: object | None = None  # ProgressEmitter | None
     phase: str = "starting"
     probe_done: int = 0
     probe_total: int = 0
@@ -105,7 +107,8 @@ class RefreshDashboard:
             self.note_anomaly("Mechanical-suspect pattern: repeated extreme latency / seek thrash")
 
     def handle(self, event: dict) -> None:
-        if not self.enabled:
+        # Always update state + optional JSONL emitter. Terminal draw is gated by enabled.
+        if not self.enabled and self.emitter is None:
             return
         status = event.get("status") or event.get("phase") or self.phase
         if status == "probing" or event.get("phase") == "probe":
@@ -138,14 +141,47 @@ class RefreshDashboard:
             self.mark_map(int(event.get("offset", self.offset)), "!")
         if event.get("error_class") or event.get("mechanical_fail") or event.get("latency_s"):
             self.update_health_from_event(event)
-        # Redraw at least ~8 Hz, always on phase changes / errors.
         now = time.monotonic()
         force = bool(event.get("force") or event.get("failed") or event.get("mechanical_fail"))
-        if force or now - self._last_draw >= 0.12 or status in {"probing", "starting"}:
+        if self.emitter is not None:
+            self.emitter.emit(
+                {
+                    "phase": self.phase,
+                    "probe_index": self.probe_done,
+                    "probe_total": self.probe_total,
+                    "refresh_index": self.refresh_done,
+                    "refresh_total": self.refresh_total,
+                    "offset": self.offset,
+                    "size": self.size,
+                    "latency_ms": None if self.latency_s is None else round(self.latency_s * 1000, 3),
+                    "median_ms": None if self.median_s is None else round(self.median_s * 1000, 3),
+                    "threshold_ms": None if self.threshold_s is None else round(self.threshold_s * 1000, 3),
+                    "rewritten_bytes": self.rewritten,
+                    "verified_bytes": self.verified,
+                    "health": {
+                        "media": self.health.media,
+                        "transport": self.health.transport,
+                        "mechanical": self.health.mechanical,
+                    },
+                    "map": "".join(self.map_cells) if self.map_cells else "",
+                    "message": self.message,
+                    "journal_backend": self.journal_backend,
+                    "mode": self.mode,
+                },
+                force=force or bool(event.get("failed") or event.get("mechanical_fail")),
+            )
+        if self.enabled and (force or now - self._last_draw >= 0.12 or status in {"probing", "starting"}):
             self.draw()
             self._last_draw = now
 
     def _is_tty(self) -> bool:
+        # Allow operators to force the full panel even when a host wrapper
+        # makes isatty() lie (common under some elevated launchers).
+        forced = os.environ.get("DRIVEREPAIR_FORCE_TTY_DASHBOARD", "").strip().lower()
+        if forced in {"1", "true", "yes", "on"}:
+            return True
+        if forced in {"0", "false", "no", "off", "line"}:
+            return False
         try:
             return bool(getattr(self.stream, "isatty", lambda: False)())
         except Exception:
