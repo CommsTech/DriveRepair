@@ -13,6 +13,7 @@ import stat
 import sys
 from pathlib import Path
 
+from .compat import binary_open_flags
 from .scanner import ImageReader
 from .recovery import _write_all
 
@@ -54,7 +55,8 @@ def _read_exact(reader: ImageReader, start: int, size: int) -> bytes:
 def _atomic_new_json(path: str, value: dict):
     """Write new JSON with private permissions; never overwrite a manifest."""
     path = _check_new_file(path)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    fd = os.open(path, binary_open_flags(
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)), 0o600)
     try:
         data = (json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n').encode()
         _write_all(fd, data)
@@ -243,7 +245,10 @@ def restore_image_from_reference(image: str, reference: str, manifest_path: str,
         if unknowns and not allow_incomplete:
             raise ValueError('Candidate rescue map has unknown/unreadable regions; refusing a full-image integrity claim')
         # The new output MUST NOT be a physical device, and must not already exist.
-        fd = os.open(output, os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        # O_BINARY is required on Windows — text-mode translation expands 0x0A and
+        # silently corrupts restored disk images (size/hash mismatch).
+        fd = os.open(output, binary_open_flags(
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)), 0o600)
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ValueError('Output must be a regular file')
         reflinked = _try_linux_reflink(a.fd, fd)

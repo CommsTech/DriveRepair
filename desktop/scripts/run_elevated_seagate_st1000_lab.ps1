@@ -62,28 +62,57 @@ Invoke-DriveRepairStep "05_benchmark" @(
 
 $image = Join-Path $LabRoot "images\physicaldrive2_bounded.img"
 # No --multi-pass here: first-pass only, hard-capped by --max-chunks.
-# Windows rescue images are marked sparse before ftruncate so the full
-# 1TB logical size does not allocate on D: before the chunk bound stops.
+# Windows rescue images use sparse SetEndOfFile so the full logical size
+# does not zero-fill D: before the chunk bound stops.
 Invoke-DriveRepairStep "06_rescue_bounded" @(
     "rescue-external","--device",$Device,"--output",$image,"--ack-risk",
     "--chunk-mib","1","--max-chunks",$MaxRescueChunks.ToString(),"--json"
 ) | Out-Null
 
-if ((Test-Path $image) -and ((Get-Item $image).Length -gt 1MB)) {
-    Invoke-DriveRepairStep "07_detect_filesystems" @("detect-filesystems","--image",$image,"--json") | Out-Null
-    Invoke-DriveRepairStep "08_inspect_encryption" @("inspect-encryption","--image",$image,"--json") | Out-Null
+$journalPath = "$image.rescue.json"
+$recoveredBytes = 0
+if (Test-Path $journalPath) {
+    try {
+        $recoveredBytes = [int64]((Get-Content $journalPath -Raw | ConvertFrom-Json).recovered_bytes)
+    } catch { $recoveredBytes = 0 }
+}
+
+if ((Test-Path $image) -and ($recoveredBytes -gt 1MB)) {
+    # Work on a compact prefix only. The sparse logical image may be ~1TB;
+    # hashing / Copy-Item of that size hangs Windows labs for hours.
+    $prefix = Join-Path $LabRoot "images\physicaldrive2_bounded_prefix.img"
+    $prefixLen = [Math]::Min($recoveredBytes, [int64]$MaxRescueChunks * 1MB)
+    $in = [IO.File]::Open($image, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+    try {
+        $out = [IO.File]::Create($prefix)
+        try {
+            $buf = New-Object byte[] (1MB)
+            $left = $prefixLen
+            while ($left -gt 0) {
+                $n = $in.Read($buf, 0, [int][Math]::Min($buf.Length, $left))
+                if ($n -le 0) { break }
+                $out.Write($buf, 0, $n)
+                $left -= $n
+            }
+        } finally { $out.Close() }
+    } finally { $in.Close() }
+    "prefix_bytes=$prefixLen source_recovered=$recoveredBytes" |
+        Set-Content (Join-Path $LabRoot "metrics\06b_prefix.time.txt")
+
+    Invoke-DriveRepairStep "07_detect_filesystems" @("detect-filesystems","--image",$prefix,"--json") | Out-Null
+    Invoke-DriveRepairStep "08_inspect_encryption" @("inspect-encryption","--image",$prefix,"--json") | Out-Null
     Invoke-DriveRepairStep "09_evidence" @(
-        "evidence-image","--image",$image,"--output",(Join-Path $LabRoot "recovery\evidence.json"),"--json"
+        "evidence-image","--image",$prefix,"--output",(Join-Path $LabRoot "recovery\evidence.json"),"--json"
     ) | Out-Null
 
-    # Integrity workflow (0.3.3b1): baseline trusted image → corrupt copy → audit → restore-copy
+    # Integrity workflow (0.3.3b1): baseline → corrupt copy → audit → restore-copy
     $integ = Join-Path $LabRoot "integrity"
     $baseline = Join-Path $integ "baseline.img"
     $candidate = Join-Path $integ "candidate_bitflip.img"
     $manifest = Join-Path $integ "baseline.json"
     $restored = Join-Path $integ "restored.img"
-    Copy-Item $image $baseline -Force
-    Copy-Item $image $candidate -Force
+    Copy-Item $prefix $baseline -Force
+    Copy-Item $prefix $candidate -Force
     Invoke-DriveRepairStep "10_integrity_baseline" @(
         "integrity-baseline","--image",$baseline,"--output",$manifest,"--chunk-mib","1","--json"
     ) | Out-Null
