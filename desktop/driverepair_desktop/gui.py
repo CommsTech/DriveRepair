@@ -16,6 +16,9 @@ import threading
 import time
 from pathlib import Path
 
+from .rescue_display import RescueDisplayState, format_duration
+from .console_ui import fmt_bytes
+
 
 # Industrial dark palette (high-contrast status colors, no purple/glow stack).
 C = {
@@ -78,7 +81,8 @@ def launch() -> None:
     q: queue.Queue[tuple[str, object]] = queue.Queue()
     process: subprocess.Popen[str] | None = None
     busy = False
-    map_width, map_height = 64, 18
+    map_width, map_height = 64, 12
+    rescue_metrics = RescueDisplayState()
     map_cells = ["."] * (map_width * map_height)
     map_dirty = True
     last_map_draw = 0.0
@@ -101,12 +105,25 @@ def launch() -> None:
     image = tk.StringVar()
     dest_file = tk.StringVar()
     dest_dir = tk.StringVar()
+    integrity_manifest = tk.StringVar()
+    integrity_reference = tk.StringVar()
+    integrity_output = tk.StringVar()
+    integrity_summary = tk.StringVar(value="No integrity check run. Readable bytes are NOT necessarily correct bytes.")
     journal_dir = tk.StringVar(value=str(Path.home() / "DriveRepairJournal"))
     status = tk.StringVar(value="Recovery engine idle — presentation layer only draws throttled progress")
     phase_var = tk.StringVar(value="IDLE")
     health_var = tk.StringVar(value="Media unknown · Transport unknown · Mechanical unknown (no diagnostic yet)")
     metric_var = tk.StringVar(value="—")
     msg_var = tk.StringVar(value="Select a workflow. Disk I/O runs in a child process.")
+    recovered_var = tk.StringVar(value="—")
+    errors_var = tk.StringVar(value="—")
+    speed_var = tk.StringVar(value="—")
+    eta_var = tk.StringVar(value="—")
+    destination_var = tk.StringVar(value="Destination: not selected")
+    capacity_var = tk.StringVar(value="Free space: not checked")
+    warning_var = tk.StringVar(value="Progress is from committed recovery state; unscanned media stays unknown.")
+    advanced_open = tk.BooleanVar(value=False)
+    last_result: dict | None = None
 
     shell = ttk.Frame(root, padding=16)
     shell.pack(fill="both", expand=True)
@@ -133,18 +150,47 @@ def launch() -> None:
     right.pack(side="right", padx=10, pady=6)
     tk.Label(right, textvariable=metric_var, bg=C["panel"], fg=C["text"],
              font=("Consolas", 11), justify="right").pack(anchor="e")
-    pbar = ttk.Progressbar(ops, mode="determinate", maximum=1000)
-    pbar.pack(fill="x", padx=10, pady=(0, 8))
+    # The progress bar is outside the pack-managed left/right strip so it spans
+    # the actual window width (not the tiny gap left between side panels).
+    pbar = ttk.Progressbar(shell, mode="determinate", maximum=1000)
+    pbar.pack(fill="x", pady=(0, 8))
+
+    # Rescue overview: always visible while navigating across workflow tabs.
+    summary = tk.Frame(shell, bg=C["bg"])
+    summary.pack(fill="x", pady=(0, 8))
+    summary_labels = []
+    for label, variable in (("DATA SAVED TO IMAGE", recovered_var),
+                            ("UNREADABLE / UNKNOWN", errors_var),
+                            ("CURRENT SPEED", speed_var), ("TIME REMAINING", eta_var)):
+        card = tk.Frame(summary, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
+        card.pack(side="left", fill="both", expand=True, padx=3)
+        heading = tk.Label(card, text=label, bg=C["panel"], fg=C["muted"],
+                           font=("Segoe UI", 8))
+        heading.pack(anchor="w", padx=10, pady=(8, 0))
+        summary_labels.append(heading)
+        tk.Label(card, textvariable=variable, bg=C["panel"], fg=C["text"],
+                 font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=10, pady=(2, 8))
+    dest_line = tk.Frame(shell, bg=C["bg"])
+    dest_line.pack(fill="x", pady=(0, 6))
+    tk.Label(dest_line, textvariable=destination_var, bg=C["bg"], fg=C["muted"],
+             font=("Segoe UI", 9), anchor="w").pack(side="left", fill="x", expand=True)
+    tk.Label(dest_line, textvariable=capacity_var, bg=C["bg"], fg=C["muted"],
+             font=("Segoe UI", 9)).pack(side="right")
+    warning_label = tk.Label(shell, textvariable=warning_var, anchor="w", bg=C["panel"],
+                             fg=C["muted"], font=("Segoe UI", 9), padx=10, pady=5)
+    warning_label.pack(fill="x", pady=(0, 8))
 
     # Sector map
     map_frame = tk.Frame(shell, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
     map_frame.pack(fill="both", expand=False, pady=(0, 10))
-    tk.Label(map_frame, text="Surface activity map  ·  . pending   o ok   S slow   ! escalate   X error",
+    legend_var = tk.StringVar(value="Activity map  ·  . unscanned   o read to image   ? in progress   X unreadable/failed")
+    tk.Label(map_frame, textvariable=legend_var,
              bg=C["panel"], fg=C["muted"], font=("Segoe UI", 9)).pack(anchor="w", padx=10, pady=(8, 2))
-    canvas = tk.Canvas(map_frame, height=170, bg=C["panel2"], highlightthickness=0)
+    canvas = tk.Canvas(map_frame, height=115, bg=C["panel2"], highlightthickness=0)
     canvas.pack(fill="x", padx=10, pady=(0, 10))
 
-    color_for = {".": C["pending"], "o": C["ok"], "S": C["slow"], "!": C["warn"], "X": C["fail"]}
+    color_for = {".": C["pending"], "o": C["ok"], "?": C["current"],
+                 "S": C["slow"], "!": C["warn"], "X": C["fail"]}
 
     def redraw_map(force: bool = False) -> None:
         nonlocal map_dirty, last_map_draw
@@ -184,20 +230,32 @@ def launch() -> None:
 
     notebook = ttk.Notebook(shell)
     notebook.pack(fill="both", expand=True)
-    tab_start = ttk.Frame(notebook, padding=12)
-    tab_drive = ttk.Frame(notebook, padding=12)
-    tab_image = ttk.Frame(notebook, padding=12)
-    tab_refresh = ttk.Frame(notebook, padding=12)
-    tab_undelete = ttk.Frame(notebook, padding=12)
-    tab_fs = ttk.Frame(notebook, padding=12)
-    tab_system = ttk.Frame(notebook, padding=12)
-    notebook.add(tab_start, text=" Start here ")
-    notebook.add(tab_drive, text=" Diagnose / Rescue ")
-    notebook.add(tab_system, text=" Recover OS drive ")
-    notebook.add(tab_image, text=" Image recovery ")
-    notebook.add(tab_undelete, text=" Recover deleted files ")
-    notebook.add(tab_refresh, text=" In-place refresh ")
-    notebook.add(tab_fs, text=" Clone repair ")
+    # Every workflow page is independently scrollable. Otherwise on a typical
+    # laptop the lower controls (including Start/Restore) can be unreachable.
+    tab_canvases = {}
+    def workflow_tab(name: str, title: str):
+        container = ttk.Frame(notebook)
+        scroller = tk.Canvas(container, bg=C['bg'], highlightthickness=0, borderwidth=0)
+        scrollbar = ttk.Scrollbar(container, orient='vertical', command=scroller.yview)
+        scroller.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side='right', fill='y')
+        scroller.pack(side='left', fill='both', expand=True)
+        page = ttk.Frame(scroller, padding=12)
+        window_id = scroller.create_window((0, 0), window=page, anchor='nw')
+        page.bind('<Configure>', lambda e: scroller.configure(scrollregion=scroller.bbox('all')))
+        scroller.bind('<Configure>', lambda e: scroller.itemconfigure(window_id, width=e.width))
+        notebook.add(container, text=title)
+        tab_canvases[name] = scroller
+        return page
+
+    tab_start = workflow_tab('start', ' Start here ')
+    tab_drive = workflow_tab('drive', ' Diagnose / Rescue ')
+    tab_system = workflow_tab('system', ' Recover OS drive ')
+    tab_image = workflow_tab('image', ' Image recovery ')
+    tab_integrity = workflow_tab('integrity', ' Integrity / bit errors ')
+    tab_undelete = workflow_tab('undelete', ' Recover deleted files ')
+    tab_refresh = workflow_tab('refresh', ' In-place refresh ')
+    tab_fs = workflow_tab('filesystem', ' Clone repair ')
 
     # Guided workflows: no unnecessary expertise or hidden destructive defaults.
     ttk.Label(tab_start, text='What would you like to do?',
@@ -214,6 +272,8 @@ def launch() -> None:
          'Find the device by model, capacity and identity; run fast triage or rescue.', tab_drive),
         ('I need a forensic working copy',
          'Rescue an image, verify bytes, preserve original evidence and recovery maps.', tab_image),
+        ('I suspect silent file corruption / flipped bits',
+         'Compare image chunks against a previously trusted baseline; recover only provably correct regions.', tab_integrity),
         ('My filesystem is corrupted',
          'Check and repair a NEW filesystem image copy; original stays unchanged.', tab_fs),
         ('I want to refresh readable media',
@@ -228,8 +288,11 @@ def launch() -> None:
               'environment. The custom boot components are experimental, not validated recovery media.',
               style='Muted.TLabel', wraplength=850).pack(anchor='w', pady=14)
 
+    log_controls = ttk.Frame(shell)
+    log_controls.pack(fill='x', pady=(8, 0))
+    ttk.Checkbutton(log_controls, text='Advanced details / engine log', variable=advanced_open,
+                    command=lambda: show_advanced()).pack(anchor='w')
     log_holder = tk.Frame(shell, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
-    log_holder.pack(fill="both", expand=True, pady=(10, 0))
     tk.Label(log_holder, text="Operation log", bg=C["panel"], fg=C["muted"],
              font=("Segoe UI", 9)).pack(anchor="w", padx=8, pady=(6, 0))
     log = tk.Text(log_holder, height=8, wrap="word", state="disabled",
@@ -237,10 +300,20 @@ def launch() -> None:
                   font=("Consolas", 9), relief="flat", borderwidth=0)
     log.pack(fill="both", expand=True, padx=8, pady=6)
 
+    def show_advanced() -> None:
+        if advanced_open.get():
+            log_holder.pack(side='bottom', fill='both', expand=False, pady=(5, 0), before=log_controls)
+        else:
+            log_holder.pack_forget()
+
     def write(text: str) -> None:
         log.configure(state="normal")
         log.insert("end", text)
-        log.see("end")
+        # Keep a bounded log buffer: GUI memory must not grow over multi-day rescues.
+        if int(log.index('end-1c').split('.')[0]) > 2500:
+            log.delete('1.0', '500.0')
+        if advanced_open.get():
+            log.see("end")
         log.configure(state="disabled")
 
     def require(var: tk.StringVar, name: str) -> str:
@@ -278,7 +351,53 @@ def launch() -> None:
         if chosen:
             journal_dir.set(os.path.join(chosen, "driverepair-journal-new"))
 
+    def apply_rescue(event: dict) -> None:
+        view = rescue_metrics.update(event)
+        phase = str(view.get('phase', 'FORWARD'))
+        total = int(view.get('total_bytes') or 0)
+        processed = int(view.get('processed_bytes') or 0)
+        recovered = int(view.get('recovered_bytes') or 0)
+        missing = int(view.get('unreadable_bytes') or 0)
+        phase_var.set('RETRYING UNREADABLE REGIONS' if phase == 'RETRY' else 'RECOVERING IMAGE')
+        pct = view['percent']
+        pbar['value'] = max(0, min(1000, int(pct * 10)))
+        msg_var.set(f'{pct:.2f}% of first pass processed · {fmt_bytes(processed)} / {fmt_bytes(total)}'
+                    if total else 'Preparing recovery')
+        recovered_var.set(fmt_bytes(recovered))
+        errors_var.set(f'{fmt_bytes(missing)}  ·  {view.get("missing_regions", 0)} region(s)')
+        speed = view['speed_bytes_per_sec']
+        speed_var.set(f'{fmt_bytes(int(speed))}/s' if speed else 'Measuring…')
+        eta_var.set(format_duration(view['eta_seconds']) if view['eta_seconds'] is not None
+                    else ('Retry pass (unknown)' if phase == 'RETRY' else 'Calculating…'))
+        metric_var.set(f'{pct:.1f}%  ·  {view.get("failed_reads", 0)} read failures')
+        health_var.set('Data saved = OS reads committed to image; not verified against original hashes.')
+        legend_var.set('Recovery map · . unscanned   o read to image   ? partial   X unreadable/unknown')
+        free = view.get('destination_free_bytes')
+        remaining = max(0, total - processed)
+        capacity_var.set(f'Free destination space: {fmt_bytes(free)}' if free is not None
+                         else 'Free destination space: unknown')
+        destination_var.set('Destination: ' + str(view.get('destination', 'unknown'))[-110:])
+        if missing:
+            warning_var.set('Some bytes could not be read. This image is INCOMPLETE; see the recovery map.')
+            warning_label.configure(fg=C['fail'])
+        elif free is not None and phase != 'RETRY' and free < remaining:
+            warning_var.set('Destination may run out of space before the image finishes; free space is below the remaining logical data.')
+            warning_label.configure(fg=C['warn'])
+        else:
+            warning_var.set('No unreadable regions reported so far. Unscanned areas are NOT confirmed healthy.')
+            warning_label.configure(fg=C['muted'])
+        compact = event.get('map')
+        if isinstance(compact, str) and compact:
+            nonlocal map_dirty
+            for i in range(len(map_cells)):
+                idx = min(len(compact) - 1, i * len(compact) // len(map_cells))
+                map_cells[i] = compact[idx] if compact[idx] in color_for else '.'
+            map_dirty = True
+
     def apply_progress(event: dict) -> None:
+        if event.get('workflow') == 'rescue':
+            apply_rescue(event)
+            return
         nonlocal map_dirty
         phase = str(event.get("phase") or stats["phase"])
         stats["phase"] = phase
@@ -335,7 +454,7 @@ def launch() -> None:
             map_dirty = True
 
     def start(args: list[str], title: str, *, risky: bool = False, destructive: bool = False) -> None:
-        nonlocal process, busy
+        nonlocal process, busy, last_result
         if busy:
             messagebox.showwarning("Busy", "A job is already active.")
             return
@@ -360,12 +479,27 @@ def launch() -> None:
             if typed != selected_id:
                 messagebox.showerror("Not authorized", "Device ID confirmation did not match; no write started.")
                 return
+        if args and args[0].startswith('rescue-'):
+            args = [*args, '--progress-jsonl', '--no-live-dashboard']
         command = [sys.executable, "-m", "driverepair_desktop", *args]
+        last_result = None
         write(f"\n=== {title} ===\n")
         status.set(f"Running: {title}")
         phase_var.set("STARTING")
         msg_var.set(title)
         stats["started"] = time.monotonic()
+        rescue_metrics.__init__()
+        recovered_var.set('—')
+        errors_var.set('—')
+        speed_var.set('—')
+        eta_var.set('—')
+        capacity_var.set('Free space: checking…')
+        warning_var.set('Recovery may stress failing hardware. This display is not a drive-health verdict.')
+        warning_label.configure(fg=C['muted'])
+        for label, text in zip(summary_labels, ('DATA SAVED TO IMAGE', 'UNREADABLE / UNKNOWN',
+                                                'CURRENT SPEED', 'TIME REMAINING')):
+            label.configure(text=text)
+        legend_var.set('Activity map · . unscanned  o read to image  ? in progress  X unreadable/unknown')
         reset_map()
         busy = True
         cancel_button.configure(state="normal")
@@ -379,14 +513,29 @@ def launch() -> None:
                 )
                 process = child
 
+                output_lines: list[str] = []
+                output_chars = [0]
                 def pump(stream, kind: str) -> None:
                     assert stream is not None
                     for line in stream:
+                        if kind == 'stdout' and output_chars[0] < 2_000_000:
+                            output_lines.append(line)
+                            output_chars[0] += len(line)
                         q.put((kind, line))
 
-                threading.Thread(target=pump, args=(child.stdout, "stdout"), daemon=True).start()
-                threading.Thread(target=pump, args=(child.stderr, "stderr"), daemon=True).start()
+                stdout_thread = threading.Thread(target=pump, args=(child.stdout, "stdout"), daemon=True)
+                stderr_thread = threading.Thread(target=pump, args=(child.stderr, "stderr"), daemon=True)
+                stdout_thread.start()
+                stderr_thread.start()
                 code = child.wait()
+                stdout_thread.join(timeout=3)
+                stderr_thread.join(timeout=3)
+                try:
+                    final_result = json.loads(''.join(output_lines))
+                    if isinstance(final_result, dict):
+                        q.put(('job_result', final_result))
+                except (ValueError, TypeError):
+                    pass
                 q.put(("done", (title, code)))
             except (OSError, ValueError) as exc:
                 q.put(("stdout", f"Unable to start: {exc}\n"))
@@ -448,12 +597,14 @@ def launch() -> None:
             elif kind == "benchmark":
                 start(["benchmark-external", "--device", dev, "--ack-risk", "--json"],
                       "Benchmark", risky=True)
-            elif kind == "rescue":
+            elif kind in {"rescue", "resume"}:
                 if not sys.platform.startswith("linux"):
                     raise ValueError("Direct external rescue is Linux-only in this build.")
                 out = require(dest_file, "new image destination")
-                start(["rescue-external", "--device", dev, "--output", out, "--ack-risk", "--json"],
-                      "External rescue", risky=True)
+                opts = (["--resume"] if kind == "resume" else [])
+                start(["rescue-external", "--device", dev, "--output", out,
+                       "--ack-risk", "--multi-pass", *opts, "--json"],
+                      "Resume external rescue" if kind == "resume" else "External rescue", risky=True)
         except ValueError as exc:
             messagebox.showerror("Input", str(exc))
 
@@ -461,7 +612,8 @@ def launch() -> None:
     bf.pack(anchor="w", pady=8)
     ttk.Button(bf, text="Refresh inventory", command=refresh_devices).pack(side="left", padx=(0, 6))
     for label, kind in [("SMART", "health"), ("Quick scan", "sample"), ("Full scan", "full"),
-                        ("Benchmark", "benchmark"), ("Rescue (Linux)", "rescue")]:
+                        ("Benchmark", "benchmark"), ("Rescue (Linux)", "rescue"),
+                        ("Resume rescue", "resume")]:
         ttk.Button(bf, text=label, command=lambda k=kind: device_action(k)).pack(side="left", padx=(0, 6))
     row(tab_drive, "Rescue image output", dest_file, pick_output)
 
@@ -477,9 +629,13 @@ def launch() -> None:
             src = require(image, "source image")
             if kind == "scan":
                 start(["scan-image", "--image", src, "--mode", "sample", "--json"], "Scan image")
-            elif kind == "rescue":
+            elif kind in {"rescue", "resume", "retry"}:
+                flags = (["--resume", "--retry-missing"] if kind == "retry" else
+                         ["--resume", "--multi-pass"] if kind == "resume" else ["--multi-pass"])
                 start(["rescue-image", "--image", src, "--output", require(dest_file, "output"),
-                       "--json"], "Rescue image")
+                       *flags, "--json"],
+                      "Retry unreadable regions" if kind == "retry" else
+                      "Resume image rescue" if kind == "resume" else "Rescue image")
             elif kind == "verify":
                 start(["verify-images", "--image", src,
                        "--output", require(dest_file, "rescued image"), "--json"], "Verify images")
@@ -497,9 +653,66 @@ def launch() -> None:
 
     ib = ttk.Frame(tab_image)
     ib.pack(anchor="w", pady=8)
-    for label, kind in [("Scan", "scan"), ("Rescue", "rescue"), ("Verify", "verify"),
+    for label, kind in [("Scan", "scan"), ("Rescue", "rescue"),
+                        ("Resume", "resume"), ("Retry gaps", "retry"), ("Verify", "verify"),
                         ("Carve", "carve"), ("FAT32 undelete", "undelete"), ("ZIP salvage", "zip")]:
         ttk.Button(ib, text=label, command=lambda k=kind: image_action(k)).pack(side="left", padx=(0, 6))
+
+    # --- Image integrity: reference hashes and verified replacement data ---
+    ttk.Label(tab_integrity, text='Integrity checks require a PREVIOUSLY trusted baseline or independent good copy. '
+              'A new checksum of already-corrupt data cannot reveal the original value. '
+              'No physical disk writes are performed here.',
+              style='Muted.TLabel', wraplength=910).pack(anchor='w', pady=(0, 8))
+    row(tab_integrity, 'Image to examine', image, pick_file)
+    def select_integrity_file(var, title, save=False):
+        chosen = (filedialog.asksaveasfilename(title=title, defaultextension='.json' if 'manifest' in title.lower() else '.img')
+                  if save else filedialog.askopenfilename(title=title))
+        if chosen:
+            var.set(chosen)
+    row(tab_integrity, 'Reference hash manifest', integrity_manifest,
+        lambda: select_integrity_file(integrity_manifest, 'Choose known-good manifest'))
+    row(tab_integrity, 'Known-good image', integrity_reference,
+        lambda: select_integrity_file(integrity_reference, 'Choose independent good reference image'))
+    row(tab_integrity, 'New corrected image', integrity_output,
+        lambda: select_integrity_file(integrity_output, 'Save NEW corrected image', save=True))
+    ttk.Label(tab_integrity, textvariable=integrity_summary, style='Muted.TLabel',
+              wraplength=900).pack(anchor='w', pady=(5, 10))
+    def integrity_action(kind):
+        try:
+            src = require(image, 'image')
+            manifest = require(integrity_manifest, 'manifest location')
+            if kind == 'baseline':
+                # Creating a baseline does NOT certify the image. A separate, trusted
+                # baseline must have been captured before corruption occurred.
+                if not messagebox.askyesno('Baseline trust',
+                    'This saves hashes of the current image, even if it is already corrupted. '
+                    'It does NOT restore earlier correct bits. Continue?'):
+                    return
+                start(['integrity-baseline', '--image', src, '--output', manifest, '--json'],
+                      'Create UNATTESTED integrity baseline')
+            elif kind == 'audit':
+                start(['integrity-audit', '--image', src, '--manifest', manifest, '--json'],
+                      'Audit known-hash integrity')
+            elif kind == 'restore':
+                if not messagebox.askyesno('Trusted restoration',
+                    'The independent reference must represent the SAME data snapshot. '
+                    'Legitimate file changes since the baseline will otherwise look corrupt. '
+                    'This creates a NEW image; it never modifies the original. Continue?'):
+                    return
+                start(['integrity-restore-copy', '--image', src,
+                       '--reference', require(integrity_reference, 'known-good reference image'),
+                       '--manifest', manifest, '--ack-same-snapshot',
+                       '--output', require(integrity_output, 'new corrected image'), '--json'],
+                      'Restore hash-verified chunks to new image')
+        except ValueError as exc:
+            messagebox.showerror('Integrity input', str(exc))
+    actions_integrity = ttk.Frame(tab_integrity)
+    actions_integrity.pack(anchor='w', pady=5)
+    for label, kind in [('Create baseline (not a proof)', 'baseline'),
+                        ('Check for changed chunks', 'audit'),
+                        ('Restore proven chunks to NEW image', 'restore')]:
+        ttk.Button(actions_integrity, text=label,
+                   command=lambda k=kind: integrity_action(k)).pack(side='left', padx=(0, 6))
 
     # --- Targeted deleted-file recovery (read-only catalog, explicit selection) ---
     ttk.Label(tab_undelete,
@@ -664,7 +877,7 @@ def launch() -> None:
         except ValueError as exc:
             messagebox.showerror('Preflight', str(exc))
 
-    def rescue_offline():
+    def rescue_offline(resume=False):
         try:
             opts = offline_args()
             if not messagebox.askyesno('Offline system drive only',
@@ -673,7 +886,9 @@ def launch() -> None:
                     'separate storage. Continue?'):
                 return
             start(['rescue-system', *opts, '--ack-risk', '--ack-offline-system',
-                   '--multi-pass', '--json'], 'Read-only rescue of offline OS disk', risky=True)
+                   '--multi-pass', *(['--resume'] if resume else []), '--json'],
+                  'Resume read-only OS rescue' if resume else 'Read-only rescue of offline OS disk',
+                  risky=True)
         except ValueError as exc:
             messagebox.showerror('Offline recovery', str(exc))
     row_sys = ttk.Frame(tab_system)
@@ -682,6 +897,8 @@ def launch() -> None:
     ttk.Button(row_sys, text='2. Check destination', command=plan_offline).pack(side='left', padx=4)
     ttk.Button(row_sys, text='3. Rescue to image', style='Accent.TButton',
                command=rescue_offline).pack(side='left', padx=4)
+    ttk.Button(row_sys, text='Resume image rescue',
+               command=lambda: rescue_offline(resume=True)).pack(side='left', padx=4)
 
     ttk.Separator(tab_system).pack(fill='x', pady=12)
     ttk.Label(tab_system, text='Last resort: refresh readable sectors without a second drive',
@@ -858,14 +1075,63 @@ def launch() -> None:
     ttk.Button(fb, text="Read-only check", command=inspect_ext).pack(side="left", padx=(0, 6))
     ttk.Button(fb, text="Repair NEW copy", command=repair_ext).pack(side="left")
 
+    def save_report() -> None:
+        if last_result is None:
+            messagebox.showinfo('No completed result', 'Finish a job before saving its final JSON report.')
+            return
+        chosen = filedialog.asksaveasfilename(title='Save DriveRepair job report',
+                                              defaultextension='.json',
+                                              filetypes=[('JSON report', '*.json')])
+        if not chosen:
+            return
+        try:
+            # Explicit export only; may contain selected device paths or identifiers.
+            with open(chosen, 'x', encoding='utf-8') as f:
+                json.dump(last_result, f, indent=2)
+                f.write('\n')
+            status.set('Saved report to ' + chosen)
+        except FileExistsError:
+            messagebox.showerror('Report exists', 'Choose a new report filename; existing reports are never overwritten.')
+        except OSError as exc:
+            messagebox.showerror('Save failed', str(exc))
+
+    def open_destination() -> None:
+        path = dest_file.get().strip() or dest_dir.get().strip()
+        if not path:
+            messagebox.showinfo('No destination', 'Choose a destination in the workflow first.')
+            return
+        directory = os.path.dirname(os.path.abspath(path))
+        if not os.path.isdir(directory):
+            messagebox.showerror('Destination unavailable', 'Destination parent folder does not exist.')
+            return
+        try:
+            if sys.platform == 'win32':
+                os.startfile(directory)  # type: ignore[attr-defined]
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', directory])
+            else:
+                subprocess.Popen(['xdg-open', directory])
+        except OSError as exc:
+            messagebox.showerror('Open failed', str(exc))
+
     statusbar = ttk.Frame(shell)
     statusbar.pack(fill="x", pady=(8, 0))
     ttk.Label(statusbar, textvariable=status).pack(side="left", fill="x", expand=True)
-    cancel_button = ttk.Button(statusbar, text="Cancel job", command=cancel, state="disabled")
+    cancel_button = ttk.Button(statusbar, text="Stop job", command=cancel, state="disabled")
     cancel_button.pack(side="right")
+    ttk.Button(statusbar, text='Save report…', command=save_report).pack(side='right', padx=6)
+    ttk.Button(statusbar, text='Open destination', command=open_destination).pack(side='right', padx=6)
+    # Reserve the always-accessible Stop button and Advanced toggle at the
+    # bottom BEFORE allowing the scrollable notebook to expand.
+    notebook.pack_forget()
+    log_controls.pack_forget()
+    statusbar.pack_forget()
+    statusbar.pack(side='bottom', fill='x', pady=(8, 0))
+    log_controls.pack(side='bottom', fill='x', pady=(8, 0))
+    notebook.pack(fill='both', expand=True)
 
     def poll() -> None:
-        nonlocal process, busy
+        nonlocal process, busy, last_result, map_dirty
         try:
             while True:
                 kind, value = q.get_nowait()
@@ -931,13 +1197,95 @@ def launch() -> None:
                         if stats["size"] == 0 and tree.selection() == ():
                             pass
                     status.set(f"Found {len(value)} external whole disk(s)")
+                elif kind == 'job_result':
+                    if isinstance(value, dict):
+                        last_result = value
+                        if value.get('status') in {'manifest_created_unattested', 'matches_unattested_manifest',
+                                                   'integrity_mismatch', 'incomplete_unknown_regions',
+                                                   'verified_restored_copy', 'incomplete_unverified_copy'}:
+                            integrity_summary.set(
+                                f"Integrity: {value.get('status')} · "
+                                f"{value.get('hash_mismatched_chunks', value.get('replaced_chunks', 0))} "
+                                f"mismatched/replaced chunks · "
+                                f"{value.get('unknown_chunks', value.get('unverified_chunks', 0))} unknown. "
+                                "See Advanced Details / export report for exact offsets."
+                            )
                 elif kind == "done":
                     title, code = value
                     process = None
                     busy = False
                     cancel_button.configure(state="disabled")
-                    phase_var.set("DONE" if code == 0 else f"EXIT {code}")
-                    status.set(f"{title}: {'finished' if code == 0 else f'exited {code}'}")
+                    phase_var.set("COMPLETED / REVIEW RESULTS" if code == 0 else f"STOPPED / ERROR {code}")
+                    incomplete = bool(last_result and last_result.get('status') in {
+                        'completed_with_missing_data', 'in_progress', 'retry_in_progress',
+                        'completed_with_skips_or_verify_failures',
+                    })
+                    if incomplete:
+                        phase_var.set('INCOMPLETE IMAGE — FOLLOW-UP NEEDED')
+                    elif code == 0 and rescue_metrics.last_event.get('workflow') == 'rescue':
+                        eta_var.set('Complete')
+                    if rescue_metrics.last_event.get('workflow') == 'rescue':
+                        v = rescue_metrics.last_event
+                        elapsed = float(v.get('elapsed_seconds') or 0)
+                        if elapsed > 0 and int(v.get('recovered_bytes') or 0) > 0:
+                            speed_var.set(f"{fmt_bytes(int(int(v['recovered_bytes']) / elapsed))}/s avg")
+                    warning_var.set(
+                        'INCOMPLETE IMAGE: some areas remain missing or unverified. Keep the recovery journal.' 
+                        if incomplete else
+                        'Job finished. Verify recovered data before relying on the image.'
+                        if code == 0 else
+                        'Job stopped or failed. Preserve the image and recovery journal for resume.')
+                    warning_label.configure(fg=C['warn'] if incomplete else
+                                            C['muted'] if code == 0 else C['fail'])
+                    status.set(f"{title}: {'finished — review results' if code == 0 else f'exited {code} — journal may support resume'}")
+                    if last_result and last_result.get('status') in {
+                        'manifest_created_unattested', 'matches_unattested_manifest',
+                        'integrity_mismatch', 'incomplete_unknown_regions',
+                        'verified_restored_copy', 'incomplete_unverified_copy',
+                    }:
+                        finding = last_result['status']
+                        messages = {
+                            'manifest_created_unattested': ('BASELINE CREATED / NOT TRUSTED',
+                                'Baseline saved. A checksum of already-corrupt data does not reveal original bytes.'),
+                            'matches_unattested_manifest': ('MATCHES REFERENCE HASHES',
+                                'All chunks match the baseline. This is NOT proof the baseline was originally correct.'),
+                            'integrity_mismatch': ('INTEGRITY ALERT — CHANGED CHUNKS',
+                                'Some regions differ from the baseline. They may be corrupt OR legitimate changes; inspect offsets.'),
+                            'incomplete_unknown_regions': ('INTEGRITY UNKNOWN — RESCUE GAPS',
+                                'Unvisited or unreadable regions remain UNKNOWN, not corrected.'),
+                            'verified_restored_copy': ('NEW VERIFIED COPY CREATED',
+                                'New image matches the provided reference hashes. Original image is untouched.'),
+                            'incomplete_unverified_copy': ('NEW COPY INCOMPLETE / UNVERIFIED',
+                                'Some chunks lack trusted replacement bytes. Do not use this copy as fully restored.'),
+                        }
+                        headline, description = messages[finding]
+                        pbar['value'] = 1000
+                        metric_var.set('Completed integrity operation')
+                        phase_var.set(headline)
+                        warning_var.set(description)
+                        warning_label.configure(fg=C['warn'] if finding in {
+                            'integrity_mismatch', 'incomplete_unknown_regions',
+                            'incomplete_unverified_copy'} else C['muted'])
+                        for label, text in zip(summary_labels,
+                                               ('HASH-MATCHED CHUNKS', 'DIFFERENT / UNVERIFIED CHUNKS',
+                                                'OPERATION', 'STATUS')):
+                            label.configure(text=text)
+                        total_chunks = last_result.get('total_chunks')
+                        if type(total_chunks) is int and total_chunks > 0:
+                            mismatch_indices = {r['index'] for r in last_result.get('mismatched_regions', [])}
+                            unknown_indices = {r['index'] for r in last_result.get('unknown_regions', [])}
+                            for i in range(len(map_cells)):
+                                j = min(total_chunks - 1, i * total_chunks // len(map_cells))
+                                map_cells[i] = ('X' if j in mismatch_indices else
+                                                '?' if j in unknown_indices else 'o')
+                            map_dirty = True
+                            legend_var.set('Integrity chunks · o matched reference  X differs  ? unknown; not a health map')
+                        recovered_var.set(str(last_result.get('hash_matched_chunks', '—')))
+                        errors_var.set(str(last_result.get('hash_mismatched_chunks',
+                                                   last_result.get('unverified_chunks', 0))))
+                        speed_var.set('Reference hash comparison')
+                        eta_var.set('Complete')
+                        status.set(f'{title}: findings ready — inspect the integrity page or save report')
                     write(f"--- Finished: exit code {code} ---\n")
                     redraw_map(force=True)
         except queue.Empty:

@@ -162,6 +162,7 @@ def scan_offsets(size: int, chunk: int, mode: str, samples: int):
 
 def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
                 samples: int = 128, chunk: int = 1024 * 1024, max_errors: int = 16,
+                compare_suspects: bool = False,
                 progress: Callable[[int, int], None] | None = None) -> dict:
     if (not 0 < sector <= 1024 * 1024 or size <= 0 or size % sector or
             chunk < sector or chunk % sector or not 1 <= max_errors <= 10000 or
@@ -251,6 +252,27 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
             if status.startswith('aborted'):
                 break
 
+    # Extra targeted reads are optional: discrepancies flag instability, NOT the
+    # original/correct value. Only revisit suspicious samples, not all LBAs.
+    inconsistent_reads: list[dict] = []
+    repeated_read_errors = 0
+    if compare_suspects and mode == 'triage' and not status.startswith('aborted'):
+        candidates = sorted(set(anomalous_indices))[:min(64, samples)]
+        for index in candidates:
+            off = index * chunk
+            length = min(chunk, size - off)
+            try:
+                first = reader.read_at(off, length)
+                second = reader.read_at(off, length)
+                if len(first) != length or len(second) != length:
+                    repeated_read_errors += 1
+                elif first != second:
+                    inconsistent_reads.append({'offset': off, 'length': length,
+                                               'interpretation': 'Inconsistent repeated reads; correct bytes UNKNOWN'})
+            except OSError:
+                repeated_read_errors += 1
+        if inconsistent_reads and status == 'completed':
+            status = 'completed_with_inconsistent_reads'
     if status == 'completed' and failures:
         status = 'completed_with_read_errors'
     elif status == 'completed' and slow_regions:
@@ -267,10 +289,15 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
         'read_error_chunks': failures,
         'read_error_ranges': failed_ranges,
         'slow_regions': slow_regions,
+        'inconsistent_reads': inconsistent_reads,
+        'repeat_probe_failures': repeated_read_errors,
+        'extra_suspect_reads': 2 * min(len(set(anomalous_indices)), 64, samples) if compare_suspects and mode == 'triage' else 0,
         'follow_up_chunks': max(0, completed - (len(baseline) if baseline is not None else blocks)),
         'surface_coverage_pct': round(100 * checked / size, 6),
         'elapsed_seconds': round(time.monotonic() - started, 3),
         'notes': ('TRIAGE IS A SPOT-CHECK, not a health certification. ' if mode == 'triage' else '') +
                  'Readability only; no sector repaired, no writes, no correctness guarantee. '
-                 'Errors locate affected CHUNKS, not defective individual sectors.',
+                 'Errors locate affected CHUNKS, not defective individual sectors. ' +
+                 ('Optional repeated-suspect checks can detect inconsistency but cannot establish correct bits.'
+                  if compare_suspects else ''),
     }

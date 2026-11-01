@@ -1,27 +1,30 @@
 # Status — 2026-11-01
 
-PRIVATE TEST — **0.3.1b1 Last-Resort** + findings `20261101T203616Z` remediated + Samsung PM841 lab.
+PRIVATE TEST — **0.3.3b1 Integrity / Dashboard** applied; Seagate 1 TB USB lab starting.
 
 ## Code
 
-- Findings export DriveRepair-only rows remediated (`docs/FINDINGS_REMEDIATION_20261101_203616.md`)
-- Health soft-fails to `status=unknown` when `smartctl` missing (no invented pass)
-- Windows live rescue + SMB mapped-drive destination isolation on main
+- `feature/0.3.3b1-dashboard-integrity` from patch `DriveRepair_0.3.3b1_Dashboard_Integrity.patch`
+- Integrity: `integrity-baseline` / `integrity-audit` / `integrity-restore-copy` + GUI map
+- Recovery dashboard (0.3.2b1) included: throttled JSONL progress, Resume / Retry gaps
+- Prior remediations retained on main (USB fingerprint without location flap; live rescue throttle)
 
-## Lab — Samsung PM841 256 GB (drive **E:** / `PhysicalDrive2` / `e5a0dfacc956`)
+## Lab — Seagate ST1000LM048 1 TB (USB dock)
 
-Metrics under `D:\DriveRepairLab\samsung_pm841_256_20261101\` (never on E:).
+| Field | Value |
+|-------|-------|
+| Disk | **2** |
+| Model | ST1000LM 048-2E7172 |
+| Size | 1000204886016 (~931 GiB) |
+| Bus | USB |
+| Status | Online |
 
-| Step | Result |
-|------|--------|
-| list | OK — USB Get-Disk identity |
-| health | smartctl not installed → unknown |
-| monitor | attention (SMART unknown); preserve-first |
-| triage 128 | 0 errors; ~127 MiB readable; 0.05% coverage |
-| sample 64 | 0 errors |
-| benchmark | ~165 MiB/s; median latency ~41 ms; p99 ~175 ms |
-| rescue multipass | **in progress** on D: (image growing; ~142 GiB+ observed mid-run) |
+Outputs go under `D:\DriveRepairLab\seagate_st1000lm048_1tb_*` — never on the patient.
+
+## Lab — Samsung PM841 256 GB (prior)
+
+Paused / superseded by Seagate swap. Metrics under `D:\DriveRepairLab\samsung_pm841_256_20261101\`.
 
 ## Tests
 
-Desktop suite: **159 OK (skipped=11)** after findings pass.
+Desktop suite pending after apply (target: 175 passed · 1 Windows skip per engineering package).

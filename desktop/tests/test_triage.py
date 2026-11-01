@@ -53,3 +53,24 @@ class TriageTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class TargetedIntegrityTriageTests(unittest.TestCase):
+    def test_suspect_recheck_finds_inconsistent_data_without_writes(self):
+        from driverepair_desktop.scanner import scan_reader
+        class Reader:
+            def __init__(self):
+                self.n = 0
+            def read_at(self, offset, count):
+                if offset == 0:
+                    self.n += 1
+                    if self.n == 1:
+                        raise OSError(5, 'synthetic read error')
+                    if self.n >= 3:
+                        return b'Q' * count
+                return b'P' * count
+        r = Reader()
+        result = scan_reader(r, size=1024*1024*3, sector=512, mode='triage', chunk=1024*1024,
+                             samples=3, compare_suspects=True, max_errors=10)
+        self.assertGreaterEqual(result['extra_suspect_reads'], 2)
+        self.assertTrue(result['inconsistent_reads'])
+        self.assertIn('UNKNOWN', result['inconsistent_reads'][0]['interpretation'])
