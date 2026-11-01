@@ -390,8 +390,27 @@ def _verified_linux_remote_destination(parent: str) -> bool:
         return False
 
 
+def _windows_mapped_network_root(drive_letter: str) -> str | None:
+    """Return UNC root for a mapped drive letter, else None."""
+    import subprocess
+    letter = drive_letter.rstrip(":").upper()
+    command = (
+        f"$d = Get-PSDrive -Name '{letter}' -PSProvider FileSystem -ErrorAction Stop; "
+        "if ($d.DisplayRoot -and ($d.DisplayRoot -match '^\\\\\\\\')) "
+        "{ $d.DisplayRoot } else { '' }"
+    )
+    completed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+        capture_output=True, check=False, timeout=25,
+    )
+    if completed.returncode != 0:
+        return None
+    root = completed.stdout.decode("utf-8-sig", errors="replace").strip()
+    return root or None
+
+
 def _separate_windows_destination(device, output: str) -> None:
-    """Require the rescue/image destination to sit on a different Windows disk number."""
+    """Require destination on another local disk number, or a verified SMB/UNC map."""
     import re
     import subprocess
     absolute = os.path.abspath(output)
@@ -407,13 +426,23 @@ def _separate_windows_destination(device, output: str) -> None:
     )
     completed = subprocess.run(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
-        capture_output=True, check=True, timeout=25,
+        capture_output=True, check=False, timeout=25,
     )
-    target = json.loads(completed.stdout.decode("utf-8-sig"))
-    if not isinstance(target, int):
-        raise RuntimeError("Could not identify the destination's physical disk")
-    if target == number:
-        raise RuntimeError("Destination is stored on patient disk; refusing live rescue")
+    if completed.returncode == 0:
+        target = json.loads(completed.stdout.decode("utf-8-sig"))
+        if not isinstance(target, int):
+            raise RuntimeError("Could not identify the destination's physical disk")
+        if target == number:
+            raise RuntimeError("Destination is stored on patient disk; refusing live rescue")
+        return
+    # Mapped SMB/CIFS shares have no DiskNumber; accept only confirmed UNC DisplayRoot.
+    unc = _windows_mapped_network_root(drive[0])
+    if unc:
+        return
+    raise RuntimeError(
+        "Cannot confirm Windows destination isolation (not a local partition and not a "
+        "verified mapped network drive); refuse live rescue/monitor writes"
+    )
 
 
 def _separate_live_destination(device, output: str) -> None:
