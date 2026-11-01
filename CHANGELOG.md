@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.8 — Readable PowerShell CLI dashboard (2026-11-01)
+
+- In-place color panel for live refresh (Windows VT / PowerShell / Windows Terminal); no scrolling probe wall.
+- Compact throttled line mode when redirected; hide UNKNOWN health noise until data exists.
+- ASCII-only status text (fixes cp1252 `…` mojibake); human `list` / scan progress bars.
+- New elevated lab launcher that auto-lists USB disks for Sandisk / drive-swap testing.
+
 ## 0.2.7 — In-place media refresh safety hotfix (2026-11-01)
 
 - Made **disk-backed** original-byte journaling the default and required it for physical drives.

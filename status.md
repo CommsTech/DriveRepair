@@ -1,25 +1,14 @@
 # Status — 2026-11-01
 
-PRIVATE TEST ONLY — **0.2.7** rolling-journal safety hotfix.
+PRIVATE TEST ONLY — **0.2.8** readable PowerShell CLI dashboard.
 
-## Hardening
+## CLI UX
 
-- Default/required journal for live media: **disk** (fsynced `region.bin`)
-- Write/readback failure aborts and **keeps** the active transaction journal
-- Adaptive queue peeks until COMMITTED; VERIFIED/COMMITTED resume is exact-once
-- Health indicators default to `UNKNOWN`
-- Auto-delete journal only after exact `completed` with no active transaction
+- In-place ANSI panel for live Adaptive/Full refresh (no scrolling probe wall)
+- Compact throttled line mode when redirected
+- Human `list` table + scan progress bar; ASCII-only status (no cp1252 mojibake)
+- Lab launcher: `desktop/scripts/run_elevated_live_lab.ps1` (pick USB disk after Sandisk swap)
 
-See `docs/DriveRepair_0.2.7_Hardening_Report.md`.
+## Prior 0.2.7 live lab (12 TB Seagate)
 
-## Live USB lab (PhysicalDrive2 ST12000N, 2026-11-01)
-
-| Test | Result |
-|---|---|
-| Unit suite | **98 passed** |
-| `list` | OK |
-| Sample scan 24 chunks | OK — 24/24 readable, 0 errors (~10.5 s) |
-| Adaptive refresh 64 probes, `--journal-backend disk` on `D:` | **completed** (exit 0); journal retained |
-| Live hybrid journal rejected | OK — exit 1 as required |
-
-Still unproven: USB hot-unplug / power-loss fault injection.
+Sample scan + Adaptive disk-journal completed; hybrid live backend rejected.

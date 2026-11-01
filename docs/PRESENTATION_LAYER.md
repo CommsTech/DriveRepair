@@ -7,7 +7,7 @@ DriveRepair keeps disk I/O in the recovery engine. CLI and GUI are thin presenta
 1. **Recovery first** — never open patient devices from the GUI process; spawn the CLI.
 2. **Low overhead** — progress emits at most ~10 Hz (`ProgressEmitter`, `--progress-jsonl`).
 3. **Accurate** — dashboard/map/health reflect engine events; mechanical* is a latency/error proxy (USB docks have no acoustic mic).
-4. **Modern, industrial** — dark workstation UI (Tk today); not legacy text-mode aesthetics.
+4. **Modern, industrial** — dark workstation UI (Tk today); live CLI uses an in-place ANSI panel in PowerShell/Windows Terminal (not a scrolling probe dump).
 5. **Cross-platform** — Windows / Linux / macOS; ARM and x86 via Python desktop now, Rust presentation later.
 
 ## Current stack
