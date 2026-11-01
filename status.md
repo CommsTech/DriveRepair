@@ -1,38 +1,20 @@
 # Status — 2026-11-01
 
-PRIVATE TEST — **0.3.3b1** + Windows sparse rescue on Gitea `main`; Seagate 1 TB USB lab measured.
+PRIVATE TEST — Seagate ST1000LM048 1TB USB lab **complete** on 0.3.3b1 + Windows sparse/O_BINARY fixes.
 
-## Merged
+## Merged follow-ups
+| PR | Fix |
+|----|-----|
+| #89 | Sparse SetEndOfFile (no zero-fill) |
+| (pending this) | Integrity restore O_BINARY + lab prefix workflow |
 
-| PR | Change |
-|----|--------|
-| [#86](https://git.commsnet.org/commstech/DriveRepair/pulls/86) | 0.3.3b1 integrity-aware dashboard (`integrity-*`, GUI map, rescue dashboard) |
-| [#87](https://git.commsnet.org/commstech/DriveRepair/pulls/87) | Windows `FSCTL_SET_SPARSE` before rescue `ftruncate` so `--max-chunks` works |
-
-## Lab — Seagate ST1000LM048 1 TB
-
-| Field | Value |
-|-------|-------|
-| Disk | **2** / `windows:PhysicalDrive2` |
-| Model | ST1000LM 048-2E7172 |
-| Size | 1000204886016 (~931 GiB) |
-| Identity | `138b614ad5ea` |
-| Outputs | `D:\DriveRepairLab\seagate_st1000lm048_1tb_20261101_151108\` (never on patient) |
-
+## Seagate results (`138b614ad5ea`)
 | Step | Result |
 |------|--------|
-| list | OK |
-| health | `unknown` (smartctl not installed) |
-| monitor | `attention`; preserve-first |
-| triage 128 | 0 errors; slow@0 (~156 ms); ~0.014% coverage |
-| sample 64 | 0 errors |
-| benchmark | **~65.6 MiB/s**; median ~113 ms; p99 ~195 ms |
-| integrity offline | single-bit flip → mismatch@1 MiB → restore-copy → **byte-exact** |
-| bounded patient rescue | deferred — UAC prompt blocked re-elevation after sparse fix; script ready: `desktop/scripts/run_elevated_seagate_st1000_lab.ps1` |
+| triage/sample | 0 errors |
+| benchmark | ~65 MiB/s |
+| bounded rescue | **32 MiB / 32 chunks in ~19.5s**; sparse logical 1TB; VDL=32MiB |
+| detect (prefix) | no known FS in first 32MiB |
+| integrity | 1 flipped chunk detected → restore → **byte-exact** |
 
-Honesty: triage/sample prove readability of sampled regions only. Integrity restore needs a trusted reference; it does not invent original bits.
-
-## Tests
-
-- After 0.3.3b1: **176 OK (skipped=11)**
-- After sparse fix subset: **26 OK** (recovery + integrity + dashboard)
+Lab: `D:\DriveRepairLab\seagate_st1000lm048_1tb_20261101_151108\`
