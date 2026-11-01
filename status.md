@@ -1,17 +1,18 @@
 # Status — 2026-11-01
 
-PRIVATE TEST ONLY — **0.3.0b1** engineering candidate + soft mechanical indicators.
+PRIVATE TEST ONLY — **0.3.1b1** final engineering cycle candidate.
 
 ## Applied
 
-- 0.3.0b1 overlay (catalog/TSK/monitor/forensics/triage/GUI/recovery-core) merged with preserved multi-FS + carve work
-- Soft indicators on refresh: `--acoustic-watch`, `--shock-guard`, `--smart-deltas` (WATCH/STOP; not platter metrology)
-- `detect-filesystems` / `recover-image` CLI wired; SensorSuite attached to refresh progress + pre-write shock gate
-- Release notes/artifacts under `docs/releases/0.3.0b1/`
-- Identity fingerprint + `--confirm-identity`; Get-Disk discovery; optional Linux RAM journal
+- Linux offline recovery: `list-all-linux`, `plan-system-recovery`, `rescue-system` with identity + offline acks
+- Internal disks excluded from ordinary `list`; NFS/CIFS/SSHFS destinations accepted when mounted
+- First-observation SMART media/pending alerts (no false clean baseline)
+- GUI offline recovery walkthrough; health strip starts UNKNOWN
+- Debian live-build recipe scripts (ISO not built/boot-tested here)
+- Prior 0.3.0b1 soft indicators + multi-FS recovery retained
 
-## Live hardware notes
+## Validation
 
-- 12 TB Seagate USB: Adaptive disk-journal completed (0.2.7)
-- SanDisk 500 GB #1/#2: reads OK; writes failed WinError 1117/121 (dock/drive)
-- SanDisk 500 GB #3 (`e8985dc11d53`): write probe OK; Adaptive completed with 0 rewritten
+- Desktop unit suite run after apply (see latest test log)
+- Artifact SHA-256 matched the engineering report for patch/pyz/whl
+- Not unrestricted public beta: no real USB power-loss, ISO boot, or native Windows/macOS raw-drive matrix

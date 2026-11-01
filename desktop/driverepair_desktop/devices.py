@@ -68,7 +68,7 @@ def _positive_int(value: object, default: int = 0) -> int:
         return default
 
 
-def linux_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
+def _linux_disks(run: Callable[[list[str]], bytes], *, include_internal: bool) -> list[Device]:
     command = ["lsblk", "--json", "--bytes", "--nodeps", "--output",
                "PATH,TYPE,TRAN,HOTPLUG,RM,SIZE,LOG-SEC,MODEL,SERIAL,WWN,HCTL"]
     records = json.loads(run(command).decode("utf-8"))["blockdevices"]
@@ -83,7 +83,7 @@ def linux_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
         path = str(record.get("path") or "")
         size = _positive_int(record.get("size"))
         sector = _positive_int(record.get("log-sec"))
-        if not external or not re.fullmatch(r"/dev/[a-zA-Z0-9._+-]+", path):
+        if (not external and not include_internal) or not re.fullmatch(r"/dev/[a-zA-Z0-9._+-]+", path):
             continue
         if not size or not sector or size % sector:
             continue
@@ -92,6 +92,24 @@ def linux_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
                               size, sector, bus, str(record.get("serial") or "").strip(),
                               ("HCTL " + str(record["hctl"])) if record.get("hctl") else "", "lsblk"))
     return devices
+
+
+def linux_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
+    """Externally connected whole disks only (safe desktop default)."""
+    return _linux_disks(run, include_internal=False)
+
+
+def linux_all_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
+    """Linux offline-recovery inventory. Caller must check mounts/holders."""
+    return _linux_disks(run, include_internal=True)
+
+
+def select_linux_any_disk(identifier: str,
+                          discover: Callable[[], list[Device]] = linux_all_devices) -> Device:
+    matches = [d for d in discover() if d.id == identifier]
+    if len(matches) != 1 or not matches[0].serial:
+        raise ValueError("Disk absent, ambiguous or missing a stable serial; use list-all-linux")
+    return matches[0]
 
 
 def macos_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:

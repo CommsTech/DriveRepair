@@ -1,4 +1,4 @@
-# DriveRepair architecture — 0.3.0b1
+# DriveRepair architecture — 0.3.1b1
 
 **Status:** Partial Rust migration. Do NOT describe the Python desktop core as fully migrated.
 
@@ -41,3 +41,13 @@
 ## Technical caution
 
 Moving CPU and memory-bound tasks into Rust can reduce overhead. On a seriously failing HDD, the bottleneck is often disk firmware retries, bad-head mechanics, USB bridge resets or thermal events, not Python execution. Measure throughput, recovered verified bytes, tail latency, read amplification, memory, and source writes under identical conditions. Do not claim superiority from a clean synthetic image.
+
+## Experimental live recovery architecture (0.3.1b1)
+
+A Debian live-build recipe packages the **Python desktop client and its
+existing optional local forensic tools** into an x86-64 live ISO target.
+The live OS uses Linux kernel drivers; the legacy bare-metal Rust BIOS/UEFI
+crates remain unsupported. No ISO boot test has been performed in this sandbox.
+The non-destructive offline `rescue-system` path is separate from ordinary
+external-only scanning and checks source idle state, identity, and destination
+ancestry/network mount before opening a read-only device handle.

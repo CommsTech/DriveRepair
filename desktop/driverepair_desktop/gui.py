@@ -92,7 +92,7 @@ def launch() -> None:
         "rewritten": 0,
         "verified": 0,
         "message": "Ready",
-        "health": {"media": "OK", "transport": "OK", "mechanical": "OK"},
+        "health": {"media": "UNKNOWN", "transport": "UNKNOWN", "mechanical": "UNKNOWN"},
         "started": None,
     }
 
@@ -104,7 +104,7 @@ def launch() -> None:
     journal_dir = tk.StringVar(value=str(Path.home() / "DriveRepairJournal"))
     status = tk.StringVar(value="Recovery engine idle — presentation layer only draws throttled progress")
     phase_var = tk.StringVar(value="IDLE")
-    health_var = tk.StringVar(value="media OK · transport OK · mechanical* OK")
+    health_var = tk.StringVar(value="Media unknown · Transport unknown · Mechanical unknown (no diagnostic yet)")
     metric_var = tk.StringVar(value="—")
     msg_var = tk.StringVar(value="Select a workflow. Disk I/O runs in a child process.")
 
@@ -190,8 +190,10 @@ def launch() -> None:
     tab_refresh = ttk.Frame(notebook, padding=12)
     tab_undelete = ttk.Frame(notebook, padding=12)
     tab_fs = ttk.Frame(notebook, padding=12)
+    tab_system = ttk.Frame(notebook, padding=12)
     notebook.add(tab_start, text=" Start here ")
     notebook.add(tab_drive, text=" Diagnose / Rescue ")
+    notebook.add(tab_system, text=" Recover OS drive ")
     notebook.add(tab_image, text=" Image recovery ")
     notebook.add(tab_undelete, text=" Recover deleted files ")
     notebook.add(tab_refresh, text=" In-place refresh ")
@@ -204,6 +206,8 @@ def launch() -> None:
               'All recovery output should go to healthy storage, never the failing disk.',
               style='Muted.TLabel', wraplength=880).pack(anchor='w', pady=(0, 14))
     workflow_cards = [
+        ('My computer will not boot / only one internal disk',
+         'Boot a trusted live USB, then rescue to a separate disk or NAS share.', tab_system),
         ('My files were accidentally deleted',
          'Preview deleted file metadata and restore only files I select. Start from an image.', tab_undelete),
         ('My external drive is slow or failing',
@@ -599,6 +603,85 @@ def launch() -> None:
               'Filesystem support varies. Never restore to the patient disk or assume intact results.',
               style='Muted.TLabel', wraplength=900).pack(anchor='w', pady=6)
 
+    # --- Failed system drive / trusted Linux live media ---
+    ttk.Label(tab_system, text='Recover a computer whose internal OS drive is failing',
+              font=('Segoe UI', 15, 'bold')).pack(anchor='w', pady=6)
+    ttk.Label(tab_system,
+              text='Boot a trusted Linux live USB FIRST. The failing system drive must be unmounted '
+                   'and must have no active RAID, LVM or encryption holders. Choose a separate USB '
+                   'disk or mounted NFS/CIFS/SSHFS share with enough space for an image. '
+                   'The patient is NEVER opened for writing in this workflow.',
+              style='Muted.TLabel', wraplength=910).pack(anchor='w', pady=(0, 12))
+    offline_selected = tk.StringVar(value='No offline whole disk selected')
+    offline_inventory = {}
+    offline_tree = ttk.Treeview(tab_system, show='headings',
+                  columns=('model','size','bus','serial','hint','id'), height=6)
+    for key, width in [('model', 190), ('size', 120), ('bus', 110),
+                       ('serial', 110), ('hint', 130), ('id', 190)]:
+        offline_tree.heading(key, text=key.upper())
+        offline_tree.column(key, width=width)
+    offline_tree.pack(fill='x', pady=6)
+    def choose_offline(event=None):
+        chosen = offline_tree.selection()
+        offline_selected.set(chosen[0] if chosen else 'No offline whole disk selected')
+    offline_tree.bind('<<TreeviewSelect>>', choose_offline)
+    ttk.Label(tab_system, textvariable=offline_selected).pack(anchor='w')
+    row(tab_system, 'Image destination', dest_file, pick_output)
+    ttk.Label(tab_system, text='NAS destinations must already be mounted by the live OS. '
+              'If no separate destination has enough capacity, a full image is not possible; '
+              'consider recovering priority files to separate storage.',
+              style='Muted.TLabel', wraplength=900).pack(anchor='w', pady=(5, 10))
+
+    def list_offline():
+        if not sys.platform.startswith('linux'):
+            messagebox.showwarning('Linux live environment required',
+                                   'Offline internal-disk rescue is Linux-only in this release.')
+            return
+        if busy:
+            return
+        def worker():
+            try:
+                from .devices import linux_all_devices
+                q.put(('offline_devices', linux_all_devices()))
+            except (RuntimeError, OSError, ValueError) as exc:
+                q.put(('stdout', f'Offline disk discovery failed: {exc}\n'))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def offline_args():
+        chosen = offline_tree.selection()
+        if len(chosen) != 1 or chosen[0] not in offline_inventory:
+            raise ValueError('Select exactly one offline system disk')
+        device = offline_inventory[chosen[0]]
+        return ['--device', device.id,
+                '--output', require(dest_file, 'new image destination'),
+                '--expect-fingerprint', device.fingerprint[:12]]
+
+    def plan_offline():
+        try:
+            start(['plan-system-recovery', *offline_args(), '--json'],
+                  'Check offline disk and destination (no imaging)')
+        except ValueError as exc:
+            messagebox.showerror('Preflight', str(exc))
+
+    def rescue_offline():
+        try:
+            opts = offline_args()
+            if not messagebox.askyesno('Offline system drive only',
+                    'Have you BOOTED A LIVE USB and made certain this is not a running/mounted '
+                    'system drive? This operation reads the patient and writes an image to '
+                    'separate storage. Continue?'):
+                return
+            start(['rescue-system', *opts, '--ack-risk', '--ack-offline-system',
+                   '--multi-pass', '--json'], 'Read-only rescue of offline OS disk', risky=True)
+        except ValueError as exc:
+            messagebox.showerror('Offline recovery', str(exc))
+    row_sys = ttk.Frame(tab_system)
+    row_sys.pack(anchor='w', pady=6)
+    ttk.Button(row_sys, text='1. List offline disks', command=list_offline).pack(side='left', padx=4)
+    ttk.Button(row_sys, text='2. Check destination', command=plan_offline).pack(side='left', padx=4)
+    ttk.Button(row_sys, text='3. Rescue to image', style='Accent.TButton',
+               command=rescue_offline).pack(side='left', padx=4)
+
     # --- In-place refresh ---
     ttk.Label(
         tab_refresh,
@@ -751,6 +834,18 @@ def launch() -> None:
                         f"{result['candidates_found']} entries · {result['eligible_count']} candidates. "
                         'Shift/Ctrl-click to select; no data is written during preview. '
                         + ('CATALOG TRUNCATED at its safety limit.' if result.get('truncated') else ''))
+                elif kind == 'offline_devices':
+                    offline_inventory.clear()
+                    offline_inventory.update({d.id: d for d in value})
+                    offline_selected.set('No offline whole disk selected')
+                    for item in offline_tree.get_children():
+                        offline_tree.delete(item)
+                    for device in value:
+                        info = device.public()
+                        offline_tree.insert('', 'end', iid=device.id, values=(
+                            device.model, f'{device.size_bytes / 10**9:.2f} GB',
+                            device.bus, info['serial_suffix'], info['identity_hint'], device.id))
+                    status.set(f'Found {len(value)} Linux whole disk(s), including internal')
                 elif kind == "devices":
                     inventory.clear()
                     inventory.update({d.id: d for d in value})

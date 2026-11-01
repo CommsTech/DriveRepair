@@ -1,3 +1,22 @@
+## 0.3.1b1 — 2026-11-01 — Offline system recovery engineering cycle (NOT RELEASE-CLEARED)
+
+- Added Linux internal whole-disk inventory (`list-all-linux`), explicitly
+  offline read-only `rescue-system`, and `plan-system-recovery` preflight.
+- Allows verified mounted network destinations (NFS/NFS4/CIFS/SMB3/SSHFS) for
+  imaging where local source/destination block ancestry cannot apply.
+- New guided GUI **Recover OS drive** workflow; original external-only
+  desktop device view stays unchanged.
+- Fixed the offline rescue post-read identity check to reselect from the
+  internal-disk inventory rather than incorrectly requiring an external disk.
+- SMART monitor now alerts on a first nonzero fault-counter baseline; Linux
+  monitor state preflights destination ancestry. GUI initializes sensor health
+  as UNKNOWN until diagnostics actually run.
+- Added a non-destructive Debian live-build ISO recipe plus structural ISO
+  catalog checker; **no ISO was built or boot-tested in this environment**.
+- Updated one-drive recovery, trust, boot, security and beta release docs.
+- Synthetic tests/portable packaging run; native Rust and real hardware
+  operation remain unproven until CI and independent validation.
+
 ## 0.3.0b1 — 2026-11-01 (controlled engineering candidate)
 
 - Read-only deleted FAT32 candidate catalog with stable selection IDs, selected-only restore and revalidation.

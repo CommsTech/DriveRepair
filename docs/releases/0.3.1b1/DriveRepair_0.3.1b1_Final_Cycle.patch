@@ -1,0 +1,1338 @@
+diff --git a/.gitea/workflows/ci.yml b/.gitea/workflows/ci.yml
+index f8a6227..1dab799 100644
+--- a/.gitea/workflows/ci.yml
++++ b/.gitea/workflows/ci.yml
+@@ -107,3 +107,23 @@ jobs:
+         run: cargo build --manifest-path rust/recovery-core/Cargo.toml
+       - name: Test small image recovery core
+         run: cargo test --manifest-path rust/recovery-core/Cargo.toml
++
++  offline-recovery-integrity:
++    name: Offline system rescue source and package checks (NO disk I/O)
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
++      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
++        with:
++          python-version: '3.11'
++      - name: Validate live-ISO scripts without running them
++        run: bash -n scripts/build_live_iso.sh scripts/check_live_iso.sh
++      - name: Unit tests for source safety, network mount and mock imaging
++        working-directory: desktop
++        run: python -m unittest discover -s tests -p 'test_offline_recovery.py' -v
++      - name: Verify CLI offline rescue commands are packaged
++        run: |
++          python scripts/build_desktop.py --no-wheel
++          python dist/DriveRepair-0.3.1b1.pyz list-all-linux --help
++          python dist/DriveRepair-0.3.1b1.pyz plan-system-recovery --help
++          python dist/DriveRepair-0.3.1b1.pyz rescue-system --help
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 36b2764..c28c72e 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,3 +1,22 @@
++## 0.3.1b1 — 2026-11-01 — Offline system recovery engineering cycle (NOT RELEASE-CLEARED)
++
++- Added Linux internal whole-disk inventory (`list-all-linux`), explicitly
++  offline read-only `rescue-system`, and `plan-system-recovery` preflight.
++- Allows verified mounted network destinations (NFS/NFS4/CIFS/SMB3/SSHFS) for
++  imaging where local source/destination block ancestry cannot apply.
++- New guided GUI **Recover OS drive** workflow; original external-only
++  desktop device view stays unchanged.
++- Fixed the offline rescue post-read identity check to reselect from the
++  internal-disk inventory rather than incorrectly requiring an external disk.
++- SMART monitor now alerts on a first nonzero fault-counter baseline; Linux
++  monitor state preflights destination ancestry. GUI initializes sensor health
++  as UNKNOWN until diagnostics actually run.
++- Added a non-destructive Debian live-build ISO recipe plus structural ISO
++  catalog checker; **no ISO was built or boot-tested in this environment**.
++- Updated one-drive recovery, trust, boot, security and beta release docs.
++- Synthetic tests/portable packaging run; native Rust and real hardware
++  operation remain unproven until CI and independent validation.
++
+ ## 0.3.0b1 — 2026-11-01 (controlled engineering candidate)
+ 
+ - Read-only deleted FAT32 candidate catalog with stable selection IDs, selected-only restore and revalidation.
+diff --git a/README.md b/README.md
+index bad4930..4d014ec 100644
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,7 @@
+ 
+ **Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
+ 
+-**Current build: 0.3.0b1 / engineering beta candidate — NOT approved for public hardware-repair use.**
++**Current build: 0.3.1b1 / engineering beta candidate — NOT approved for public hardware-repair use.**
+ The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
+ 
+ **If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
+@@ -23,7 +23,22 @@ The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a sm
+ | Capture forensic hashes | `evidence-image` | Source image read-only | SHA-256 + minimal privacy-preserving JSON report; not a chain-of-custody certification |
+ | Rejuvenate readable media in place | `refresh-image`, `refresh-external` | **CAN PERMANENTLY LOSE DATA** | Private hardware experiment; separate journal and explicit approvals |
+ | Sanitize before disposal | Not yet enabled | Intentional destruction | Implement media-appropriate validated methods; no unsupported DoD certification |
+-| Recover broken boot/system disk | Trustworthy live USB OS, run desktop CLI | Depends on workflow | Internal bootloader currently experimental/unverified |
++| Recover broken boot/system disk | Trusted Linux live USB → `list-all-linux`, `plan-system-recovery`, `rescue-system` | Source read-only; output separate | NEW offline Linux internal-disk rescue path; physical QA still required |
++
++## Offline system-drive / one-internal-disk recovery
++
++A broken OS drive cannot host its own rescue environment or a complete safety
++copy. Boot a verified Linux live USB, provide separate USB/NAS storage, identify
++the *unmounted* internal disk and choose the new **Recover OS drive** guided GUI
++workflow (or `list-all-linux` → `plan-system-recovery` → `rescue-system`). Network
++image targets can be mounted NFS/NFS4/CIFS/SMB/SSHFS shares; ambiguous local or
++RAM destinations fail closed. Full details: [one-drive guide](docs/ONE_DRIVE_RECOVERY.md).
++
++An **experimental** Debian BIOS/UEFI hybrid ISO *build recipe* is now provided,
++but no built and boot-tested DriveRepair ISO is supplied. The original custom
++firmware stubs are still not validated bootable recovery tools. Read
++[boot instructions](docs/BOOT_RECOVERY.md) and
++[final release gates](docs/FINAL_RELEASE_SECURITY_REVIEW.md).
+ 
+ ## Install
+ 
+@@ -95,6 +110,10 @@ See [scheduled monitoring](docs/SCHEDULED_MONITORING.md) and [release and safety
+ - Source disk operations are read-only by default. Linux direct-disk rescue verifies separate destination physical ancestry; other operating systems support image workflows until equivalently safe raw-device isolation is proven.
+ - Device selection uses model, capacity, bus, location hints, masked serial and a short fingerprint. Revalidate immediately before any raw-device write. USB docks can obscure or change identifiers.
+ - In-place media refresh is **experimental, explicitly destructive**. Its disk journal is recommended; optional Linux RAM-file-system journaling requires power telemetry and explicit volatility acceptance. A UPS is not a disk backup, and cannot reverse physical wear.
++- Scheduled monitoring raises an alert for nonzero media-fault counters on the
++  **first sample**, rather than labeling a suspect drive an uneventful baseline.
++  It never rewrites patient data autonomously. See
++  [trust and preventive maintenance](docs/TRUSTED_PREVENTIVE_MAINTENANCE.md).
+ - No claim of universal deleted-file restoration, physical-wear reversal, repaired damaged heads/platters, firmware repair, or government-certified sanitization is made.
+ - Read success is not proof of file correctness. Forensics requires suitable acquisition controls, provenance, evidence retention and independent review.
+ - This project does not transmit disk contents or telemetry to external services by default.
+diff --git a/SECURITY.md b/SECURITY.md
+index e01e83a..1c84918 100644
+--- a/SECURITY.md
++++ b/SECURITY.md
+@@ -2,20 +2,32 @@
+ 
+ ## Supported versions
+ 
+-| Version | Supported |
++| Version | Security review |
+ |---|---|
+-| `main` / `0.0.x` experimental | Yes (best-effort) |
++| `main` / 0.3.1b1 engineering candidate | Best effort; **not authorized for unrestricted public physical repair** |
+ 
+ ## Product security posture
+ 
+-DriveRepair’s **supported** interface is the `desktop/` read-only scanner:
+-
+-- Opens candidate disks with **read-only** OS APIs / flags
+-- Refuses internal, boot, and system disks by conservative discovery filters
+-- Requires an exact discovered device ID (no raw path injection for `scan`)
+-- Does not format, wipe, TRIM, or write to the source disk
+-
+-Experimental Rust / firmware paths under `src/boot/` and disabled USB scripts are **not** supported for production use. Destructive provisioning scripts refuse to run (`exit 2`).
++- Read-only scanner, Linux offline-system rescue, image rescue and hash/undelete
++  workflows preserve patient source by using read-only handles and new output
++  paths. Physical read stress can still accelerate a failing drive's loss.
++- Linux `list` defaults to external-only whole disks; `list-all-linux` and
++  `rescue-system` are explicitly separate, require source identity, no mounts
++  or active holders, and separate destination storage. No Linux running-system
++  disk rescue is allowed under this workflow.
++- Linux network destinations only pass when a real NFS/NFS4/CIFS/SMB3/SSHFS
++  mount is positively identified. Nonrecognized or live-root destinations
++  fail closed.
++- Experimental original-media refresh **can write patient sectors**; it is
++  *not* yet qualified for public beta on valuable physical drives. A rolling
++  journal is not an entire-disk backup, and a UPS does not eliminate its risk.
++- Old custom BIOS/UEFI bootloader crates are experimental; destructive USB
++  provisioning scripts are hard-disabled. A Debian live-ISO build recipe
++  exists but is not yet built/boot-verified.
++- No cloud/account/telemetry is required. Do not send personal disk images,
++  full serials, unredacted logs, file contents, or keys with bug reports.
++- See `docs/FINAL_RELEASE_SECURITY_REVIEW.md` for the full outstanding
++  security/hardware gates and evidence requirements.
+ 
+ ## Reporting a vulnerability
+ 
+diff --git a/desktop/README.md b/desktop/README.md
+index 77bb34b..239a3a6 100644
+--- a/desktop/README.md
++++ b/desktop/README.md
+@@ -1,4 +1,4 @@
+-# DriveRepair desktop — 0.3.0b1
++# DriveRepair desktop — 0.3.1b1
+ 
+ A privacy-first guided Python 3.10+ desktop UI/CLI, with incremental Rust recovery-core migration. This is not a signed standalone native installer. The GUI requires Tk. Raw-device repair remains experimental; do not operate on irreplaceable disks.
+ 
+@@ -21,6 +21,25 @@ python3 -m driverepair_desktop rescue-image --engine rust --image original.img -
+ 
+ Rust core is experimental; no raw devices and no Windows Rust resume. Default Python engine remains the better-tested reference until CI/hardware comparisons establish parity. Rust `.rmap` is not compatible with Python `.rescue.json`.
+ 
++## Recover an unbootable internal disk (Linux live USB)
++
++Boot a trusted Linux live USB, connect healthy destination storage, then use
++GUI → **Recover OS drive** (guided selection, destination preflight, read-only
++rescue) or:
++
++```sh
++python3 -m driverepair_desktop list-all-linux --json
++python3 -m driverepair_desktop plan-system-recovery --device linux:/dev/sdX \
++  --expect-fingerprint 12HEXCHARS --output /mnt/separate-storage/patient.img --json
++python3 -m driverepair_desktop rescue-system --device linux:/dev/sdX \
++  --expect-fingerprint 12HEXCHARS --output /mnt/separate-storage/patient.img \
++  --ack-risk --ack-offline-system --multi-pass --json
++```
++
++This is not enabled for mounted active OS disks. `list` remains external-only.
++Separate destination support includes mounted NAS shares with recognized
++filesystems. Read `../docs/ONE_DRIVE_RECOVERY.md` before touching valuable data.
++
+ ## Safe recovery shortcuts
+ 
+ ```sh
+@@ -62,7 +81,7 @@ GUI: choose a goal on the **Start here** tab, or open **Recover deleted files**
+ - `fls` / `icat` (The Sleuth Kit) for metadata-assisted deleted-file recovery.
+ - Cargo/Rust stable for the optional standalone image rescue core.
+ 
+-Physical USB-docked recovery on Windows/macOS, custom BIOS/UEFI boot ISO, 7-pass/DoD-certified erasure, firmware rescue and automated media refresh **are not validated/implemented**. See `../docs/PUBLIC_BETA_GATES.md` for release blockers and `../docs/ARCHITECTURE_CURRENT.md` for Rust migration.
++Physical USB-docked recovery on Windows/macOS, boot-tested BIOS/UEFI boot ISO, 7-pass/DoD-certified erasure, firmware rescue and automated media refresh **are not validated/implemented**. See `../docs/PUBLIC_BETA_GATES.md` for release blockers and `../docs/ARCHITECTURE_CURRENT.md` for Rust migration.
+ 
+ ## Tests
+ 
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index d63320e..d2ee1d4 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.0b1"
++__version__ = "0.3.1b1"
+diff --git a/desktop/driverepair_desktop/cli.py b/desktop/driverepair_desktop/cli.py
+index d27ce66..9b39ffb 100644
+--- a/desktop/driverepair_desktop/cli.py
++++ b/desktop/driverepair_desktop/cli.py
+@@ -16,7 +16,8 @@ import sys
+ import time
+ import zipfile
+ 
+-from .devices import list_external_devices, select_external_device
++from .devices import (list_external_devices, select_external_device,
++                      linux_all_devices, select_linux_any_disk)
+ from .scanner import ImageReader, open_device_readonly, scan_reader
+ from .benchmark import read_benchmark, compare_benchmarks
+ from .carving import carve_image
+@@ -57,6 +58,13 @@ def parser() -> argparse.ArgumentParser:
+     sub = cli.add_subparsers(dest="command", required=True)
+     listing = sub.add_parser("list", help="List externally attached whole disks")
+     listing.add_argument("--json", action="store_true")
++    all_disks = sub.add_parser("list-all-linux", help="READ-ONLY: show internal and external Linux whole disks for offline recovery")
++    all_disks.add_argument("--json", action="store_true")
++    planning = sub.add_parser("plan-system-recovery", help="READ-ONLY: validate offline internal disk and destination before rescue")
++    planning.add_argument("--device", required=True, help="Linux whole-disk ID shown by list-all-linux")
++    planning.add_argument("--output", required=True, help="New image file on separate mounted storage")
++    planning.add_argument("--expect-fingerprint", required=True, help="Full 12-character identity hint from listing")
++    planning.add_argument("--json", action="store_true")
+     for name in ("scan", "scan-image"):
+         cmd = sub.add_parser(name, help="Read-only scan of a selected external disk" if name == "scan"
+                              else "Read-only test scan of a regular file image")
+@@ -72,7 +80,7 @@ def parser() -> argparse.ArgumentParser:
+         cmd.add_argument("--ack-risk", action="store_true",
+                          help="Required for full hardware scans; reading failing disks can worsen damage")
+         cmd.add_argument("--json", action="store_true")
+-    for name in ("rescue-image", "rescue-external"):
++    for name in ("rescue-image", "rescue-external", "rescue-system"):
+         cmd = sub.add_parser(name, help="Rescue readable sectors to a separate regular-file image")
+         cmd.add_argument("--image" if name == "rescue-image" else "--device", required=True)
+         cmd.add_argument("--output", required=True, help="New regular-file image path")
+@@ -85,8 +93,13 @@ def parser() -> argparse.ArgumentParser:
+                          help="After first-pass rescue, automatically retry missing regions in smaller pieces")
+         cmd.add_argument("--chunk-mib", type=int, choices=[1, 2, 4, 8], default=1)
+         cmd.add_argument("--max-read-errors", type=int, default=4096)
+-        if name == "rescue-external":
++        if name in {"rescue-external", "rescue-system"}:
+             cmd.add_argument("--ack-risk", action="store_true", help="Accept read stress on failing media")
++        if name == "rescue-system":
++            cmd.add_argument("--expect-fingerprint", required=True,
++                             help="12-character identity hint from list-all-linux")
++            cmd.add_argument("--ack-offline-system", action="store_true",
++                             help="Only after booting a trusted live OS; original system disk must be unmounted")
+         cmd.add_argument("--json", action="store_true")
+     for name in ("benchmark-image", "benchmark-external"):
+         cmd = sub.add_parser(name, help="Measure read throughput and zone latency without writing")
+@@ -338,6 +351,35 @@ def _validate_live_refresh_preflight(device, journal: str, *, ramdisk: bool = Fa
+         raise RuntimeError("Raw refresh on this operating system is not validated")
+ 
+ 
++def _parse_remote_mount(payload: dict, parent: str) -> bool:
++    """A remote destination MUST be a real, non-root mount of a known type."""
++    accepted = {"nfs", "nfs4", "cifs", "smb3", "fuse.sshfs"}
++    rows = payload.get("filesystems", [])
++    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
++        return False
++    row = rows[0]
++    target, kind, source = row.get("target"), row.get("fstype"), row.get("source")
++    if not all(isinstance(x, str) for x in (target, kind, source)):
++        return False
++    target = os.path.realpath(target)
++    parent = os.path.realpath(parent)
++    return (kind.lower() in accepted and target != "/"
++            and os.path.commonpath([target, parent]) == target
++            and bool(source.strip()) and not source.startswith('/dev/'))
++
++
++def _verified_linux_remote_destination(parent: str) -> bool:
++    """Fail closed if findmnt is absent, ambiguous, or reports a local FS."""
++    import subprocess
++    try:
++        run = subprocess.run(
++            ['findmnt', '--json', '--target', parent, '--output', 'TARGET,SOURCE,FSTYPE'],
++            capture_output=True, check=True, timeout=12)
++        return _parse_remote_mount(json.loads(run.stdout.decode('utf-8')), parent)
++    except (FileNotFoundError, OSError, subprocess.SubprocessError, ValueError, UnicodeError):
++        return False
++
++
+ def _separate_linux_destination(device, output: str) -> None:
+     """Require a mounted destination backed by a different Linux block device."""
+     if not sys.platform.startswith('linux'):
+@@ -350,7 +392,12 @@ def _separate_linux_destination(device, output: str) -> None:
+     dest = os.path.realpath(f'/sys/dev/block/{os.major(major_minor)}:{os.minor(major_minor)}')
+     source = os.path.realpath('/sys/class/block/' + os.path.basename(device.path))
+     if not os.path.exists(dest) or not os.path.exists(source):
+-        raise RuntimeError('Cannot independently confirm destination block-device ancestry')
++        # A deliberately mounted NFS/CIFS/SSHFS export is remote storage,
++        # not a local /sys/dev/block device. Never accept an unrecognized
++        # pseudo-filesystem (tmpfs, overlay, FUSE unknown) as an image target.
++        if os.path.exists(source) and _verified_linux_remote_destination(parent):
++            return
++        raise RuntimeError('Cannot independently confirm destination physical ancestry or trusted network mount')
+     checked = set()
+     def overlapping(node: str) -> bool:
+         node = os.path.realpath(node)
+@@ -412,6 +459,10 @@ def _run_extras(args) -> int:
+         selected = select_external_device(args.device)
+         if selected.fingerprint[:12] != args.expect_fingerprint:
+             raise RuntimeError('Drive identity confirmation changed')
++        if sys.platform.startswith('linux'):
++            # The monitor writes history. NEVER allow that state file to
++            # resolve to the patient disk, even if the patient is mounted.
++            _separate_linux_destination(selected, args.state)
+         try:
+             snapshot = health_snapshot(selected)
+         except RuntimeError as exc:
+@@ -756,7 +807,8 @@ def _run_extras(args) -> int:
+         finally:
+             media.close()
+         if is_device:
+-            latest = select_external_device(args.device)
++            latest = (select_linux_any_disk(args.device) if args.command == 'rescue-system'
++                      else select_external_device(args.device))
+             if latest.fingerprint != source_token:
+                 result['status'] = 'aborted_device_identity_changed'
+         # Journal retention policy after a finished run.
+@@ -782,15 +834,23 @@ def _run_extras(args) -> int:
+                 f"refused to delete journal while status={result.get('status')!r}"
+             )
+     else:
+-        is_device = args.command.endswith('-external')
++        is_device = args.command.endswith('-external') or args.command == 'rescue-system'
+         if is_device:
+             if not getattr(args, 'ack_risk', False):
+                 raise ValueError('Live-device operations require --ack-risk')
+-            selected = select_external_device(args.device)
+-            if args.command == 'rescue-external':
++            if args.command == 'rescue-system':
++                if not sys.platform.startswith('linux') or not args.ack_offline_system:
++                    raise ValueError('rescue-system requires Linux live recovery and --ack-offline-system')
++                selected = select_linux_any_disk(args.device)
++                if selected.fingerprint[:12] != args.expect_fingerprint:
++                    raise ValueError('Source identity fingerprint does not match the operator confirmation')
++            else:
++                selected = select_external_device(args.device)
++            if args.command in {'rescue-external', 'rescue-system'}:
+                 _verify_linux_patient_not_in_use(selected)
+                 _separate_linux_destination(selected, args.output)
+-            reread = select_external_device(args.device)
++            reread = (select_linux_any_disk(args.device) if args.command == 'rescue-system'
++                      else select_external_device(args.device))
+             if selected.fingerprint != reread.fingerprint:
+                 raise RuntimeError('Source identity changed before read')
+             reader = open_device_readonly(selected)
+@@ -809,7 +869,8 @@ def _run_extras(args) -> int:
+                     raise ValueError('--multi-pass and --retry-missing cannot be combined')
+                 def check_progress(state):
+                     if is_device:
+-                        latest = select_external_device(args.device)
++                        latest = (select_linux_any_disk(args.device) if args.command == 'rescue-system'
++                                  else select_external_device(args.device))
+                         if latest.fingerprint != source_token:
+                             raise RuntimeError('Patient device changed mid-recovery; job halted')
+                 result = rescue_reader(reader, size=size, sector=sector,
+@@ -837,7 +898,8 @@ def _run_extras(args) -> int:
+             result['source_fingerprint'] = source_token
+             result['device_size_bytes'] = size
+         if is_device:
+-            latest = select_external_device(args.device)
++            latest = (select_linux_any_disk(args.device) if args.command == 'rescue-system'
++                      else select_external_device(args.device))
+             if latest.fingerprint != source_token:
+                 result['status'] = 'aborted_device_identity_changed'
+     if args.json:
+@@ -849,7 +911,7 @@ def _run_extras(args) -> int:
+     return 0 if result.get('status') in {'completed', 'comparison_only', 'smart_passed_limited',
+                                          'clean', 'corrected', 'corrected_reboot_flag', 'verified_byte_exact',
+                                          'completed_with_skips_or_verify_failures',
+-                                         'power_and_ram_verified'} else 2
++                                         'power_and_ram_verified', 'baseline_recorded', 'no_new_signal_observed'} else 2
+ 
+ 
+ def run(argv: list[str] | None = None) -> int:
+@@ -859,7 +921,26 @@ def run(argv: list[str] | None = None) -> int:
+             from .gui import launch
+             launch()
+             return 0
+-        if args.command in {'rescue-image', 'rescue-external', 'benchmark-image',
++        if args.command in {'plan-system-recovery'}:
++            if not sys.platform.startswith('linux'):
++                raise RuntimeError('Offline-system-drive recovery currently requires Linux')
++            selected = select_linux_any_disk(args.device)
++            if selected.fingerprint[:12] != args.expect_fingerprint:
++                raise ValueError('Device identity fingerprint mismatch')
++            _verify_linux_patient_not_in_use(selected)
++            _separate_linux_destination(selected, args.output)
++            parent = os.path.realpath(os.path.dirname(os.path.abspath(args.output)))
++            if not os.path.isdir(parent) or os.path.lexists(args.output):
++                raise RuntimeError('Destination parent must exist and output must be new')
++            free = shutil.disk_usage(parent).free
++            report = {'status': 'ready_for_read_only_rescue' if free >= selected.size_bytes
++                      else 'insufficient_reported_free_space', 'device': selected.public(),
++                      'required_bytes': selected.size_bytes, 'destination_free_bytes': free,
++                      'notes': 'Preflight only, no imaging or patient writes. Remote quotas may not be reflected in free space. '
++                               'Boot trusted live media first; do not run on an active system disk.'}
++            print(json.dumps(report, indent=2))
++            return 0 if free >= selected.size_bytes else 2
++        if args.command in {'rescue-image', 'rescue-external', 'rescue-system', 'benchmark-image',
+                             'benchmark-external', 'carve-image', 'salvage-zip',
+                             'undelete-fat32', 'list-deleted-fat32',
+                             'list-deleted-tsk', 'recover-selected-tsk',
+@@ -869,18 +950,24 @@ def run(argv: list[str] | None = None) -> int:
+                             'ram-journal-check', 'monitor-external', 'evidence-image',
+                             'inspect-encryption'}:
+             return _run_extras(args)
+-        if args.command == "list":
+-            devices = list_external_devices()
++        if args.command in {"list", "list-all-linux"}:
++            if args.command == 'list-all-linux':
++                if not sys.platform.startswith('linux'):
++                    raise RuntimeError('Internal disk inventory is Linux-only')
++                devices = linux_all_devices()
++            else:
++                devices = list_external_devices()
+             if args.json:
+                 print(json.dumps([device.public() for device in devices], indent=2))
+             if not devices:
+-                print("No eligible external whole disks detected. Internal disks are excluded.",
++                print("No eligible whole disks detected.",
+                       file=sys.stderr if args.json else sys.stdout)
+             else:
+                 # Human table always on stderr when --json so operators can read it.
+                 out = sys.stderr if args.json else sys.stdout
+                 cui.enable_windows_vt()
+-                print(cui.paint("External whole disks", cui.BOLD, cui.CYAN, stream=out), file=out)
++                print(cui.paint("Whole disks (including internal)" if args.command == 'list-all-linux'
++                                else "External whole disks", cui.BOLD, cui.CYAN, stream=out), file=out)
+                 print(f"{'ID':<28} {'SIZE':>10} {'BUS':<9} {'SERIAL':<10} {'VERIFY':<12} MODEL / LOCATION", file=out)
+                 print("-" * 108, file=out)
+                 for device in devices:
+diff --git a/desktop/driverepair_desktop/devices.py b/desktop/driverepair_desktop/devices.py
+index 9e8b7be..43dd99b 100644
+--- a/desktop/driverepair_desktop/devices.py
++++ b/desktop/driverepair_desktop/devices.py
+@@ -68,7 +68,7 @@ def _positive_int(value: object, default: int = 0) -> int:
+         return default
+ 
+ 
+-def linux_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
++def _linux_disks(run: Callable[[list[str]], bytes], *, include_internal: bool) -> list[Device]:
+     command = ["lsblk", "--json", "--bytes", "--nodeps", "--output",
+                "PATH,TYPE,TRAN,HOTPLUG,RM,SIZE,LOG-SEC,MODEL,SERIAL,WWN,HCTL"]
+     records = json.loads(run(command).decode("utf-8"))["blockdevices"]
+@@ -83,7 +83,7 @@ def linux_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
+         path = str(record.get("path") or "")
+         size = _positive_int(record.get("size"))
+         sector = _positive_int(record.get("log-sec"))
+-        if not external or not re.fullmatch(r"/dev/[a-zA-Z0-9._+-]+", path):
++        if (not external and not include_internal) or not re.fullmatch(r"/dev/[a-zA-Z0-9._+-]+", path):
+             continue
+         if not size or not sector or size % sector:
+             continue
+@@ -94,6 +94,24 @@ def linux_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
+     return devices
+ 
+ 
++def linux_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
++    """Externally connected whole disks only (safe desktop default)."""
++    return _linux_disks(run, include_internal=False)
++
++
++def linux_all_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
++    """Linux offline-recovery inventory. Caller must check mounts/holders."""
++    return _linux_disks(run, include_internal=True)
++
++
++def select_linux_any_disk(identifier: str,
++                          discover: Callable[[], list[Device]] = linux_all_devices) -> Device:
++    matches = [d for d in discover() if d.id == identifier]
++    if len(matches) != 1 or not matches[0].serial:
++        raise ValueError("Disk absent, ambiguous or missing a stable serial; use list-all-linux")
++    return matches[0]
++
++
+ def macos_devices(run: Callable[[list[str]], bytes] = _run) -> list[Device]:
+     raw = plistlib.loads(run(["diskutil", "list", "-plist", "external", "physical"]))
+     devices: list[Device] = []
+diff --git a/desktop/driverepair_desktop/gui.py b/desktop/driverepair_desktop/gui.py
+index 682f11f..72a0989 100644
+--- a/desktop/driverepair_desktop/gui.py
++++ b/desktop/driverepair_desktop/gui.py
+@@ -92,7 +92,7 @@ def launch() -> None:
+         "rewritten": 0,
+         "verified": 0,
+         "message": "Ready",
+-        "health": {"media": "OK", "transport": "OK", "mechanical": "OK"},
++        "health": {"media": "UNKNOWN", "transport": "UNKNOWN", "mechanical": "UNKNOWN"},
+         "started": None,
+     }
+ 
+@@ -104,7 +104,7 @@ def launch() -> None:
+     journal_dir = tk.StringVar(value=str(Path.home() / "DriveRepairJournal"))
+     status = tk.StringVar(value="Recovery engine idle — presentation layer only draws throttled progress")
+     phase_var = tk.StringVar(value="IDLE")
+-    health_var = tk.StringVar(value="media OK · transport OK · mechanical* OK")
++    health_var = tk.StringVar(value="Media unknown · Transport unknown · Mechanical unknown (no diagnostic yet)")
+     metric_var = tk.StringVar(value="—")
+     msg_var = tk.StringVar(value="Select a workflow. Disk I/O runs in a child process.")
+ 
+@@ -190,8 +190,10 @@ def launch() -> None:
+     tab_refresh = ttk.Frame(notebook, padding=12)
+     tab_undelete = ttk.Frame(notebook, padding=12)
+     tab_fs = ttk.Frame(notebook, padding=12)
++    tab_system = ttk.Frame(notebook, padding=12)
+     notebook.add(tab_start, text=" Start here ")
+     notebook.add(tab_drive, text=" Diagnose / Rescue ")
++    notebook.add(tab_system, text=" Recover OS drive ")
+     notebook.add(tab_image, text=" Image recovery ")
+     notebook.add(tab_undelete, text=" Recover deleted files ")
+     notebook.add(tab_refresh, text=" In-place refresh ")
+@@ -204,6 +206,8 @@ def launch() -> None:
+               'All recovery output should go to healthy storage, never the failing disk.',
+               style='Muted.TLabel', wraplength=880).pack(anchor='w', pady=(0, 14))
+     workflow_cards = [
++        ('My computer will not boot / only one internal disk',
++         'Boot a trusted live USB, then rescue to a separate disk or NAS share.', tab_system),
+         ('My files were accidentally deleted',
+          'Preview deleted file metadata and restore only files I select. Start from an image.', tab_undelete),
+         ('My external drive is slow or failing',
+@@ -599,6 +603,85 @@ def launch() -> None:
+               'Filesystem support varies. Never restore to the patient disk or assume intact results.',
+               style='Muted.TLabel', wraplength=900).pack(anchor='w', pady=6)
+ 
++    # --- Failed system drive / trusted Linux live media ---
++    ttk.Label(tab_system, text='Recover a computer whose internal OS drive is failing',
++              font=('Segoe UI', 15, 'bold')).pack(anchor='w', pady=6)
++    ttk.Label(tab_system,
++              text='Boot a trusted Linux live USB FIRST. The failing system drive must be unmounted '
++                   'and must have no active RAID, LVM or encryption holders. Choose a separate USB '
++                   'disk or mounted NFS/CIFS/SSHFS share with enough space for an image. '
++                   'The patient is NEVER opened for writing in this workflow.',
++              style='Muted.TLabel', wraplength=910).pack(anchor='w', pady=(0, 12))
++    offline_selected = tk.StringVar(value='No offline whole disk selected')
++    offline_inventory = {}
++    offline_tree = ttk.Treeview(tab_system, show='headings',
++                  columns=('model','size','bus','serial','hint','id'), height=6)
++    for key, width in [('model', 190), ('size', 120), ('bus', 110),
++                       ('serial', 110), ('hint', 130), ('id', 190)]:
++        offline_tree.heading(key, text=key.upper())
++        offline_tree.column(key, width=width)
++    offline_tree.pack(fill='x', pady=6)
++    def choose_offline(event=None):
++        chosen = offline_tree.selection()
++        offline_selected.set(chosen[0] if chosen else 'No offline whole disk selected')
++    offline_tree.bind('<<TreeviewSelect>>', choose_offline)
++    ttk.Label(tab_system, textvariable=offline_selected).pack(anchor='w')
++    row(tab_system, 'Image destination', dest_file, pick_output)
++    ttk.Label(tab_system, text='NAS destinations must already be mounted by the live OS. '
++              'If no separate destination has enough capacity, a full image is not possible; '
++              'consider recovering priority files to separate storage.',
++              style='Muted.TLabel', wraplength=900).pack(anchor='w', pady=(5, 10))
++
++    def list_offline():
++        if not sys.platform.startswith('linux'):
++            messagebox.showwarning('Linux live environment required',
++                                   'Offline internal-disk rescue is Linux-only in this release.')
++            return
++        if busy:
++            return
++        def worker():
++            try:
++                from .devices import linux_all_devices
++                q.put(('offline_devices', linux_all_devices()))
++            except (RuntimeError, OSError, ValueError) as exc:
++                q.put(('stdout', f'Offline disk discovery failed: {exc}\n'))
++        threading.Thread(target=worker, daemon=True).start()
++
++    def offline_args():
++        chosen = offline_tree.selection()
++        if len(chosen) != 1 or chosen[0] not in offline_inventory:
++            raise ValueError('Select exactly one offline system disk')
++        device = offline_inventory[chosen[0]]
++        return ['--device', device.id,
++                '--output', require(dest_file, 'new image destination'),
++                '--expect-fingerprint', device.fingerprint[:12]]
++
++    def plan_offline():
++        try:
++            start(['plan-system-recovery', *offline_args(), '--json'],
++                  'Check offline disk and destination (no imaging)')
++        except ValueError as exc:
++            messagebox.showerror('Preflight', str(exc))
++
++    def rescue_offline():
++        try:
++            opts = offline_args()
++            if not messagebox.askyesno('Offline system drive only',
++                    'Have you BOOTED A LIVE USB and made certain this is not a running/mounted '
++                    'system drive? This operation reads the patient and writes an image to '
++                    'separate storage. Continue?'):
++                return
++            start(['rescue-system', *opts, '--ack-risk', '--ack-offline-system',
++                   '--multi-pass', '--json'], 'Read-only rescue of offline OS disk', risky=True)
++        except ValueError as exc:
++            messagebox.showerror('Offline recovery', str(exc))
++    row_sys = ttk.Frame(tab_system)
++    row_sys.pack(anchor='w', pady=6)
++    ttk.Button(row_sys, text='1. List offline disks', command=list_offline).pack(side='left', padx=4)
++    ttk.Button(row_sys, text='2. Check destination', command=plan_offline).pack(side='left', padx=4)
++    ttk.Button(row_sys, text='3. Rescue to image', style='Accent.TButton',
++               command=rescue_offline).pack(side='left', padx=4)
++
+     # --- In-place refresh ---
+     ttk.Label(
+         tab_refresh,
+@@ -751,6 +834,18 @@ def launch() -> None:
+                         f"{result['candidates_found']} entries · {result['eligible_count']} candidates. "
+                         'Shift/Ctrl-click to select; no data is written during preview. '
+                         + ('CATALOG TRUNCATED at its safety limit.' if result.get('truncated') else ''))
++                elif kind == 'offline_devices':
++                    offline_inventory.clear()
++                    offline_inventory.update({d.id: d for d in value})
++                    offline_selected.set('No offline whole disk selected')
++                    for item in offline_tree.get_children():
++                        offline_tree.delete(item)
++                    for device in value:
++                        info = device.public()
++                        offline_tree.insert('', 'end', iid=device.id, values=(
++                            device.model, f'{device.size_bytes / 10**9:.2f} GB',
++                            device.bus, info['serial_suffix'], info['identity_hint'], device.id))
++                    status.set(f'Found {len(value)} Linux whole disk(s), including internal')
+                 elif kind == "devices":
+                     inventory.clear()
+                     inventory.update({d.id: d for d in value})
+diff --git a/desktop/driverepair_desktop/monitor.py b/desktop/driverepair_desktop/monitor.py
+index e495b08..6c2eff0 100644
+--- a/desktop/driverepair_desktop/monitor.py
++++ b/desktop/driverepair_desktop/monitor.py
+@@ -49,14 +49,21 @@ def evaluate_snapshot(previous: dict | None, current: dict) -> dict:
+             warnings.append('Unusually slow sampled regions; repeat under controlled conditions')
+     old = _numbers(previous) if previous else {}
+     new = _numbers(current)
++    # A FIRST baseline with existing media failures is already actionable.
++    # SMART overall PASSED does not erase nonzero pending/uncorrectable counters.
++    danger = {'ata.5', 'ata.187', 'ata.197', 'ata.198', 'nvme.media_errors',
++              'nvme.critical_warning'}
++    for key in sorted(danger):
++        if new.get(key, 0) > 0:
++            warnings.append(f'{key} reports a nonzero fault indicator ({new[key]}); '
++                            'preserve data and investigate before media refresh')
+     for key, value in new.items():
+         if key in old and value > old[key]:
+             warnings.append(f'{key} increased ({old[key]} -> {value}); investigate/backup')
+-    if not previous:
+-        disposition = 'baseline_recorded'
+-    else:
+-        disposition = 'attention' if warnings else 'no_new_signal_observed'
++    disposition = ('attention' if warnings else
++                   'baseline_recorded' if not previous else 'no_new_signal_observed')
+     return {'status': disposition, 'warnings': warnings,
++            'recommend_preserve_data_first': bool(warnings),
+             'notes': 'Not a health certificate. Read-only monitoring cannot predict all failures, '
+                      'and NEVER starts repair, writes, self-tests, TRIM, or firmware operations.'}
+ 
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index 1c74d37..a1450ff 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.0b1"
++version = "0.3.1b1"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_offline_recovery.py b/desktop/tests/test_offline_recovery.py
+new file mode 100644
+index 0000000..5a48154
+--- /dev/null
++++ b/desktop/tests/test_offline_recovery.py
+@@ -0,0 +1,100 @@
++"""Offline boot recovery preflights never access real patient drives in tests."""
++import json
++import unittest
++from unittest.mock import patch
++
++from driverepair_desktop.devices import linux_all_devices, linux_devices, Device
++from driverepair_desktop.cli import _parse_remote_mount, run
++from driverepair_desktop.monitor import evaluate_snapshot
++
++
++class OfflineRecoveryTests(unittest.TestCase):
++    def test_offline_internal_discovery_is_explicit(self):
++        raw = {"blockdevices": [
++            {"path": "/dev/sda", "type": "disk", "tran": "sata", "size": 1048576,
++             "log-sec": 512, "serial": "INTERNAL123", "model": "System"},
++            {"path": "/dev/sdb", "type": "disk", "tran": "usb", "size": 1048576,
++             "log-sec": 512, "serial": "USB123", "model": "Dock"},
++            {"path": "/dev/loop0", "type": "loop", "size": 1048576,
++             "log-sec": 512},
++        ]}
++        run_fake = lambda cmd: json.dumps(raw).encode()
++        self.assertEqual([d.id for d in linux_devices(run_fake)], ["linux:/dev/sdb"])
++        self.assertEqual([d.id for d in linux_all_devices(run_fake)],
++                         ["linux:/dev/sda", "linux:/dev/sdb"])
++
++    def test_remote_mount_must_be_known_filesystem_and_nonroot(self):
++        ok = {'filesystems': [{'target': '/mnt/rescue', 'source': 'nas:/data', 'fstype': 'nfs4'}]}
++        self.assertTrue(_parse_remote_mount(ok, '/mnt/rescue/case'))
++        self.assertFalse(_parse_remote_mount(ok, '/mnt/other'))
++        self.assertFalse(_parse_remote_mount({'filesystems': [{**ok['filesystems'][0],
++            'fstype': 'overlay'}]}, '/mnt/rescue'))
++        self.assertFalse(_parse_remote_mount({'filesystems': [{**ok['filesystems'][0],
++            'target': '/'}]}, '/mnt/rescue'))
++        self.assertFalse(_parse_remote_mount({'filesystems': [{**ok['filesystems'][0],
++            'source': '/dev/sda1'}]}, '/mnt/rescue'))
++        self.assertFalse(_parse_remote_mount({'filesystems': []}, '/mnt/rescue'))
++
++    def test_fingerprint_mismatch_stops_before_disk_inspection(self):
++        sample = Device('linux:/dev/sda', '/dev/sda', 'System', 1048576,
++                        512, 'sata', 'INTERNAL')
++        with patch('driverepair_desktop.cli.select_linux_any_disk', return_value=sample), \
++             patch('driverepair_desktop.cli._verify_linux_patient_not_in_use') as idle:
++            self.assertEqual(run(['plan-system-recovery', '--device', sample.id,
++                                  '--output', '/tmp/not-created.img',
++                                  '--expect-fingerprint', 'wrongfingerp']), 1)
++            idle.assert_not_called()
++
++    def test_live_rescue_rejects_without_offline_ack(self):
++        with patch('driverepair_desktop.cli.select_linux_any_disk') as selection:
++            self.assertEqual(run(['rescue-system', '--device', 'linux:/dev/sda',
++                                  '--output', '/tmp/not-created.img',
++                                  '--expect-fingerprint', '0123456789ab', '--ack-risk']), 1)
++            selection.assert_not_called()
++
++    def test_existing_pending_sectors_alert_on_first_sample(self):
++        sample = {'fingerprint': 'a', 'size_bytes': 4096,
++                  'health': {'status': 'smart_passed_limited',
++                             'ata_selected_raw_attributes': [{'id': 197, 'raw_value': 3}]}}
++        report = evaluate_snapshot(None, sample)
++        self.assertEqual(report['status'], 'attention')
++        self.assertTrue(report['recommend_preserve_data_first'])
++        self.assertTrue(any('ata.197' in x for x in report['warnings']))
++
++    def test_clean_monitor_baseline_still_baseline(self):
++        sample = {'fingerprint': 'a', 'size_bytes': 4096,
++                  'health': {'status': 'smart_passed_limited', 'ata_selected_raw_attributes': []}}
++        self.assertEqual(evaluate_snapshot(None, sample)['status'], 'baseline_recorded')
++
++
++if __name__ == '__main__': unittest.main()
++
++class OfflineRescueIntegrationTests(unittest.TestCase):
++    def test_system_drive_rescue_via_mocked_linux_device_reads_only(self):
++        import hashlib
++        import os
++        import tempfile
++        from pathlib import Path
++        from driverepair_desktop.scanner import ImageReader
++        with tempfile.TemporaryDirectory() as folder:
++            root = Path(folder)
++            patient = root/'patient.test.image'
++            data = bytes(range(256))*4096
++            patient.write_bytes(data)
++            output = str(root/'rescued.img')
++            sample = Device('linux:/dev/sda', '/dev/sda', 'Test HDD', len(data),
++                            512, 'sata', 'TESTSERIAL')
++            with patch('driverepair_desktop.cli.select_linux_any_disk', return_value=sample), \
++                 patch('driverepair_desktop.cli._verify_linux_patient_not_in_use'), \
++                 patch('driverepair_desktop.cli._separate_linux_destination'), \
++                 patch('driverepair_desktop.cli.open_device_readonly',
++                       side_effect=lambda d: ImageReader(str(patient))):
++                result = run(['rescue-system', '--device', sample.id,
++                              '--output', output, '--expect-fingerprint', sample.fingerprint[:12],
++                              '--ack-risk', '--ack-offline-system', '--multi-pass', '--json'])
++            self.assertEqual(result, 0)
++            self.assertEqual(patient.read_bytes(), data)
++            self.assertEqual(Path(output).read_bytes(), data)
++            self.assertEqual(hashlib.sha256(Path(output).read_bytes()).digest(),
++                             hashlib.sha256(data).digest())
++            self.assertTrue(Path(output + '.rescue.json').exists())
+diff --git a/docs/ARCHITECTURE_CURRENT.md b/docs/ARCHITECTURE_CURRENT.md
+index 208f427..1ec4498 100644
+--- a/docs/ARCHITECTURE_CURRENT.md
++++ b/docs/ARCHITECTURE_CURRENT.md
+@@ -1,4 +1,4 @@
+-# DriveRepair architecture — 0.3.0b1
++# DriveRepair architecture — 0.3.1b1
+ 
+ **Status:** Partial Rust migration. Do NOT describe the Python desktop core as fully migrated.
+ 
+@@ -41,3 +41,13 @@
+ ## Technical caution
+ 
+ Moving CPU and memory-bound tasks into Rust can reduce overhead. On a seriously failing HDD, the bottleneck is often disk firmware retries, bad-head mechanics, USB bridge resets or thermal events, not Python execution. Measure throughput, recovered verified bytes, tail latency, read amplification, memory, and source writes under identical conditions. Do not claim superiority from a clean synthetic image.
++
++## Experimental live recovery architecture (0.3.1b1)
++
++A Debian live-build recipe packages the **Python desktop client and its
++existing optional local forensic tools** into an x86-64 live ISO target.
++The live OS uses Linux kernel drivers; the legacy bare-metal Rust BIOS/UEFI
++crates remain unsupported. No ISO boot test has been performed in this sandbox.
++The non-destructive offline `rescue-system` path is separate from ordinary
++external-only scanning and checks source idle state, identity, and destination
++ancestry/network mount before opening a read-only device handle.
+diff --git a/docs/BOOT_RECOVERY.md b/docs/BOOT_RECOVERY.md
+index fea3c61..ccdc21f 100644
+--- a/docs/BOOT_RECOVERY.md
++++ b/docs/BOOT_RECOVERY.md
+@@ -13,6 +13,18 @@
+ 
+ Encryption: BitLocker, FileVault and LUKS require authorized credentials/keys; raw carving encrypted data usually yields false results. Secure Boot, RAID, vendor recovery partitions, BitLocker TPM binding and filesystem support must be tested individually.
+ 
++## Experimental hybrid live-ISO build recipe (NOT BOOT-VERIFIED)
++
++`./scripts/build_live_iso.sh /build/output` targets Debian trixie on x86-64
++with GRUB-PC and GRUB-EFI via live-build. The package includes DriveRepair,
++Python/Tk, smartctl, GNU ddrescue, testdisk and network mount tools.
++It does NOT write to USB or patient media. The output is explicitly
++`UNVERIFIED` until BIOS and UEFI VM and hardware boot tests pass. The
++separately included bare-metal Rust boot code is NOT an established recovery OS.
++
++See `ONE_DRIVE_RECOVERY.md` for the guided live-mode internal disk imaging
++workflow, explicit source identity, NAS/USB destination, resume, and limitations.
++
+ ## Future native boot goals (NOT IMPLEMENTED)
+ 
+ - Reproducible UEFI and BIOS media build with SHA-256 and verified boot smoke tests.
+diff --git a/docs/FINAL_RELEASE_SECURITY_REVIEW.md b/docs/FINAL_RELEASE_SECURITY_REVIEW.md
+new file mode 100644
+index 0000000..6fc9444
+--- /dev/null
++++ b/docs/FINAL_RELEASE_SECURITY_REVIEW.md
+@@ -0,0 +1,68 @@
++# DriveRepair final engineering cycle — security, privacy, safety, release status
++
++**Review date:** 2026-11-01. **Disposition: PUBLIC BETA NOT APPROVED.**
++Code-review and synthetic test evidence are not equivalent to physical safety
++or boot qualification. This document is the active release-gate summary;
++historical documents under docs/releases and docs/release-readiness describe
++older snapshots.
++
++## Verified in this sandbox
++
++- Python desktop unit suite and additional fake-disk integration tests run.
++- Linux internal whole-disk inventory is separated from normal external-only
++  inventory; recovery requires explicit offline acknowledgment and identity
++  fingerprint. `lsblk` mounting and kernel-holder checks are reused.
++- Destination verification now recognizes real, explicitly mounted network
++  filesystems (NFS/NFS4/CIFS/SMB3/SSHFS) while excluding root overlays,
++  tmpfs, unrecognized FUSE, and unknown ancestry.
++- A system-image preflight reports destination free space before acquisition.
++  Remote quotas can still surprise it; short writes and ENOSPC stop a job.
++- First nonzero media-failure SMART baseline raises an actionable alert.
++- Linux scheduled-monitor history is checked for storage separation before
++  writing, to avoid a patient-drive history file.
++- Experimental Debian hybrid ISO **build recipe** exists, but the ISO is not
++  built here: neither live-build, xorriso, nor QEMU were present.
++- GUI presents an offline OS-disk recovery guide and no longer starts with an
++  unsupported default "media OK" health assertion.
++
++## Important open risks / RELEASE BLOCKERS
++
++| Severity | Risk | Required evidence |
++|---|---|---|
++| P0 | No boot-tested BIOS/UEFI image, Secure Boot unverified | ISO build + BIOS/UEFI VM logs + physical SATA/NVMe/USB boots |
++| P0 | Raw media refresh is destructive and unvalidated on actual failing drives | Independent safety audit, sacrificial hot-unplug/OS crash/power fault tests, verify original data and journal |
++| P0 | No complete backup on sole failing disk | Require separate storage, NAS, or prioritized-file rescue; never imply journal equals backup |
++| P0 | Rust core has no native build proof here | Cargo, clippy, cross-OS tests, crash/map corruption tests and parity comparison |
++| P1 | Windows/macOS hardware recovery, destination isolation, native install | Hardware QA including disk locking, filesystem and USB quirks |
++| P1 | USB bridge duplicates/masks serials and may lose power | Disconnection/swap fault injection and stable device identity tests |
++| P1 | Scan success does not establish contents correct | Known-hash reference datasets and filesystem-aware parity results |
++| P1 | Automatic refresh not trustworthy on at-risk media | Backup checks, hardware-class-specific policies, controlled experiments |
++| P1 | File-system undelete cannot restore overwritten data | Fragmented NTFS/exFAT/ext/Apple recovery accuracy evidence |
++| P1 | No independent privacy/security code audit | Static/dependency scanning, fuzz parsers, extraction path limits, signed artifacts and disclosure process |
++| P1 | No sanitization/forensic certification | Organization-approved technique and proof per NIST SP 800-88r2 / relevant standards; write-blocker evidence |
++| P2 | UI/installer discoverability | Native signed bundles, accessible GUI testing, platform-specific beginner instructions |
++| P2 | Competitor speed and correctness unverified | Controlled head-to-head benchmark protocol |
++
++## Privacy and supply chain observations
++
++- Built-in source operations default read-only; repairs to a filesystem image
++  operate on a NEW clone. Raw-media refresh is isolated behind explicit gates.
++- User disk images and SMART reports are not deliberately uploaded to a cloud
++  service by application code. Standard OS utilities and optional external
++  binaries need separate trust and version review.
++- Evidence JSON redacts source path and serial by default; the original data
++  may still appear in user-selected output files and some legacy logs.
++- CLI subprocess execution uses fixed argument arrays; inspect all new
++  contributions for shell interpolation, symlink/hardlink races and path escape.
++- Boot-media build depends on Debian APT, its signing keys and reproducible
++  published source. It is NOT the same as a signed firmware boot chain.
++- Local hardware write controls are risk gates, not mathematical proof of
++  non-destructiveness.
++
++## Beta scope recommendation
++
++Use a limited **image-only experimental beta** after native CI passes and
++independent parser/security review. Keep physical refresh, native ISO download,
++firmware operations, sanitization and automated source rewrites out of the
++public GUI default until separately qualified. No vendor-superiority,
++"data restored", "drive like new" or "DoD approved" claims without test evidence.
+diff --git a/docs/ONE_DRIVE_RECOVERY.md b/docs/ONE_DRIVE_RECOVERY.md
+new file mode 100644
+index 0000000..77cc4fc
+--- /dev/null
++++ b/docs/ONE_DRIVE_RECOVERY.md
+@@ -0,0 +1,96 @@
++# Recover a failed OS drive when the computer has only one internal disk
++
++**Status: EXPERIMENTAL Linux live-mode imaging, not a production-certified restore workflow.**
++No app can preserve a full disk image without separately available capacity. The
++rescue USB hosts the operating environment, not the recovered image. If there is
++no destination, recover priority files to a healthy smaller external drive or NAS,
++not back onto the patient.
++
++## Beginner workflow
++
++1. Stop booting the failing operating system and do not run in-place refresh,
++   operating-system repair or repeated full scans. Unusual noises/disconnects
++   warrant professional assessment. A full-image rescue is often safer than
++   repeated attempts to repair a failing disk.
++2. On a separate healthy computer, create a **trusted, signature/checksum-verified
++   Linux live USB**. The project also provides a Debian `live-build` recipe in
++   `scripts/build_live_iso.sh`, but that recipe's output is **NOT certified to
++   boot BIOS or UEFI** until both paths pass actual VM and physical boot tests.
++3. Boot the broken computer using the live USB, not the installed OS. Make sure
++   the patient disk is not mounted, encrypted-open, or used by RAID/LVM. Do not
++   confuse the small boot USB with the internal target disk.
++4. Provide **separate healthy destination space**: mount a verified NFS/CIFS/SSHFS
++   NAS share, or connect a large enough second external disk. If using an image
++   output, prefer a whole-file destination with enough free space. A filesystem
++   showing 12 TB free may still have NAS quotas, network instability or limits.
++5. Start DriveRepair in the live OS and select **Recover OS drive**. Confirm the
++   target by *model + capacity + masked serial + bus + ID fingerprint*.
++6. Run **Check destination**, then **Rescue to image**. Only begin if identity,
++   source-idle state, storage ancestry and capacity checks succeed. The source is
++   opened **read-only**; the output and journal go to healthy storage. A device
++   disconnect, failed write, short read or insufficient space must stop the job.
++7. If interrupted, **keep the output and `.rescue.json` journal** and resume with
++   the same options once the source and destination are safe. Incomplete regions
++   remain marked unknown. Do not call partial images verified.
++8. Use the image as evidence; recover selected files from the image, repair a
++   *new copy* of the filesystem, or restore the image to an appropriate
++   replacement disk after verifying compatibility and required backup copies.
++
++### CLI (Linux only, explicitly offline)
++
++```sh
++# On trusted live USB, after mounting a separate healthy NAS or USB destination:
++driveRepair='python3 -m driverepair_desktop'
++$driveRepair list-all-linux --json
++
++# Copy the exact linux:/dev/... ID and identity_hint FROM THE NEW LIST.
++# This is a dry-run: it NEVER touches or modifies the source disk.
++$driveRepair plan-system-recovery --device linux:/dev/sdX \
++  --expect-fingerprint 12HEXCHARS --output /mnt/healthy-storage/recovered.img --json
++
++# Explicit live-boot confirmation and read stress acknowledgment.
++$driveRepair rescue-system --device linux:/dev/sdX \
++  --expect-fingerprint 12HEXCHARS --output /mnt/healthy-storage/recovered.img \
++  --ack-risk --ack-offline-system --multi-pass --json
++
++# To resume, recheck the ID and rerun with --resume; do not use --multi-pass
++# while an interrupted retry pass already exists (use --retry-missing).
++```
++
++An internal disk is intentionally **not** shown in the ordinary `list` command;
++`list-all-linux` is a separate expert mode. Internal-disk rescue is rejected if
++Linux finds a mounted filesystem or an active kernel holder. It does not work on
++Windows/macOS in this build. The output must be on a separately identified local
++block device or a **recognized NFS, NFS4, CIFS/SMB or SSHFS mount**. Ambiguous
++pseudo-filesystems, unmounted directories and tmpfs are rejected.
++
++### What this does NOT establish
++
++- That any BIOS/UEFI ISO has actually booted, or that a raw USB bridge will
++  survive power loss/hot unplug.
++- That a drive with a positive SMART result is healthy.
++- That file contents are correct without an independent checksum/known-good copy.
++- That `lsblk` is tamperproof: malicious firmware, compromised OS or duplicated
++  bridge serials can still misidentify devices.
++- That a network share is backed by a different physical failure domain; it is
++  treated as separate host storage based on an explicitly recognized mount.
++
++## Building the experimental DriveRepair Live ISO
++
++On a **separate, trusted Debian trixie x86-64 build VM**:
++
++```sh
++sudo apt-get install live-build debootstrap
++sudo ./scripts/build_live_iso.sh /path/to/new-build-output
++# Structural check only:
++./scripts/check_live_iso.sh /path/to/new-build-output/DriveRepair-Live-amd64-UNVERIFIED.iso
++```
++
++The script uses Debian live-build, an iso-hybrid image and both GRUB-PC and
++GRUB-EFI bootloaders. It bundles Python/Tk, DriveRepair's desktop source,
++smartmontools, ddrescue, The Sleuth Kit's testdisk package, and NAS mount tools.
++It masks automatic `udisks2` mounting; destinations must be mounted manually.
++It never writes a USB or disk. **The resulting ISO name contains UNVERIFIED
++until BIOS, UEFI, NVMe/SATA/USB, Wi-Fi/network, mount-safety and crash/restore
++hardware tests have passed.** Secure Boot is not independently established.
++The old custom firmware loaders remain experimental.
+diff --git a/docs/OPENCLAW_ENTREPRENEUR_HANDOFF.md b/docs/OPENCLAW_ENTREPRENEUR_HANDOFF.md
+new file mode 100644
+index 0000000..1e55275
+--- /dev/null
++++ b/docs/OPENCLAW_ENTREPRENEUR_HANDOFF.md
+@@ -0,0 +1,63 @@
++# DriveRepair → OpenClaw Entrepreneur agent handoff
++
++**Snapshot:** 0.3.1b1, 2026-11-01. **Release:** engineering beta candidate, NOT cleared for unrestricted public beta. **Authoritative source:** private Gitea repo until owner authorizes publication.
++
++## Goal and honest positioning
++
++A privacy-first desktop and eventually bootable disk diagnostic, image rescue,
++selective deleted-file recovery, clone repair, and separately approved media
++maintenance toolkit. Works offline by default, outputs transparent evidence,
++and helps nonexperts choose the correct disk. **Do not market as able to repair
++physical wear, universally recover overwritten data, certify DoD sanitization,
++or beat every competitor without benchmarks.**
++
++## Current demonstrated subset
++
++- Python desktop interface with guided recovery, raw-disk external scanning,
++  FAT32/TSK selective deleted-file operations and image workflows.
++- Linux live environment offline-system disk inventory / preflight and read-only
++  raw image recovery to a checked separate local/network destination.
++- Read-only SMART monitoring with initial error baseline alerts.
++- Optional, separate Rust regular-image rescue library (compile in CI; **not
++  built natively in this sandbox**); Python GUI/CLI remains main interface.
++- ISO-hybrid **build recipe** (Debian, GRUB BIOS+UEFI) with no verified boot
++  artifact. Do not distribute a boot ISO until validated.
++
++## Required stage-gated tasks before public announcements
++
++1. Run all Gitea CI on Ubuntu, Windows, macOS, test Rust core Clippy/Cargo,
++   obtain signed build artifacts and hashes. Reject unknown build results.
++2. Build experimental live ISO in an isolated, known-good VM. Test BIOS and
++   UEFI VM boots, then hardware SATA/NVMe/USB/network, mounting and raw source
++   read-only controls. Record screenshots/logs and exact artifact SHA-256.
++3. Get a second independent engineer to review filesystem parsers, symlink/
++   path handling, binary extraction, raw write guard logic, USB identity and
++   crash journal. Track each finding to an executable acceptance test.
++4. Test sacrificial USB docks and drives, 512e/4Kn, SCSI SAT bridges, SATA/NVMe,
++   mount swaps, network/storage quotas, interrupted copy/resume, live power
++   loss, and source/destination device swaps.
++5. Benchmark good drives and reproducibly fault-injected devices against
++   GNU ddrescue / OpenSuperClone and file recovery tools. Measure verified
++   recovered bytes, false successes, source writes, time, retry amplification,
++   RAM usage, USB resets and user task-completion rates. Publish ALL results.
++6. Keep autonomous media refresh and destructive firmware/sanitize functions
++   disabled for valuable drives pending review and owner authorization.
++7. Develop beginner docs, screenshots, permission guidance, portable installers
++   and troubleshooters per OS. Make existing product limits visible in-app.
++8. Conduct user interviews and pricing research **without inventing uptake or
++   comparative superiority**. Consider free experimental beta and later paid
++   convenience/support features only after trust and hardware evidence exist.
++
++## Handoff requirements
++
++Output a release readiness table with `VERIFIED`, `FAILED`, or `NOT_PROVEN`,
++objective evidence (commit, test file/command, SHA, OS), fix owner, regression
++case, and remaining risk. Do not change production disks, deploy public code,
++publish store listings, modify payment settings or assert approval without the
++owner's explicit authorization. Respect independent verification and the user's
++native-first / minimal custom machinery preferences.
++
++Mandatory docs: `docs/ONE_DRIVE_RECOVERY.md`,
++`docs/TRUSTED_PREVENTIVE_MAINTENANCE.md`,
++`docs/FINAL_RELEASE_SECURITY_REVIEW.md`, `docs/PUBLIC_BETA_GATES.md`,
++`docs/BENCHMARK_PROTOCOL.md`, `SECURITY.md` and `docs/ARCHITECTURE_CURRENT.md`.
+diff --git a/docs/PROJECT_STATUS.md b/docs/PROJECT_STATUS.md
+index 6d06152..2c2f080 100644
+--- a/docs/PROJECT_STATUS.md
++++ b/docs/PROJECT_STATUS.md
+@@ -1,9 +1,21 @@
+ # Project status — November 1, 2026
+ 
+-**Version:** 0.3.0b1 experimental engineering beta candidate, source patch based on the supplied `DriveRepair-main(3).zip` snapshot.
++**Version:** 0.3.1b1 experimental engineering beta candidate, based on the supplied `DriveRepair-main(4).zip` snapshot.
+ 
+ The desktop project currently has source implementations for external-disk inventory, read-only diagnostic scans, bounded image rescue, FAT32 selective deleted-file recovery, optional Sleuth Kit deleted-file selection, limited file carving, corrupted ZIP salvage, ext-image clone-only repair, SMART monitoring, synthetic in-place-refresh tests, and a high-contrast guided Tk interface. A separate no-dependency Rust core for regular-file rescue has been added but cannot be claimed built or validated without Cargo and cross-platform CI.
+ 
+ **What is NOT supported/certified:** universal raw disk repair, secure government sanitization, automatic media rejuvenation, firmware recovery, byte-exact recovery of overwritten data, universal filesystem undelete, dependable bootable rescue ISO, certified forensic chain of custody, faster-than-competitors claims. The original boot code remains experimental; physical USB disconnect/power-loss validation must still be completed.
+ 
+ See `PUBLIC_BETA_GATES.md` and `BENCHMARK_PROTOCOL.md` before release. Old reports in `docs/release-readiness/` document older snapshots and do not supersede this status.
++
++## November 1 final-cycle delta
++
++- New Linux offline-system disk inventory, read-only source imaging and separate
++  network/local destination preflight; guided GUI tab and one-drive guide.
++- New non-destructive Debian hybrid live-ISO **recipe**, not boot-tested ISO.
++- Existing nonzero SMART fault counters alert on the first baseline sample.
++- Linux scheduled monitor state cannot intentionally be stored on the source.
++- GUI starts with health UNKNOWN instead of assuming drive/media are OK.
++- The portable build and tests are checked in this environment; physical raw
++  recovery, Windows/macOS hardware QA, Rust native compilation and BIOS/UEFI
++  boot verification remain NOT_PROVEN. See FINAL_RELEASE_SECURITY_REVIEW.md.
+diff --git a/docs/PUBLIC_BETA_GATES.md b/docs/PUBLIC_BETA_GATES.md
+index 2762793..41e2e3a 100644
+--- a/docs/PUBLIC_BETA_GATES.md
++++ b/docs/PUBLIC_BETA_GATES.md
+@@ -1,4 +1,4 @@
+-# Public beta release gates — 0.3.0b1
++# Public beta release gates — 0.3.1b1
+ 
+ **Decision: NOT READY FOR UNRESTRICTED PUBLIC BETA.** This package is suitable for controlled synthetic and nonvaluable image-based tests. The following work is NOT claimed complete:
+ 
+@@ -29,3 +29,14 @@ Seven alternating overwrites are NOT a blanket Department of Defense certificati
+ ## Beta publishable subset after gates
+ 
+ The public website can present **experimental image-only** features, with explicit limitations and an installation warning, after code review and CI pass. It must not market untested raw-media refresh, DoD sanitization, native boot recovery, complete cross-filesystem undelete or guaranteed data restoration. Avoid collecting customer images, file contents, serials, or identifiable logs for telemetry.
++
++### Final-cycle additions
++
++A read-only offline internal-disk rescue path to separately mounted local or
++recognized network storage and an experimental Debian live ISO recipe were
++added; neither proves BIOS/UEFI bootability or physical-media correctness.
++The live ISO must be built, BIOS/UEFI boot-smoked, firmware/platform-tested and
++independently reviewed before distributing it. The desktop CLI/GUI does not
++magically turn a one-disk system into sufficient backup capacity. See
++`ONE_DRIVE_RECOVERY.md`, `TRUSTED_PREVENTIVE_MAINTENANCE.md`,
++`FINAL_RELEASE_SECURITY_REVIEW.md`.
+diff --git a/docs/TRUSTED_PREVENTIVE_MAINTENANCE.md b/docs/TRUSTED_PREVENTIVE_MAINTENANCE.md
+new file mode 100644
+index 0000000..1c0e3aa
+--- /dev/null
++++ b/docs/TRUSTED_PREVENTIVE_MAINTENANCE.md
+@@ -0,0 +1,64 @@
++# When to refresh media, when to rescue, and how to earn user trust
++
++**Trust is measured in preserved bytes, not in the number of rewrite passes.**
++
++## Three different operations
++
++1. **Data rescue (source read-only)**: save the best available bytes to separate
++   media and keep a durable map of unrecovered ranges. This is the first response
++   to symptoms of active drive failure.
++2. **Filesystem integrity repair**: work from redundancy, known checksums or a
++   verified clone. Fixing metadata is not physical head/platter repair and can
++   discard otherwise recoverable file references.
++3. **Media maintenance**: selected rewrites of consistently readable content
++   may refresh magnetic recording, or cause HDD firmware to reassess/remap
++   sectors. NAND firmware may perform internal refresh/retention management.
++   These do not reverse worn-out magnetic heads, scratched platters, depleted
++   NAND endurance, or a failing USB bridge.
++
++## Safe automatic monitoring, not automatic writes
++
++Scheduled SMART/NVMe history and bounded read-only samples can identify
++worsening signals. Nonzero baseline HDD SMART 5/187/197/198 or NVMe media errors
++are **actionable on their first reading**, even when overall SMART says PASSED.
++A worsening reading triggers: warning → preserve important data → verify current
++backup or clone → investigate USB power/cable/bridge and device health.
++
++Unlike a filesystem with **known-good redundant blocks and checksums**, DriveRepair
++cannot infer the true contents of a silently corrupted sector from an ordinary
++successful read. Automatic rewriting may overwrite the last salvageable copy,
++turn correctable problems into permanent ones, or consume an unstable drive's
++remaining service life. USB errors are frequently transport-related; refreshing
++sectors will not repair a marginal cable or dock. A UPS does not prevent USB
++resets, OS crashes or hardware death. A rolling journal protects only the
++current rewrite region; it is not a backup.
++
++**A future trusted autonomous maintenance mode** needs ALL of: independent,
++verified backup/redundancy, correct original-block checksum or equivalent data
++proof, identity and lock validation immediately before writing, drive-class-aware
++policy, exact persistent transaction journal on a separate failure domain,
++forced-failure tests, explicit per-device opt-in, cooling/load limits, rollback
++where possible, and report of pre-/post-state. Failing/unknown conditions should
++prefer replacement or manual expert recovery.
++
++## Reproducible before/after measurements
++
++- Identify model/firmware/capacity/media type/interface and USB bridge.
++- Capture SMART/NVMe counters before/after, with missing telemetry as UNKNOWN.
++- Record location and latency of slow/unreadable blocks, repeat count,
++  temperatures, throughput, total source reads/writes, and reset count.
++- Record hashes of all known recovered bytes and exact source/output integrity
++  on stable reference samples. A 100% successful host read is **not** proof
++  of original bit correctness without a trusted checksum/reference.
++- Assess whether latency improvement persists after power-cycle and multiple
++  clean rereads; otherwise label it unproven.
++- Compare recovery to GNU ddrescue and OpenSuperClone on comparable initial
++  media conditions, never sequentially on one continuously deteriorating disk.
++
++For ZFS, use the filesystem's own scrub and repair from redundancy where
++possible. ZFS protects data using checksums and can repair from redundant copies;
++blind in-place host writes are not a substitute.
++
++References: GNU ddrescue manual (2026), NIST SP 800-88r2 (2025), OpenZFS
++Scrub/Resilver documentation, Google FAST 2007 large-fleet failure study,
++manufacturer SSD retention/read-disturb documentation. See `BENCHMARK_PROTOCOL.md`.
+diff --git a/scripts/build_desktop.py b/scripts/build_desktop.py
+index c945bb0..8f54728 100644
+--- a/scripts/build_desktop.py
++++ b/scripts/build_desktop.py
+@@ -14,7 +14,7 @@ from pathlib import Path
+ 
+ REPO = Path(__file__).resolve().parent.parent
+ DESKTOP = REPO / 'desktop'
+-VERSION = '0.3.0b1'
++VERSION = '0.3.1b1'
+ 
+ 
+ def command(args: list[str], cwd: Path = DESKTOP) -> None:
+diff --git a/scripts/build_live_iso.sh b/scripts/build_live_iso.sh
+new file mode 100755
+index 0000000..cd51ef9
+--- /dev/null
++++ b/scripts/build_live_iso.sh
+@@ -0,0 +1,100 @@
++#!/usr/bin/env bash
++# Builds a Debian-based DriveRepair live ISO. NEVER writes to physical disks.
++# Needs a Debian trixie build host with live-build, debootstrap and root privileges.
++set -euo pipefail
++REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++OUT="${1:-$REPO/dist-live}"
++if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
++  echo 'ERROR: Debian live-build requires root in an isolated build VM.' >&2
++  exit 2
++fi
++for tool in lb debootstrap sha256sum; do
++  if ! command -v "$tool" >/dev/null; then
++    echo "ERROR: missing $tool; on Debian install live-build debootstrap" >&2
++    exit 2
++  fi
++done
++if [[ "$(uname -m)" != x86_64 ]]; then
++  echo 'ERROR: initial live image recipe targets x86_64 only.' >&2
++  exit 2
++fi
++mkdir -p "$OUT"
++OUT="$(cd "$OUT" && pwd)"
++if [[ "$OUT" == "$REPO" || "$OUT" == '/' ]]; then
++  echo 'ERROR: use a dedicated destination folder' >&2
++  exit 2
++fi
++WORK="$(mktemp -d "${TMPDIR:-/tmp}/driverepair-live.XXXXXXXX")"
++printf 'Build workspace: %s\n' "$WORK"
++cd "$WORK"
++# Per Debian live-build: GRUB PC plus GRUB EFI on a hybrid ISO (build MUST
++# subsequently be boot-tested on both BIOS and UEFI before release).
++lb config --mode debian --distribution trixie --architecture amd64 \
++  --binary-images iso-hybrid --bootloaders 'grub-pc grub-efi' \
++  --archive-areas 'main non-free-firmware' --apt-recommends false
++mkdir -p config/package-lists \
++  config/includes.chroot/opt/driverepair/desktop \
++  config/includes.chroot/usr/local/bin \
++  config/includes.chroot/usr/share/applications \
++  config/includes.chroot/etc/systemd/system
++cat > config/package-lists/driverepair.list.chroot <<'EOF'
++python3
++python3-tk
++smartmontools
++gddrescue
++testdisk
++e2fsprogs
++ntfs-3g
++exfatprogs
++cryptsetup
++openssh-client
++nfs-common
++cifs-utils
++network-manager
++xfce4
++lightdm
++xserver-xorg
++sudo
++EOF
++cp -R "$REPO/desktop/driverepair_desktop" config/includes.chroot/opt/driverepair/desktop/
++find config/includes.chroot/opt/driverepair/desktop -type d -name '__pycache__' -prune -exec rm -rf '{}' +
++cat > config/includes.chroot/usr/local/bin/driverepair <<'EOF'
++#!/bin/sh
++cd /opt/driverepair/desktop || exit 1
++exec python3 -m driverepair_desktop "$@"
++EOF
++chmod 0755 config/includes.chroot/usr/local/bin/driverepair
++cat > config/includes.chroot/usr/local/bin/driverepair-gui <<'EOF'
++#!/bin/sh
++exec /usr/local/bin/driverepair gui "$@"
++EOF
++chmod 0755 config/includes.chroot/usr/local/bin/driverepair-gui
++cat > config/includes.chroot/usr/share/applications/driverepair.desktop <<'EOF'
++[Desktop Entry]
++Type=Application
++Name=DriveRepair
++Comment=Offline recovery workstation; source is read-only by default
++Exec=/usr/local/bin/driverepair-gui
++Terminal=false
++Icon=drive-harddisk
++Categories=System;Utility;
++EOF
++# A live rescue environment should NOT automatically mount patient media.
++# Manual mounting of separate network/USB destinations remains possible.
++ln -s /dev/null config/includes.chroot/etc/systemd/system/udisks2.service
++lb build
++ISO="$(find . -maxdepth 1 -type f -name '*.iso' -print -quit)"
++if [[ -z "$ISO" || ! -s "$ISO" ]]; then
++  echo 'ERROR: live-build did not produce an ISO' >&2
++  exit 1
++fi
++TARGET="$OUT/DriveRepair-Live-amd64-UNVERIFIED.iso"
++if [[ -e "$TARGET" ]]; then
++  echo 'ERROR: output ISO already exists; use a fresh destination directory' >&2
++  exit 1
++fi
++cp -- "$ISO" "$TARGET"
++( cd "$OUT" && sha256sum -- "$(basename "$TARGET")" > "$(basename "$TARGET").sha256" )
++echo "Built: $TARGET"
++echo 'MANDATORY: BIOS+UEFI VM smoke tests, physical boot tests and write-safety checks before distribution.'
++echo "Build workspace retained for provenance: $WORK"
+diff --git a/scripts/check_live_iso.sh b/scripts/check_live_iso.sh
+new file mode 100755
+index 0000000..551bd7f
+--- /dev/null
++++ b/scripts/check_live_iso.sh
+@@ -0,0 +1,15 @@
++#!/usr/bin/env bash
++# Read-only structural validation. Does NOT prove that the kernel boots.
++set -euo pipefail
++ISO="${1:?Usage: check_live_iso.sh DriveRepair-Live-amd64-UNVERIFIED.iso}"
++[[ -f "$ISO" ]] || { echo 'ISO not found' >&2; exit 2; }
++command -v xorriso >/dev/null || { echo 'xorriso required for ISO catalog inspection' >&2; exit 2; }
++CATALOG="$(xorriso -indev "$ISO" -report_el_torito plain 2>&1)"
++printf '%s\n' "$CATALOG"
++if ! grep -Eqi 'BIOS|x86.*PC' <<< "$CATALOG"; then
++  echo 'BIOS El Torito entry not demonstrated' >&2; exit 1
++fi
++if ! grep -Eqi 'UEFI|EFI' <<< "$CATALOG"; then
++  echo 'UEFI El Torito entry not demonstrated' >&2; exit 1
++fi
++echo 'Structural BIOS+UEFI catalog entries detected; booting still NOT_PROVEN.'

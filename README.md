@@ -2,7 +2,7 @@
 
 **Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
 
-**Current build: 0.3.0b1 / engineering beta candidate — NOT approved for public hardware-repair use.**
+**Current build: 0.3.1b1 / engineering beta candidate — NOT approved for public hardware-repair use.**
 The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
 
 **If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
@@ -23,7 +23,22 @@ The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a sm
 | Capture forensic hashes | `evidence-image` | Source image read-only | SHA-256 + minimal privacy-preserving JSON report; not a chain-of-custody certification |
 | Rejuvenate readable media in place | `refresh-image`, `refresh-external` | **CAN PERMANENTLY LOSE DATA** | Private hardware experiment; separate journal and explicit approvals |
 | Sanitize before disposal | Not yet enabled | Intentional destruction | Implement media-appropriate validated methods; no unsupported DoD certification |
-| Recover broken boot/system disk | Trustworthy live USB OS, run desktop CLI | Depends on workflow | Internal bootloader currently experimental/unverified |
+| Recover broken boot/system disk | Trusted Linux live USB → `list-all-linux`, `plan-system-recovery`, `rescue-system` | Source read-only; output separate | NEW offline Linux internal-disk rescue path; physical QA still required |
+
+## Offline system-drive / one-internal-disk recovery
+
+A broken OS drive cannot host its own rescue environment or a complete safety
+copy. Boot a verified Linux live USB, provide separate USB/NAS storage, identify
+the *unmounted* internal disk and choose the new **Recover OS drive** guided GUI
+workflow (or `list-all-linux` → `plan-system-recovery` → `rescue-system`). Network
+image targets can be mounted NFS/NFS4/CIFS/SMB/SSHFS shares; ambiguous local or
+RAM destinations fail closed. Full details: [one-drive guide](docs/ONE_DRIVE_RECOVERY.md).
+
+An **experimental** Debian BIOS/UEFI hybrid ISO *build recipe* is now provided,
+but no built and boot-tested DriveRepair ISO is supplied. The original custom
+firmware stubs are still not validated bootable recovery tools. Read
+[boot instructions](docs/BOOT_RECOVERY.md) and
+[final release gates](docs/FINAL_RELEASE_SECURITY_REVIEW.md).
 
 ## Install
 
@@ -95,6 +110,10 @@ See [scheduled monitoring](docs/SCHEDULED_MONITORING.md) and [release and safety
 - Source disk operations are read-only by default. Linux direct-disk rescue verifies separate destination physical ancestry; other operating systems support image workflows until equivalently safe raw-device isolation is proven.
 - Device selection uses model, capacity, bus, location hints, masked serial and a short fingerprint. Revalidate immediately before any raw-device write. USB docks can obscure or change identifiers.
 - In-place media refresh is **experimental, explicitly destructive**. Its disk journal is recommended; optional Linux RAM-file-system journaling requires power telemetry and explicit volatility acceptance. A UPS is not a disk backup, and cannot reverse physical wear.
+- Scheduled monitoring raises an alert for nonzero media-fault counters on the
+  **first sample**, rather than labeling a suspect drive an uneventful baseline.
+  It never rewrites patient data autonomously. See
+  [trust and preventive maintenance](docs/TRUSTED_PREVENTIVE_MAINTENANCE.md).
 - No claim of universal deleted-file restoration, physical-wear reversal, repaired damaged heads/platters, firmware repair, or government-certified sanitization is made.
 - Read success is not proof of file correctness. Forensics requires suitable acquisition controls, provenance, evidence retention and independent review.
 - This project does not transmit disk contents or telemetry to external services by default.

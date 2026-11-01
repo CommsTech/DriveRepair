@@ -13,6 +13,18 @@
 
 Encryption: BitLocker, FileVault and LUKS require authorized credentials/keys; raw carving encrypted data usually yields false results. Secure Boot, RAID, vendor recovery partitions, BitLocker TPM binding and filesystem support must be tested individually.
 
+## Experimental hybrid live-ISO build recipe (NOT BOOT-VERIFIED)
+
+`./scripts/build_live_iso.sh /build/output` targets Debian trixie on x86-64
+with GRUB-PC and GRUB-EFI via live-build. The package includes DriveRepair,
+Python/Tk, smartctl, GNU ddrescue, testdisk and network mount tools.
+It does NOT write to USB or patient media. The output is explicitly
+`UNVERIFIED` until BIOS and UEFI VM and hardware boot tests pass. The
+separately included bare-metal Rust boot code is NOT an established recovery OS.
+
+See `ONE_DRIVE_RECOVERY.md` for the guided live-mode internal disk imaging
+workflow, explicit source identity, NAS/USB destination, resume, and limitations.
+
 ## Future native boot goals (NOT IMPLEMENTED)
 
 - Reproducible UEFI and BIOS media build with SHA-256 and verified boot smoke tests.

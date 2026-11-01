@@ -14,3 +14,6 @@
 12. Mixed Repository Detective exports must be filtered by `RepoFullName` before DriveRepair remediation.
 13. OpenClaw memory embeddings (`mxbai-embed-large`) currently 404 from Cursor — continue without recall until fixed.
 14. `rust/recovery-core` compiler/CI validation still pending.
+15. Live ISO (`scripts/build_live_iso.sh`) is recipe-only — not built or BIOS/UEFI/Secure Boot tested.
+16. `rescue-system` / offline internal imaging is Linux-only; Windows/macOS cannot yet isolate destination ancestry the same way.
+17. Unrestricted public beta still blocked: real USB power-loss, journal fault injection, and competitor benchmarks unmet.

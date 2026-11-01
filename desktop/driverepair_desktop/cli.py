@@ -16,7 +16,8 @@ import sys
 import time
 import zipfile
 
-from .devices import list_external_devices, select_external_device
+from .devices import (list_external_devices, select_external_device,
+                      linux_all_devices, select_linux_any_disk)
 from .scanner import ImageReader, open_device_readonly, scan_reader
 from .benchmark import read_benchmark, compare_benchmarks
 from .carving import carve_image
@@ -57,6 +58,13 @@ def parser() -> argparse.ArgumentParser:
     sub = cli.add_subparsers(dest="command", required=True)
     listing = sub.add_parser("list", help="List externally attached whole disks")
     listing.add_argument("--json", action="store_true")
+    all_disks = sub.add_parser("list-all-linux", help="READ-ONLY: show internal and external Linux whole disks for offline recovery")
+    all_disks.add_argument("--json", action="store_true")
+    planning = sub.add_parser("plan-system-recovery", help="READ-ONLY: validate offline internal disk and destination before rescue")
+    planning.add_argument("--device", required=True, help="Linux whole-disk ID shown by list-all-linux")
+    planning.add_argument("--output", required=True, help="New image file on separate mounted storage")
+    planning.add_argument("--expect-fingerprint", required=True, help="Full 12-character identity hint from listing")
+    planning.add_argument("--json", action="store_true")
     for name in ("scan", "scan-image"):
         cmd = sub.add_parser(name, help="Read-only scan of a selected external disk" if name == "scan"
                              else "Read-only test scan of a regular file image")
@@ -72,7 +80,7 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument("--ack-risk", action="store_true",
                          help="Required for full hardware scans; reading failing disks can worsen damage")
         cmd.add_argument("--json", action="store_true")
-    for name in ("rescue-image", "rescue-external"):
+    for name in ("rescue-image", "rescue-external", "rescue-system"):
         cmd = sub.add_parser(name, help="Rescue readable sectors to a separate regular-file image")
         cmd.add_argument("--image" if name == "rescue-image" else "--device", required=True)
         cmd.add_argument("--output", required=True, help="New regular-file image path")
@@ -85,8 +93,13 @@ def parser() -> argparse.ArgumentParser:
                          help="After first-pass rescue, automatically retry missing regions in smaller pieces")
         cmd.add_argument("--chunk-mib", type=int, choices=[1, 2, 4, 8], default=1)
         cmd.add_argument("--max-read-errors", type=int, default=4096)
-        if name == "rescue-external":
+        if name in {"rescue-external", "rescue-system"}:
             cmd.add_argument("--ack-risk", action="store_true", help="Accept read stress on failing media")
+        if name == "rescue-system":
+            cmd.add_argument("--expect-fingerprint", required=True,
+                             help="12-character identity hint from list-all-linux")
+            cmd.add_argument("--ack-offline-system", action="store_true",
+                             help="Only after booting a trusted live OS; original system disk must be unmounted")
         cmd.add_argument("--json", action="store_true")
     for name in ("benchmark-image", "benchmark-external"):
         cmd = sub.add_parser(name, help="Measure read throughput and zone latency without writing")
@@ -338,6 +351,40 @@ def _validate_live_refresh_preflight(device, journal: str, *, ramdisk: bool = Fa
         raise RuntimeError("Raw refresh on this operating system is not validated")
 
 
+def _parse_remote_mount(payload: dict, parent: str) -> bool:
+    """A remote destination MUST be a real, non-root mount of a known type.
+
+    findmnt JSON always uses Linux/POSIX paths. Keep POSIX semantics even when
+    unit tests execute on Windows (os.path.realpath('/') becomes a drive root).
+    """
+    accepted = {"nfs", "nfs4", "cifs", "smb3", "fuse.sshfs"}
+    rows = payload.get("filesystems", [])
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        return False
+    row = rows[0]
+    target, kind, source = row.get("target"), row.get("fstype"), row.get("source")
+    if not all(isinstance(x, str) for x in (target, kind, source)):
+        return False
+    target_norm = target.replace("\\", "/").rstrip("/") or "/"
+    parent_norm = parent.replace("\\", "/").rstrip("/") or "/"
+    if kind.lower() not in accepted or target_norm == "/":
+        return False
+    under_target = parent_norm == target_norm or parent_norm.startswith(target_norm + "/")
+    return under_target and bool(source.strip()) and not source.startswith("/dev/")
+
+
+def _verified_linux_remote_destination(parent: str) -> bool:
+    """Fail closed if findmnt is absent, ambiguous, or reports a local FS."""
+    import subprocess
+    try:
+        run = subprocess.run(
+            ['findmnt', '--json', '--target', parent, '--output', 'TARGET,SOURCE,FSTYPE'],
+            capture_output=True, check=True, timeout=12)
+        return _parse_remote_mount(json.loads(run.stdout.decode('utf-8')), parent)
+    except (FileNotFoundError, OSError, subprocess.SubprocessError, ValueError, UnicodeError):
+        return False
+
+
 def _separate_linux_destination(device, output: str) -> None:
     """Require a mounted destination backed by a different Linux block device."""
     if not sys.platform.startswith('linux'):
@@ -350,7 +397,12 @@ def _separate_linux_destination(device, output: str) -> None:
     dest = os.path.realpath(f'/sys/dev/block/{os.major(major_minor)}:{os.minor(major_minor)}')
     source = os.path.realpath('/sys/class/block/' + os.path.basename(device.path))
     if not os.path.exists(dest) or not os.path.exists(source):
-        raise RuntimeError('Cannot independently confirm destination block-device ancestry')
+        # A deliberately mounted NFS/CIFS/SSHFS export is remote storage,
+        # not a local /sys/dev/block device. Never accept an unrecognized
+        # pseudo-filesystem (tmpfs, overlay, FUSE unknown) as an image target.
+        if os.path.exists(source) and _verified_linux_remote_destination(parent):
+            return
+        raise RuntimeError('Cannot independently confirm destination physical ancestry or trusted network mount')
     checked = set()
     def overlapping(node: str) -> bool:
         node = os.path.realpath(node)
@@ -412,6 +464,10 @@ def _run_extras(args) -> int:
         selected = select_external_device(args.device)
         if selected.fingerprint[:12] != args.expect_fingerprint:
             raise RuntimeError('Drive identity confirmation changed')
+        if sys.platform.startswith('linux'):
+            # The monitor writes history. NEVER allow that state file to
+            # resolve to the patient disk, even if the patient is mounted.
+            _separate_linux_destination(selected, args.state)
         try:
             snapshot = health_snapshot(selected)
         except RuntimeError as exc:
@@ -756,7 +812,8 @@ def _run_extras(args) -> int:
         finally:
             media.close()
         if is_device:
-            latest = select_external_device(args.device)
+            latest = (select_linux_any_disk(args.device) if args.command == 'rescue-system'
+                      else select_external_device(args.device))
             if latest.fingerprint != source_token:
                 result['status'] = 'aborted_device_identity_changed'
         # Journal retention policy after a finished run.
@@ -782,15 +839,23 @@ def _run_extras(args) -> int:
                 f"refused to delete journal while status={result.get('status')!r}"
             )
     else:
-        is_device = args.command.endswith('-external')
+        is_device = args.command.endswith('-external') or args.command == 'rescue-system'
         if is_device:
             if not getattr(args, 'ack_risk', False):
                 raise ValueError('Live-device operations require --ack-risk')
-            selected = select_external_device(args.device)
-            if args.command == 'rescue-external':
+            if args.command == 'rescue-system':
+                if not sys.platform.startswith('linux') or not args.ack_offline_system:
+                    raise ValueError('rescue-system requires Linux live recovery and --ack-offline-system')
+                selected = select_linux_any_disk(args.device)
+                if selected.fingerprint[:12] != args.expect_fingerprint:
+                    raise ValueError('Source identity fingerprint does not match the operator confirmation')
+            else:
+                selected = select_external_device(args.device)
+            if args.command in {'rescue-external', 'rescue-system'}:
                 _verify_linux_patient_not_in_use(selected)
                 _separate_linux_destination(selected, args.output)
-            reread = select_external_device(args.device)
+            reread = (select_linux_any_disk(args.device) if args.command == 'rescue-system'
+                      else select_external_device(args.device))
             if selected.fingerprint != reread.fingerprint:
                 raise RuntimeError('Source identity changed before read')
             reader = open_device_readonly(selected)
@@ -809,7 +874,8 @@ def _run_extras(args) -> int:
                     raise ValueError('--multi-pass and --retry-missing cannot be combined')
                 def check_progress(state):
                     if is_device:
-                        latest = select_external_device(args.device)
+                        latest = (select_linux_any_disk(args.device) if args.command == 'rescue-system'
+                                  else select_external_device(args.device))
                         if latest.fingerprint != source_token:
                             raise RuntimeError('Patient device changed mid-recovery; job halted')
                 result = rescue_reader(reader, size=size, sector=sector,
@@ -837,7 +903,8 @@ def _run_extras(args) -> int:
             result['source_fingerprint'] = source_token
             result['device_size_bytes'] = size
         if is_device:
-            latest = select_external_device(args.device)
+            latest = (select_linux_any_disk(args.device) if args.command == 'rescue-system'
+                      else select_external_device(args.device))
             if latest.fingerprint != source_token:
                 result['status'] = 'aborted_device_identity_changed'
     if args.json:
@@ -849,7 +916,7 @@ def _run_extras(args) -> int:
     return 0 if result.get('status') in {'completed', 'comparison_only', 'smart_passed_limited',
                                          'clean', 'corrected', 'corrected_reboot_flag', 'verified_byte_exact',
                                          'completed_with_skips_or_verify_failures',
-                                         'power_and_ram_verified'} else 2
+                                         'power_and_ram_verified', 'baseline_recorded', 'no_new_signal_observed'} else 2
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -859,7 +926,26 @@ def run(argv: list[str] | None = None) -> int:
             from .gui import launch
             launch()
             return 0
-        if args.command in {'rescue-image', 'rescue-external', 'benchmark-image',
+        if args.command in {'plan-system-recovery'}:
+            if not sys.platform.startswith('linux'):
+                raise RuntimeError('Offline-system-drive recovery currently requires Linux')
+            selected = select_linux_any_disk(args.device)
+            if selected.fingerprint[:12] != args.expect_fingerprint:
+                raise ValueError('Device identity fingerprint mismatch')
+            _verify_linux_patient_not_in_use(selected)
+            _separate_linux_destination(selected, args.output)
+            parent = os.path.realpath(os.path.dirname(os.path.abspath(args.output)))
+            if not os.path.isdir(parent) or os.path.lexists(args.output):
+                raise RuntimeError('Destination parent must exist and output must be new')
+            free = shutil.disk_usage(parent).free
+            report = {'status': 'ready_for_read_only_rescue' if free >= selected.size_bytes
+                      else 'insufficient_reported_free_space', 'device': selected.public(),
+                      'required_bytes': selected.size_bytes, 'destination_free_bytes': free,
+                      'notes': 'Preflight only, no imaging or patient writes. Remote quotas may not be reflected in free space. '
+                               'Boot trusted live media first; do not run on an active system disk.'}
+            print(json.dumps(report, indent=2))
+            return 0 if free >= selected.size_bytes else 2
+        if args.command in {'rescue-image', 'rescue-external', 'rescue-system', 'benchmark-image',
                             'benchmark-external', 'carve-image', 'salvage-zip',
                             'undelete-fat32', 'list-deleted-fat32',
                             'list-deleted-tsk', 'recover-selected-tsk',
@@ -869,18 +955,24 @@ def run(argv: list[str] | None = None) -> int:
                             'ram-journal-check', 'monitor-external', 'evidence-image',
                             'inspect-encryption'}:
             return _run_extras(args)
-        if args.command == "list":
-            devices = list_external_devices()
+        if args.command in {"list", "list-all-linux"}:
+            if args.command == 'list-all-linux':
+                if not sys.platform.startswith('linux'):
+                    raise RuntimeError('Internal disk inventory is Linux-only')
+                devices = linux_all_devices()
+            else:
+                devices = list_external_devices()
             if args.json:
                 print(json.dumps([device.public() for device in devices], indent=2))
             if not devices:
-                print("No eligible external whole disks detected. Internal disks are excluded.",
+                print("No eligible whole disks detected.",
                       file=sys.stderr if args.json else sys.stdout)
             else:
                 # Human table always on stderr when --json so operators can read it.
                 out = sys.stderr if args.json else sys.stdout
                 cui.enable_windows_vt()
-                print(cui.paint("External whole disks", cui.BOLD, cui.CYAN, stream=out), file=out)
+                print(cui.paint("Whole disks (including internal)" if args.command == 'list-all-linux'
+                                else "External whole disks", cui.BOLD, cui.CYAN, stream=out), file=out)
                 print(f"{'ID':<28} {'SIZE':>10} {'BUS':<9} {'SERIAL':<10} {'VERIFY':<12} MODEL / LOCATION", file=out)
                 print("-" * 108, file=out)
                 for device in devices:

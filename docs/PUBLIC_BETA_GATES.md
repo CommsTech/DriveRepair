@@ -1,4 +1,4 @@
-# Public beta release gates — 0.3.0b1
+# Public beta release gates — 0.3.1b1
 
 **Decision: NOT READY FOR UNRESTRICTED PUBLIC BETA.** This package is suitable for controlled synthetic and nonvaluable image-based tests. The following work is NOT claimed complete:
 
@@ -29,3 +29,14 @@ Seven alternating overwrites are NOT a blanket Department of Defense certificati
 ## Beta publishable subset after gates
 
 The public website can present **experimental image-only** features, with explicit limitations and an installation warning, after code review and CI pass. It must not market untested raw-media refresh, DoD sanitization, native boot recovery, complete cross-filesystem undelete or guaranteed data restoration. Avoid collecting customer images, file contents, serials, or identifiable logs for telemetry.
+
+### Final-cycle additions
+
+A read-only offline internal-disk rescue path to separately mounted local or
+recognized network storage and an experimental Debian live ISO recipe were
+added; neither proves BIOS/UEFI bootability or physical-media correctness.
+The live ISO must be built, BIOS/UEFI boot-smoked, firmware/platform-tested and
+independently reviewed before distributing it. The desktop CLI/GUI does not
+magically turn a one-disk system into sufficient backup capacity. See
+`ONE_DRIVE_RECOVERY.md`, `TRUSTED_PREVENTIVE_MAINTENANCE.md`,
+`FINAL_RELEASE_SECURITY_REVIEW.md`.
