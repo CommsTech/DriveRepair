@@ -1,97 +1,126 @@
 # DriveRepair
 
-**Experimental desktop drive diagnostics, image-first rescue, filesystem-aware undelete, and clone-only repair toolkit.**
+**Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
 
-DriveRepair is intended to grow into a single desktop/bootable workflow for inspecting drives, rescuing readable sectors, recovering files, repairing filesystems, assessing media reliability and measuring maintenance outcomes. **It does not yet do all of those things**. The current supported desktop CLI runs from Python 3.10+ without rebooting; the historical Rust BIOS/UEFI code remains experimental and is not the desktop recovery engine. A Tkinter graphical interface now connects the supported desktop features.
+**Current build: 0.3.0b1 / engineering beta candidate — NOT approved for public hardware-repair use.**
+The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
 
-**Release status: 0.2.9b1 BETA CANDIDATE — PRIVATE TEST ONLY.** This implementation has synthetic unit tests but no validated Windows/macOS physical-device rescue, no physically failing-disk recovery benchmarks and no verified firmware-level remediation.
+**If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
 
-## Install and run (desktop, without restarting)
+## Workflows
 
-```bash
+| Goal | Operation | Data at risk | Implementation |
+|---|---|---|---|
+| Identify a USB/external drive | `list` | No patient writes | Windows, Linux, macOS inventory (physical QA pending) |
+| Find suspicious areas quickly | `scan --mode triage` | Read stress only | Deterministic stratified sample and bounded neighboring probes |
+| Full surface readability | `scan --mode full --ack-risk` | Read stress only | Entire readable address space, no data correctness proof |
+| Rescue data first | `rescue-image --multi-pass`, `rescue-external` | Source read-only; output written | Python imaging/resume; direct physical rescue currently Linux experimental |
+| Recover selected deleted files | `list-deleted-fat32` → `undelete-fat32 --file-id ...` | Source image read-only | Conservative FAT32 contiguous candidate extraction |
+| Recover across more filesystems | `list-deleted-tsk` → `recover-selected-tsk --file-id ...` | Source image read-only | Optional Sleuth Kit (`fls`, `icat`) binary; OS/filesystem support depends on installation |
+| Salvage identifiable files | `carve-image`, `salvage-zip` | Source image read-only | PNG/JPEG and CRC-valid ZIP members (limited, no universal reconstruction) |
+| Repair an ext filesystem | `check-ext-image`, `repair-ext-image` | Writes a NEW copy only | `e2fsck` required; original preserved |
+| Monitor deterioration on schedule | `monitor-external` | SMART only by default; optional read stress | Private local trend history; never auto-refreshes |
+| Capture forensic hashes | `evidence-image` | Source image read-only | SHA-256 + minimal privacy-preserving JSON report; not a chain-of-custody certification |
+| Rejuvenate readable media in place | `refresh-image`, `refresh-external` | **CAN PERMANENTLY LOSE DATA** | Private hardware experiment; separate journal and explicit approvals |
+| Sanitize before disposal | Not yet enabled | Intentional destruction | Implement media-appropriate validated methods; no unsupported DoD certification |
+| Recover broken boot/system disk | Trustworthy live USB OS, run desktop CLI | Depends on workflow | Internal bootloader currently experimental/unverified |
+
+## Install
+
+```sh
 cd desktop
-python -m pip install .
-python -m driverepair_desktop gui
+python3 -m pip install .
+python3 -m driverepair_desktop gui
 # or: driverepair-gui
 ```
 
-`tkinter` may require your OS Python/Tk package. Windows and macOS can use regular-file recovery and read-only external-drive scanning; Linux also has experimental physical-disk image rescue.
+A portable `.pyz` is also produced by `python scripts/build_desktop.py`. The GUI requires Tk. No cloud, account, or telemetry is required. `smartctl`, `e2fsck`, and The Sleuth Kit are optional local programs for their corresponding functions.
 
-## Implemented desktop commands
-
-| Command | What it currently does | Source writes |
-|---|---|---|
-| `list` | Enumerate eligible external whole disks | None |
-| `health` | Optional `smartctl` SMART/NVMe health snapshot without self-tests | None |
-| `scan` / `scan-image` | Read-only sample/full diagnostics | None |
-| `rescue-image` | Clone readable regions of a regular-file disk image to a new sparse image; journal/resume/targeted retry | None |
-| `rescue-external` | **Linux only, experimental:** rescue selected external whole disk into a regular-file image on a different verified storage device | None to raw patient; destination written |
-| `benchmark-image` / `benchmark-external` | Read throughput, percentile latency and slow-zone measurements | None |
-| `compare-benchmarks` | Compare two same-source benchmark JSON files; *does not prove improved lifespan* | None |
-| `carve-image` | Extract intact PNGs with CRC checks; best-effort JPEGs from disk images | None to image; output files created |
-| `undelete-fat32` | Recover contiguous, apparently unallocated FAT32 deleted files; names/content unverified | None to image; output files created |
-| `verify-images` | Byte-compare a stable source image and recovered image; report SHA-256/mismatches | None |
-| `check-ext-image` | Non-modifying ext2/3/4 filesystem check through e2fsck | None |
-| `repair-ext-image` | Clone ext filesystem image and run e2fsck repair on **the copy** | None to original; copy modified |
-| `salvage-zip` | Recover CRC-valid, intact ZIP members even if other ZIP members are corrupt | None to archive; output files created |
-| `ram-journal-check` | Read-only check of Linux tmpfs + local UPS/battery readiness for optional volatile journaling | None |
-| `refresh-image` / `refresh-external` | **In-Place Media Refresh (experimental):** rolling journal `SAVED→WRITING→VERIFIED→COMMITTED`; `--mode adaptive` (default) or `full`; skips unreadable/inconsistent regions | **Writes patient media** after multi-flag acknowledgement; journal holds only the active region |
-
-**Not yet implemented:** NTFS/exFAT/APFS/ext4 undelete, fragmented FAT32 recovery, whole-disk partition-table repair, damaged-file reconstruction without redundancy, proven hardware media rejuvenation, physical-wear reversal, native signed installers, and a fully integrated modern bootable environment. In-place refresh is experimental and does **not** claim wear reversal. The desktop GUI is present but needs real-platform testing. Optional `health` uses local `smartctl` when present; absence or `unknown` does not mean healthy.
-
-## Get started
-
-```bash
-cd desktop
-python3 -m unittest discover -s tests -v
-python3 -m driverepair_desktop --help
-python3 -m driverepair_desktop list
-python3 -m driverepair_desktop health --device linux:/dev/sdX --json
-python3 -m driverepair_desktop benchmark-image --image /path/to/test.img --json
-python3 -m driverepair_desktop rescue-image --image /path/to/test.img --output /safe/different/path/rescue.img --json
-python3 -m driverepair_desktop carve-image --image /safe/path/rescue.img --output-dir /safe/path/carved --json
-python3 -m driverepair_desktop salvage-zip --archive damaged.zip --output-dir recovered-members
-```
-
-For rescue after incomplete reads, use `rescue-image --resume --retry-missing` with the exact same source/image/output/chunk size. The `.rescue.json` map records unknown ranges. **A zero byte in a sparse rescue image might mean an unreadable/unattempted sector, not recovered original data. Always examine the map.**
-
-Never put a recovery destination on the drive being rescued. By design the Linux live-device command refuses destinations that cannot be verified as separate block-device storage. Image-based workflows run on Windows, macOS and Linux; physical-device acquisition on Windows/macOS needs additional work.
-
-See [desktop guide](desktop/README.md), [project status](docs/PROJECT_STATUS.md), and [media recovery research](docs/MEDIA_REFRESH_RESEARCH.md).
-
-## Safety
-
-- Diagnostics and rescue use read-only source handles. All writes go to **new output files**.
-- Default recovery commands do not rewrite physical sectors. `repair-ext-image` repairs a **new output copy** using optional `e2fsck`.
-- `refresh-external` / `refresh-image` are a dedicated In-Place Media Refresh mode alongside image recovery—not a replacement for it. `refresh-external` requires a **disk-backed, separate-storage journal** and explicit acknowledgements (including `--ack-unvalidated-hardware`). It aborts on write/read-back failure without discarding the original bytes, and refuses to rewrite unreadable/inconsistent regions. A Linux-only, explicitly volatile `ramdisk` option requires verified RAM filesystem, battery/UPS telemetry, separate dock-power acknowledgment, and accepts host-crash data-loss risk. This is a **private experimental hardware feature**, not a full backup or public-release-certified remediation tool.
-- Read errors can be recoverable later; continued reads and SMART queries can stress or wake a mechanically failing drive. For valuable failing media, professional recovery or a proven imaging tool may be preferable.
-- Image-first recovery does not magically reconstruct lost data or reverse wear. The user must verify backups and destination identity.
-- **This code has not undergone physical-hardware validation or security review sufficient for public release.**
-
-## Historical components
-
-`src/` and `src/boot/` contain earlier Rust prototypes. They are intentionally not invoked as hardware-repair drivers by the desktop CLI. The legacy USB writers under `scripts/` remain hard-disabled for safety.
-
-## License
-
-MIT, see [LICENSE](LICENSE). No third-party recovery engine is copied or bundled.
-
-## 0.2.9b1 preview — faster scanning and volatile RAM journaling
-
-**Do not run in-place refresh on irreplaceable media.** Discover a disk with `driverepair list --json`, compare model/size/masked serial, and use the current `identity_hint` in `refresh-external --confirm-identity`. Device paths can change when a USB dock reconnects; never copy a remembered `PhysicalDriveN` or `/dev/sdX` from another session.
-
-To check a Linux RAM journal without writing a disk:
+### Quick sample scan
 
 ```sh
-# Prepare a temporary RAM filesystem with no swapping, if the host/kernel supports it.
-sudo mkdir -p /mnt/driverepair-ram
-sudo mount -t tmpfs -o size=256M,noswap,mode=0700 tmpfs /mnt/driverepair-ram
-python -m driverepair_desktop ram-journal-check \
-  --journal /mnt/driverepair-ram/job001 --power-source nut:myups --chunk-mib 8
+python3 -m driverepair_desktop list --json
+python3 -m driverepair_desktop scan --device linux:/dev/sdX --mode triage --samples 128 --json
+# Scan IDs are returned by `list`; do not guess disk names or paths.
 ```
 
-A locally connected, USB-managed Network UPS Tools device must report `OL`, at least 70% charge, and at least 15 minutes expected runtime. A Linux laptop battery can use `--power-source battery` while not discharging and at least 80% charged. Power checks repeat during the session. These signals **do not prove** that the external disk and USB dock share battery backup. UPS-backing does not prevent application crashes, USB bridge resets, hardware failure, or kernel crashes. A tmpfs journal survives process exits but **not** host reboot or loss of RAM; do not confuse it with a backup. If system swap is active, a tmpfs mount lacking `noswap` will be rejected. RAM journaling is disabled for physical writes on Windows/macOS until RAM-disk and battery behavior are validated there. For physical disks, durable disk journaling is still the default and recommended choice.
+A triage scan is only a **spot check**: even a clean result says nothing about unsampled sectors. If symptoms are severe, image before scanning repeatedly.
 
-`refresh-external` requires additional deliberately verbose risk acknowledgements and is a private lab capability. For synthetic testing use `refresh-image` on a throwaway image. The `--chunk-mib` option supports 1–64 MiB; the best setting needs measured per-device throughput and fault-injection results. Larger regions reduce metadata and fsync frequency but raise the amount of original data simultaneously at risk. The desktop recovery engine is currently **Python**, not an optimized Rust driver; the Rust boot source is separate and unverified.
+### Restore only selected deleted files
 
-See [Release audit and beta gate](docs/release-readiness/BETA_CANDIDATE_0.2.9.md).
+```sh
+python3 -m driverepair_desktop list-deleted-fat32 --image safe-copy.img --json
+python3 -m driverepair_desktop undelete-fat32 --image safe-copy.img \
+  --output-dir new-recovered-folder --file-id CATALOG_ID --json
+```
+
+The GUI's **Recover deleted files** tab supports multi-selection and previews candidates before extraction. FAT32 uses reconstructed partial 8.3 names and assumes contiguous unallocated clusters. For NTFS/ext/exFAT and other TSK-supported volumes, install `fls` and `icat`, choose the Sleuth Kit backend and the partition's start offset **in sectors**, then select files. Even a metadata entry or a SHA-256 of the extracted file cannot prove recovered original content.
+
+### Multipass image rescue
+
+```sh
+python3 -m driverepair_desktop rescue-image --image input.img \
+  --output rescued.img --multi-pass --json
+# If interrupted, repeat with --resume --multi-pass.
+```
+
+The first pass prioritizes readable regions, and the optional second pass tries missing regions in smaller pieces. The Python map is `rescued.img.rescue.json`; **unreadable areas are not silently certified as recovered**. The experimental Rust core uses its own incompatible `.rmap` map, so never interchange engines on the same job.
+
+### Optional Rust recovery core
+
+```sh
+cargo test --manifest-path rust/recovery-core/Cargo.toml
+cargo build --release --manifest-path rust/recovery-core/Cargo.toml
+# Set DRIVEREPAIR_RUST_CORE to the compiled executable or place it on PATH.
+python3 -m driverepair_desktop rescue-image --engine rust \
+  --image input.img --output new-rust-rescue.img --json
+```
+
+The standalone Rust core currently handles **regular images only**, not raw physical disks. It uses bounded buffers, a forward pass and a reverse split-retry pass, plus an fsynced progress log. Windows Rust-core resume is disabled pending hard-link identity protections; use the Python engine for Windows resume. **Rust builds have not been run in the analysis environment**; the CI job will compile and test this crate after it is pushed. The existing legacy boot/disk driver code is not a verified native desktop engine. See [architecture](docs/ARCHITECTURE_CURRENT.md).
+
+### Forensic / scheduled monitoring
+
+```sh
+python3 -m driverepair_desktop evidence-image --image safe-copy.img \
+  --output new-manifest.json --case-ref CASE-001
+python3 -m driverepair_desktop monitor-external --device linux:/dev/sdX \
+  --expect-fingerprint FINGERPRINT12 --state /healthy-storage/drive-health.json --json
+# Optional bounded read sampling: --triage --ack-read-stress
+```
+
+See [scheduled monitoring](docs/SCHEDULED_MONITORING.md) and [release and safety gates](docs/PUBLIC_BETA_GATES.md).
+
+## Reliability and limits
+
+- Source disk operations are read-only by default. Linux direct-disk rescue verifies separate destination physical ancestry; other operating systems support image workflows until equivalently safe raw-device isolation is proven.
+- Device selection uses model, capacity, bus, location hints, masked serial and a short fingerprint. Revalidate immediately before any raw-device write. USB docks can obscure or change identifiers.
+- In-place media refresh is **experimental, explicitly destructive**. Its disk journal is recommended; optional Linux RAM-file-system journaling requires power telemetry and explicit volatility acceptance. A UPS is not a disk backup, and cannot reverse physical wear.
+- No claim of universal deleted-file restoration, physical-wear reversal, repaired damaged heads/platters, firmware repair, or government-certified sanitization is made.
+- Read success is not proof of file correctness. Forensics requires suitable acquisition controls, provenance, evidence retention and independent review.
+- This project does not transmit disk contents or telemetry to external services by default.
+- Modern SSD sanitization cannot be reduced to seven sequential overwrites. See NIST SP 800-88 Revision 2 and organization-approved media-specific requirements.
+- **Physical USB unplug, power-loss, and platform tests remain release blockers.** See [public beta gates](docs/PUBLIC_BETA_GATES.md).
+
+## Documentation
+
+- [Desktop installation and commands](desktop/README.md)
+- [Current architecture and Rust migration](docs/ARCHITECTURE_CURRENT.md)
+- [Guided system/boot recovery](docs/BOOT_RECOVERY.md)
+- [Scheduled health checks](docs/SCHEDULED_MONITORING.md)
+- [Competitor and laboratory benchmark protocol](docs/BENCHMARK_PROTOCOL.md)
+- [Public beta readiness gates](docs/PUBLIC_BETA_GATES.md)
+- [Project status](docs/PROJECT_STATUS.md)
+
+## Build and tests
+
+```sh
+cd desktop
+python3 -m unittest discover -s tests -v
+cd ..
+python3 scripts/build_desktop.py
+# Rust tools are separately verified in CI when Cargo is available.
+```
+
+## License / privacy / contribution
+
+MIT, see [LICENSE](LICENSE). No proprietary recovery algorithms or source code are bundled. Consult [SECURITY.md](SECURITY.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before reporting test results or opening issues. Never publish patient serial numbers, file contents, authentication tokens, or recovery maps containing private paths without redaction.

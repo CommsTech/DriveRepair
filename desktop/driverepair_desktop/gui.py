@@ -115,7 +115,7 @@ def launch() -> None:
     header.pack(fill="x")
     ttk.Label(header, text="DriveRepair", style="Title.TLabel").pack(side="left")
     ttk.Label(header, text="  Recovery Workstation", style="Muted.TLabel").pack(side="left", pady=(10, 0))
-    ttk.Label(header, text="90% recovery · 10% presentation · cross-platform",
+    ttk.Label(header, text="Privacy-first · Recovery evidence · Cross-platform",
               style="Muted.TLabel").pack(side="right", pady=(12, 0))
 
     # Live ops strip
@@ -184,14 +184,45 @@ def launch() -> None:
 
     notebook = ttk.Notebook(shell)
     notebook.pack(fill="both", expand=True)
+    tab_start = ttk.Frame(notebook, padding=12)
     tab_drive = ttk.Frame(notebook, padding=12)
     tab_image = ttk.Frame(notebook, padding=12)
     tab_refresh = ttk.Frame(notebook, padding=12)
+    tab_undelete = ttk.Frame(notebook, padding=12)
     tab_fs = ttk.Frame(notebook, padding=12)
+    notebook.add(tab_start, text=" Start here ")
     notebook.add(tab_drive, text=" Diagnose / Rescue ")
     notebook.add(tab_image, text=" Image recovery ")
+    notebook.add(tab_undelete, text=" Recover deleted files ")
     notebook.add(tab_refresh, text=" In-place refresh ")
     notebook.add(tab_fs, text=" Clone repair ")
+
+    # Guided workflows: no unnecessary expertise or hidden destructive defaults.
+    ttk.Label(tab_start, text='What would you like to do?',
+              font=('Segoe UI', 16, 'bold')).pack(anchor='w', pady=(4, 12))
+    ttk.Label(tab_start, text='Choose a goal. DriveRepair separates data rescue from media repair. '
+              'All recovery output should go to healthy storage, never the failing disk.',
+              style='Muted.TLabel', wraplength=880).pack(anchor='w', pady=(0, 14))
+    workflow_cards = [
+        ('My files were accidentally deleted',
+         'Preview deleted file metadata and restore only files I select. Start from an image.', tab_undelete),
+        ('My external drive is slow or failing',
+         'Find the device by model, capacity and identity; run fast triage or rescue.', tab_drive),
+        ('I need a forensic working copy',
+         'Rescue an image, verify bytes, preserve original evidence and recovery maps.', tab_image),
+        ('My filesystem is corrupted',
+         'Check and repair a NEW filesystem image copy; original stays unchanged.', tab_fs),
+        ('I want to refresh readable media',
+         'Expert-only experimental original-media writes. Not a replacement for a backup.', tab_refresh),
+    ]
+    for heading, explanation, target in workflow_cards:
+        card = ttk.Frame(tab_start, style='Card.TFrame', padding=(12, 9))
+        card.pack(fill='x', pady=4)
+        ttk.Button(card, text=heading, command=lambda t=target: notebook.select(t)).pack(side='left', padx=(0, 14))
+        ttk.Label(card, text=explanation, style='Card.TLabel', wraplength=535).pack(side='left')
+    ttk.Label(tab_start, text='Boot/system disk unusable? Start from an independently trusted live USB '
+              'environment. The custom boot components are experimental, not validated recovery media.',
+              style='Muted.TLabel', wraplength=850).pack(anchor='w', pady=14)
 
     log_holder = tk.Frame(shell, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
     log_holder.pack(fill="both", expand=True, pady=(10, 0))
@@ -262,7 +293,8 @@ def launch() -> None:
         stats["health"] = health
         health_var.set(
             f"media {health.get('media', '?')} · transport {health.get('transport', '?')} · "
-            f"mechanical* {health.get('mechanical', '?')}  (*latency proxy; no acoustic mic)"
+            f"mechanical* {health.get('mechanical', '?')}  "
+            f"(*latency primary; opt-in acoustic/IMU are soft WATCH/STOP only)"
         )
         # Percent from probe or refresh indices.
         pi, pt = int(event.get("probe_index") or 0), int(event.get("probe_total") or 0)
@@ -405,7 +437,7 @@ def launch() -> None:
             if kind == "health":
                 start(["health", "--device", dev, "--json"], "SMART health")
             elif kind == "sample":
-                start(["scan", "--device", dev, "--mode", "sample", "--json"], "Quick scan", risky=True)
+                start(["scan", "--device", dev, "--mode", "triage", "--json"], "Quick triage scan", risky=True)
             elif kind == "full":
                 start(["scan", "--device", dev, "--mode", "full", "--ack-risk", "--json"],
                       "Full scan", risky=True)
@@ -464,6 +496,108 @@ def launch() -> None:
     for label, kind in [("Scan", "scan"), ("Rescue", "rescue"), ("Verify", "verify"),
                         ("Carve", "carve"), ("FAT32 undelete", "undelete"), ("ZIP salvage", "zip")]:
         ttk.Button(ib, text=label, command=lambda k=kind: image_action(k)).pack(side="left", padx=(0, 6))
+
+    # --- Targeted deleted-file recovery (read-only catalog, explicit selection) ---
+    ttk.Label(tab_undelete,
+              text="1. Choose a disk image.  2. Preview deleted files without writing.  "
+                   "3. Select only the files you need.  4. Recover to a NEW folder.  "
+                   "FAT32 contiguous files only; overwrites and fragmentation cannot be undone.",
+              style="Muted.TLabel", wraplength=910).pack(anchor="w", pady=(0, 8))
+    row(tab_undelete, "Recovered disk image", image, pick_file)
+    row(tab_undelete, "New recovered-files folder", dest_dir, pick_dir)
+    deleted_options = ttk.Frame(tab_undelete)
+    deleted_options.pack(anchor='w', fill='x', pady=4)
+    backend_choice = tk.StringVar(value='FAT32 built-in')
+    offset_choice = tk.StringVar(value='0')
+    ttk.Label(deleted_options, text='Filesystem backend').pack(side='left')
+    ttk.Combobox(deleted_options, textvariable=backend_choice,
+                 values=['FAT32 built-in', 'Sleuth Kit (optional NTFS/exFAT/ext)'],
+                 width=36, state='readonly').pack(side='left', padx=(4, 12))
+    ttk.Label(deleted_options, text='Partition start (sectors)').pack(side='left')
+    ttk.Entry(deleted_options, textvariable=offset_choice, width=12).pack(side='left', padx=4)
+    deleted_tree = ttk.Treeview(tab_undelete, columns=("name", "size", "condition", "id"),
+                                show="headings", selectmode="extended", height=10)
+    for key, title, width in (("name", "Remaining filename", 260),
+                               ("size", "Size", 110),
+                               ("condition", "Current allocation", 250),
+                               ("id", "Recovery ID", 190)):
+        deleted_tree.heading(key, text=title)
+        deleted_tree.column(key, width=width, stretch=(key == "name"))
+    deleted_tree.pack(fill="both", expand=True, pady=8)
+    catalog_source = {"path": "", "backend": "", "offset": 0}
+    candidate_status = tk.StringVar(value="No deleted-file catalog loaded")
+    ttk.Label(tab_undelete, textvariable=candidate_status, style="Muted.TLabel").pack(anchor="w")
+
+    def preview_deleted() -> None:
+        try:
+            source = require(image, 'FAT32 image')
+            if busy:
+                raise ValueError('Wait for the active job to finish')
+            catalog_source['path'] = ''
+            backend = 'tsk' if backend_choice.get().startswith('Sleuth') else 'fat32'
+            offset = int(offset_choice.get())
+            if not 0 <= offset <= (1 << 48):
+                raise ValueError('Invalid partition start offset')
+            candidate_status.set('Scanning FAT32 directory entries (read-only)...')
+            def worker():
+                try:
+                    from .fat32_undelete import list_deleted_fat32
+                    from .tsk_recovery import list_deleted_tsk
+                    from .encryption import require_plaintext_filesystem
+                    require_plaintext_filesystem(source, operation='deleted-file preview', ack_encrypted_volume=False)
+                    if backend == 'tsk':
+                        result = list_deleted_tsk(source, offset_sectors=offset, max_candidates=2000)
+                    else:
+                        result = list_deleted_fat32(source, max_candidates=2000)
+                    q.put(('deleted_candidates', (source, backend, offset, result)))
+                except (OSError, ValueError, RuntimeError) as exc:
+                    q.put(('deleted_error', str(exc)))
+            threading.Thread(target=worker, daemon=True).start()
+        except ValueError as exc:
+            messagebox.showerror('Preview', str(exc))
+
+    def recover_selected_deleted() -> None:
+        try:
+            src = require(image, 'FAT32 image')
+            current_backend = 'tsk' if backend_choice.get().startswith('Sleuth') else 'fat32'
+            current_offset = int(offset_choice.get())
+            if (os.path.realpath(src) != catalog_source['path'] or
+                    current_backend != catalog_source['backend'] or
+                    current_offset != catalog_source['offset']):
+                raise ValueError('Source or backend changed since preview. Preview again before recovering.')
+            chosen = list(deleted_tree.selection())
+            if not chosen:
+                raise ValueError('Select one or more recoverable files from the list.')
+            blocked = [iid for iid in chosen if deleted_tree.set(iid, 'condition') != 'Unallocated (tentative)']
+            if blocked:
+                raise ValueError('Selected entries include reallocated clusters; those cannot safely be restored.')
+            output = require(dest_dir, 'NEW destination folder')
+            if os.path.lexists(output):
+                raise ValueError('Destination already exists; choose a new folder.')
+            if not messagebox.askyesno('Extract selected files',
+                    f'Extract {len(chosen)} selected speculative file(s) to a new folder? '
+                    'Files may be overwritten or fragmented; the source image stays unchanged.'):
+                return
+            if current_backend == 'tsk':
+                args = ['recover-selected-tsk', '--image', src, '--output-dir', output,
+                        '--offset-sectors', str(current_offset), '--json']
+            else:
+                args = ['undelete-fat32', '--image', src, '--output-dir', output,
+                        '--max-files', str(len(chosen)), '--json']
+            for iid in chosen:
+                args.extend(['--file-id', iid])
+            start(args, f'Restore {len(chosen)} selected deleted files')
+        except ValueError as exc:
+            messagebox.showerror('Recover selected', str(exc))
+
+    deleted_controls = ttk.Frame(tab_undelete)
+    deleted_controls.pack(anchor='w', pady=4)
+    ttk.Button(deleted_controls, text='1. Find deleted files', command=preview_deleted).pack(side='left', padx=4)
+    ttk.Button(deleted_controls, text='2. Restore selected files', style='Accent.TButton',
+               command=recover_selected_deleted).pack(side='left', padx=4)
+    ttk.Label(tab_undelete, text='Optional Sleuth Kit backend uses installed fls/icat binaries. '
+              'Filesystem support varies. Never restore to the patient disk or assume intact results.',
+              style='Muted.TLabel', wraplength=900).pack(anchor='w', pady=6)
 
     # --- In-place refresh ---
     ttk.Label(
@@ -597,6 +731,26 @@ def launch() -> None:
                             pass
                     if line.strip():
                         write(line + "\n")
+                elif kind == 'deleted_error':
+                    catalog_source['path'] = ''
+                    candidate_status.set('Preview failed: ' + str(value))
+                    write('FAT32 catalog error: ' + str(value) + '\n')
+                elif kind == 'deleted_candidates':
+                    source, backend, offset, result = value
+                    catalog_source['path'] = os.path.realpath(source)
+                    catalog_source['backend'] = backend
+                    catalog_source['offset'] = offset
+                    for item in deleted_tree.get_children():
+                        deleted_tree.delete(item)
+                    for item in result['candidates']:
+                        condition = ('Unallocated (tentative)' if item['eligible']
+                                     else 'Reallocated / unavailable')
+                        deleted_tree.insert('', 'end', iid=item['id'], values=(
+                            item['name_hint'], f"{item['size_bytes']:,} B", condition, item['id']))
+                    candidate_status.set(
+                        f"{result['candidates_found']} entries · {result['eligible_count']} candidates. "
+                        'Shift/Ctrl-click to select; no data is written during preview. '
+                        + ('CATALOG TRUNCATED at its safety limit.' if result.get('truncated') else ''))
                 elif kind == "devices":
                     inventory.clear()
                     inventory.update({d.id: d for d in value})

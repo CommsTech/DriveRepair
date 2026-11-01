@@ -1,9 +1,21 @@
+## 0.3.0b1 — 2026-11-01 (controlled engineering candidate)
+
+- Read-only deleted FAT32 candidate catalog with stable selection IDs, selected-only restore and revalidation.
+- Optional Sleuth Kit `fls`/`icat` deleted-file preview/selected extraction for additional filesystems (installation dependent).
+- Guided GUI Start Here workflow and multi-select deleted-file table with filesystem backend chooser.
+- Bounded deterministic stratified quick triage sampling with neighboring suspect region investigation; never certifies unsampled areas.
+- Python image-rescue `--multi-pass` to perform first-pass salvage and targeted retries in one operation.
+- Standalone `rust/recovery-core` no-dependency regular-image multipass rescue crate (compiler/CI validation pending).
+- Scheduled read-only drive-health trend monitor (SMART/NVMe and optional sampled triage); no automatic patient rewrites.
+- Privacy-minimized SHA-256 evidence-image manifest without unsupported chain-of-custody claims.
+- Multi-FS detection + `recover-image` (FAT32/NTFS/exFAT undelete; Btrfs/ZFS/APFS/ext → RAW carve) with expanded carve formats.
+- Soft mechanical indicators on refresh: `--acoustic-watch`, `--shock-guard`, `--smart-deltas` (WATCH/STOP only; latency/SMART remain primary; not platter metrology).
+- Updated guides, benchmark plan and honest public-beta safety gates; original bootloader sources preserved as experimental.
+
 # Changelog
 
 ## 0.2.9b1 — Public-beta candidate safety and throughput groundwork (2026-11-01)
 
-- `carve-image` now supports **MP4**, **PDF**, legacy Office **OLE** (`.doc`/`.xls`), and OOXML **`.docx`/`.xlsx`** in addition to PNG/JPEG. Plain `.txt` is intentionally not signature-carved (too many false positives); recover named deleted text with `undelete-fat32` after imaging. Windows raw volume reads use 512-byte aligned I/O.
-- New **`detect-filesystems`** and unified **`recover-image`** (`--mode auto|filesystem|raw`): FAT32/NTFS/exFAT filesystem undelete plus RAW signature carve. Btrfs/ZFS/APFS/ext are detected and routed to RAW until FS-aware undelete exists.
 - Repository Detective export `findings-20261101T180217Z.json`: DriveRepair open findings remediated (ambiguous loop names, unused imports, Rust retry sleep wired, recovery retry settle delay, opaque test tokens). Mixed-repo nettech/RD rows were not in scope. See `docs/FINDINGS_REMEDIATION_20261101.md`.
 - Live lab: third SanDisk SDSSDH3 500 G Adaptive with `--confirm-identity` completed; identical-rewrite probe OK (contrasts prior units’ WinError 1117/121).
 - Disk enumeration now reports a 12-character patient fingerprint, location hint (when supplied by OS), capacity, model, bus, and masked serial. Raw writes require the matching `--confirm-identity` fingerprint; duplicate USB-bridge serials are blocked.
