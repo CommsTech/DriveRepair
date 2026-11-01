@@ -42,3 +42,15 @@ class CLITests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ExtraCliTests(unittest.TestCase):
+    def test_recovery_never_uses_input_image_as_output(self):
+        import tempfile
+        from pathlib import Path
+        from driverepair_desktop.cli import run
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'disk.img'
+            path.write_bytes(b'A' * 1024)
+            state = run(['rescue-image', '--image', str(path), '--output', str(path), '--resume'])
+            self.assertEqual(state, 1)
+            self.assertEqual(path.read_bytes(), b'A' * 1024)

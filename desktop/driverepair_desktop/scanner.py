@@ -107,7 +107,8 @@ class ImageReader:
             or windows_dos_device
         ):
             raise ValueError("Raw devices cannot be scanned through scan-image")
-        self.fd = os.open(path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
+        self.fd = os.open(path, flags)
         if not stat.S_ISREG(os.fstat(self.fd).st_mode):
             os.close(self.fd)
             raise ValueError("Image testing requires a regular file")

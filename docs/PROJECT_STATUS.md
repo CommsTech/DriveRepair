@@ -1,38 +1,39 @@
-# Project status
+# Project status — 2026-11-01
 
-**Public classification:** Experimental open-source diagnostic tool  
-**Version:** 0.0.1  
-**Supported product:** Desktop read-only external disk scanner (`desktop/`)
+**PRIVATE TEST ONLY. PUBLIC RELEASE NOT APPROVED.**
 
-## Working today
+## Verified in source and synthetic tests
 
-| Capability | Evidence |
-|---|---|
-| External disk listing (Win/macOS/Linux code paths) | Implemented; fixture-tested |
-| Read-only sample/full scans | Implemented; synthetic tests passing |
-| JSON reporting of read errors | Implemented |
-| Device identity recheck | Implemented; unit-tested |
-| Offline unit tests without physical disks | `python -m unittest` in `desktop/tests` |
-| Rust Gate 0 fail-closed library tests | `cargo test --features "std,alloc" --lib` |
+- External-drive discovery (existing mock tests), read-only surface scans.
+- Restartable, sector-aligned image rescue with a durable sparse-output map, targeted retry, conservative source identity checking, and failure propagation.
+- Linux-only experimental external-disk rescue with separate-destination mount ancestry checks.
+- Read benchmarks, sampled latency and comparison across same-source measurements.
+- Optional smartctl JSON health snapshots with unknown/failing status handling; no silent healthy result from missing data.
+- PNG/JPEG signature carving from regular-file images, with PNG chunk CRC verification.
+- Intact-member extraction from partially corrupted ZIP archives using standard-library ZIP CRC verification.
+- Windows host portability for image workflows: binary `O_BINARY` opens, portable `pwrite` fallback; **48 unit tests passed** on Windows workstation (2026-11-01).
 
-## Not available / not claimed
+## Not verified
 
-- Sector repair, remapping, TRIM, secure erase
-- File recovery or verified reconstruction of unreadable data
-- Production BIOS/UEFI bootable repair media
-- Signed installers
-- Guaranteed SMART/NVMe health reporting
-- Image-first clone/rescue engine (scaffold only)
+- Hardware operation across Windows, macOS and Linux; Linux physical rescue has **not** been hardware-tested.
+- User data recovery effectiveness on damaged real media; stress/retry budgets may need optimization.
+- Linux destination-isolation logic in complex storage setups, including nested device mapper / encryption / multipath.
+- Proprietary recovery algorithm parity, competitive benchmark outcomes, deep filesystem repair, data-carving completeness.
+- Raw-drive write support, in-place repair, media refresh, actual flash/endurance rejuvenation.
+- Bootable disk image integrity and Rust bootloader integration.
 
-## Release gates
+## Safety boundary
 
-| Gate | Status |
-|---|---|
-| Honest public docs + MIT LICENSE | Met for experimental release |
-| Desktop synthetic tests green | Met on maintainer workstation / CI config present |
-| Hardware matrix on sacrificial externals | Pending (community / maintainer lab) |
-| Write-capable remediation | Out of scope until separately designed and audited |
+Desktop never requests a write handle on a source drive. Media remapping/refresh operations **remain disabled** pending separate design review, independently verified backups, and real-drive testing. Bootable Rust experiments are not production-ready.
 
-## Recommended public messaging
+## Next engineering milestones
 
-> DriveRepair is an experimental, open-source, **read-only** external disk surface scanner for Windows, macOS, and Linux. It reports whether the OS can read requested regions. It does not repair drives.
+P0: Add independent Linux and Windows/macOS device-mapping verification; actual bench hardware test matrices, fail-safe cancellation, read timeouts and mature multi-pass rescue scheduling.
+
+P1: Validate optional smartctl SMART/NVMe snapshots on real hardware and add manufacturer-aware interpretation; add per-LBA latency maps, integrity hashes, and optional external proven rescue engine adapter without copying licensed code.
+
+P2: Build metadata-aware undelete on FAT/exFAT/NTFS/ext4/APFS as read-only plugins; enhance format-aware recovery of damaged archives and media files.
+
+P3: Develop a **separately authorized** media-refresh / targeted-remap experiment only for backed-up, non-critical disks; evaluate outcome using randomized before/after measurements and drive health indicators. Do not market improvements as physical-wear reversal.
+
+P4: Native desktop GUI, properly signed installers, portable bootable Linux distribution, reproducible builds and release docs.
