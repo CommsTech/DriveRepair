@@ -1,0 +1,1865 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 20d1d68..7387d54 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,3 +1,32 @@
++## 0.3.3b1 — Integrity-aware image recovery (experimental)
++
++- Added per-chunk SHA-256 reference baselines, image audits, and only-if-reference-matches restoration into a NEW image.
++- Incomplete/unknown rescue ranges are not mislabeled bit flips.
++- Added bounded optional repeat reads of suspicious triage regions to detect inconsistent OS-returned bytes.
++- Added GUI integrity page and safety/trust documentation.
++- Added optional Linux copy-on-write reflink optimization for new corrected images, with streaming fallback and output readback; existing images remain untouched.
++- Kept raw-device write behavior unchanged; no new hardware repair claims.
++
++## 0.3.2b1 — 2026-11-01 — Professional recovery dashboard (engineering candidate)
++
++- Replaced repeated `RESCUE cursor=...` log spam with compact terminal progress
++  and structured, throttled JSONL events for the GUI; machine-readable final
++  JSON remains on stdout.
++- Recovery dashboard: committed rescue data, unreadable bytes/regions, status,
++  current speed, forward-pass ETA, destination free space and a bounded sector
++  activity map. Unscanned regions are never colored as healthy.
++- Integrated image/external/offline-system rescue GUI progress; rescued-data
++  visualizations do not claim cryptographic correctness or physical health.
++- Added **Resume**, **Retry gaps**, explicit **Save report** and **Open
++  destination** controls. Technical logs remain available but hidden by
++  default; bounded the log buffer for long-running work.
++- Fixed progress-bar layout, made individual workflow pages scrollable on
++  laptop screens, and kept the Stop control visible at the bottom.
++- Added synthetic telemetry/CLI tests and virtual-display GUI end-to-end
++  smoke test; production drive hardware not touched.
++- Release remains NOT CLEARED for unattended patient writes, unverified
++  BIOS/UEFI boot media or claims of superiority to competing software.
++
+ ## 0.3.1b1 — 2026-11-01 — Last-resort + offline recovery (NOT RELEASE-CLEARED)
+ 
+ - Last-resort Linux `refresh-system`: experimental Adaptive in-place refresh of an
+diff --git a/README.md b/README.md
+index 4d014ec..7e90ab3 100644
+--- a/README.md
++++ b/README.md
+@@ -2,11 +2,34 @@
+ 
+ **Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
+ 
+-**Current build: 0.3.1b1 / engineering beta candidate — NOT approved for public hardware-repair use.**
++**Current build: 0.3.3b1 / engineering beta candidate — NOT approved for public hardware-repair use.**
+ The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
+ 
+ **If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
+ 
++## Graphical recovery dashboard (0.3.2b1)
++
++Run `python3 -m driverepair_desktop gui` to launch the guided interface. Image,
++external-device, and offline-system-drive rescue jobs now send **structured,
++throttled rescue progress events** from the committed recovery map instead of
++flooding PowerShell with raw offsets. The persistent dashboard shows a
++progress bar, data saved, unreadable bytes, current/average throughput,
++forward-pass ETA, an approximate activity map, destination free space and
++incomplete-recovery warnings. Completed means the source reads were copied;
++**it does not mean the original files are correct or verified**.
++
++Use **Advanced details / engine log** to inspect technical output. Workflow
++pages scroll on smaller screens; **Stop job** stays visible. Interrupted
++image/external/system-drive rescues may be resumed with the corresponding
++**Resume** action, provided the source and destination identity matches the
++journal. Use **Retry gaps** only after the first pass is complete. Output
++images, recovered files and maps are never automatically deleted by the UI.
++
++For automation, rescue commands accept `--progress-jsonl --no-live-dashboard`.
++JSONL events go to stderr; final result JSON remains on stdout. CLI terminal
++output is now a compact single-line status on interactive terminals, or sparse
++log milestones if redirected.
++
+ ## Workflows
+ 
+ | Goal | Operation | Data at risk | Implementation |
+@@ -143,3 +166,14 @@ python3 scripts/build_desktop.py
+ ## License / privacy / contribution
+ 
+ MIT, see [LICENSE](LICENSE). No proprietary recovery algorithms or source code are bundled. Consult [SECURITY.md](SECURITY.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before reporting test results or opening issues. Never publish patient serial numbers, file contents, authentication tokens, or recovery maps containing private paths without redaction.
++
++
++### Integrity and verified-copy restoration (0.3.3b1)
++
++The desktop GUI now offers an **Integrity / bit errors** tab. It compares
++SHA-256 chunk hashes against a previously captured baseline, distinguishes
++unreadable data from mismatches, and can build a **new** corrected image from
++verified reference chunks. Baselines created after corruption are not proof of
++original correctness. See [Integrity Recovery](docs/INTEGRITY_RECOVERY.md).
++
++This release does **not** introduce automatic on-disk bit correction.
+diff --git a/desktop/README.md b/desktop/README.md
+index 5e1647e..c7dece1 100644
+--- a/desktop/README.md
++++ b/desktop/README.md
+@@ -1,7 +1,62 @@
+-# DriveRepair desktop — 0.3.1b1
++# DriveRepair desktop — 0.3.3b1
+ 
+ A privacy-first guided Python 3.10+ desktop UI/CLI, with incremental Rust recovery-core migration. This is not a signed standalone native installer. The GUI requires Tk. Raw-device repair remains experimental; do not operate on irreplaceable disks.
+ 
++## Image integrity and targeted hash-verified repair
++
++The **Integrity / bit errors** GUI page and `integrity-baseline`, `integrity-audit`,
++and `integrity-restore-copy` commands add SHA-256 reference chunk checking and
++optional restoration of mismatched chunks from a separately verified source into
++a **NEW output image**. The original remains untouched. Newly computed hashes
++are **not** evidence that already-corrupt original data was correct. An incomplete
++rescue map produces unknown chunks rather than falsely labeling holes as flipped bits.
++
++Triage scans may use `--compare-suspects` to reread a bounded number of
++suspicious regions and flag inconsistent results (correct bytes remain unknown).
++Read [the data integrity guide](../docs/INTEGRITY_RECOVERY.md) before relying
++on results. No physical-media bit correction was added.
++
++## New recovery dashboard
++
++The standard graphical interface now displays an always-visible status/progress
++strip, four recovery metrics, a compact activity map and destination-space
++warnings during **image rescue, Linux external rescue and Linux live-USB
++system-drive rescue**. By default, technical log messages are folded away; use
++**Advanced details / engine log** when investigating a problem. The controls on
++all workflow tabs scroll on small laptop displays, while Stop/Save report/Open
++destination remain accessible at the bottom of the application window.
++
++To rescue a disk image, open **Image recovery**, select the source and NEW output
++file, and click **Rescue**. An incomplete job can be continued using **Resume**.
++After a complete first pass with missing regions, use **Retry gaps**; the
++original bytes from a failing source are never invented. A resumed image's
++recovery map remains `OUTPUT.rescue.json` until you explicitly choose to keep
++or remove it. The GUI never automatically deletes recovery images.
++
++The disk map is approximate and shows **scanned/read regions** rather than
++certifying media health: green means bytes were read and saved, red indicates
++unreadable regions, blue indicates a partially covered segment, and dark means
++unscanned. A 100% first-pass indicator during retries does **not** mean all
++bytes were recovered. The calculated ETA covers the forward pass only; retries
++have no reliable ETA. Destination free-space estimates may be inaccurate for
++sparse images or remote-share quotas. Confirm the saved result with image
++verification and a filesystem check on a **copy** before relying on it.
++
++New CLI progress options for the Python rescue engine:
++
++```sh
++# Human-readable, compact terminal progress by default
++python3 -m driverepair_desktop rescue-image --image source.img --output new.img --multi-pass
++# Machine-readable progress (stderr JSONL), with final result on stdout
++python3 -m driverepair_desktop rescue-image --image source.img --output new.img \
++  --progress-jsonl --no-live-dashboard --json
++```
++
++The optional Rust rescue-image executable remains experimental and has not yet
++been integrated with this Python progress protocol; no claim of Rust/OS/hardware
++performance parity is made. Native Windows/macOS hardware testing and BIOS/UEFI
++boot validation remain separate release gates.
++
+ ## Install and launch
+ 
+ ```sh
+diff --git a/desktop/driverepair_desktop/cli.py b/desktop/driverepair_desktop/cli.py
+index 7175af8..1478dc3 100644
+--- a/desktop/driverepair_desktop/cli.py
++++ b/desktop/driverepair_desktop/cli.py
+@@ -27,6 +27,7 @@ from .recovery import rescue_reader
+ from .fat32_undelete import undelete_fat32, list_deleted_fat32
+ from .filesystem_repair import check_ext_image, repair_ext_image
+ from .verification import verify_images
++from .integrity import build_manifest, audit_image, restore_image_from_reference
+ from .media_refresh import (
+     ImageReadWriter,
+     JournalStore,
+@@ -39,6 +40,7 @@ from .media_refresh import (
+ from .power_guard import VolatilePowerGuard, PowerGuardError
+ from .refresh_display import RefreshDashboard
+ from .progress_events import ProgressEmitter
++from .rescue_display import RescueTerminal, rescue_event, destination_free_space
+ from .encryption import (
+     encryption_guidance,
+     require_plaintext_filesystem,
+@@ -75,6 +77,8 @@ def parser() -> argparse.ArgumentParser:
+                          help="Evenly spaced chunks in sample mode (default: 128)")
+         cmd.add_argument("--chunk-mib", type=int, default=1, choices=[1, 2, 4, 8],
+                          help="Read size in MiB (default: 1)")
++        cmd.add_argument("--compare-suspects", action="store_true",
++                         help="Extra repeated reads of suspicious triage regions; does NOT identify correct bytes")
+         cmd.add_argument("--max-errors", type=int, default=16,
+                          help="Stop after this many failing reads (default: 16)")
+         cmd.add_argument("--ack-risk", action="store_true",
+@@ -102,6 +106,10 @@ def parser() -> argparse.ArgumentParser:
+                              help="12-character identity hint from list-all-linux")
+             cmd.add_argument("--ack-offline-system", action="store_true",
+                              help="Only after booting a trusted live OS; original system disk must be unmounted")
++        cmd.add_argument("--progress-jsonl", action="store_true",
++                         help="Send throttled structured rescue progress on stderr (GUI integration)")
++        cmd.add_argument("--no-live-dashboard", action="store_true",
++                         help="Disable human-readable rescue progress (use --progress-jsonl for integrations)")
+         cmd.add_argument("--json", action="store_true")
+     for name in ("benchmark-image", "benchmark-external"):
+         cmd = sub.add_parser(name, help="Measure read throughput and zone latency without writing")
+@@ -161,6 +169,23 @@ def parser() -> argparse.ArgumentParser:
+     cmd.add_argument('--before', required=True)
+     cmd.add_argument('--after', required=True)
+     cmd.add_argument('--json', action='store_true')
++    cmd = sub.add_parser('integrity-baseline', help='Create untrusted SHA-256 chunk baseline from a stable image; preserve independently')
++    cmd.add_argument('--image', required=True)
++    cmd.add_argument('--output', required=True, help='NEW manifest JSON, not on the failing device')
++    cmd.add_argument('--chunk-mib', type=int, default=16, choices=[1, 2, 4, 8, 16, 32, 64])
++    cmd.add_argument('--json', action='store_true')
++    cmd = sub.add_parser('integrity-audit', help='Compare an image to existing external reference hashes; identify suspicious chunks')
++    cmd.add_argument('--image', required=True)
++    cmd.add_argument('--manifest', required=True)
++    cmd.add_argument('--json', action='store_true')
++    cmd = sub.add_parser('integrity-restore-copy', help='Create NEW corrected image using hash-verified chunks from a known-good reference')
++    cmd.add_argument('--image', required=True, help='Damaged regular-file image')
++    cmd.add_argument('--reference', required=True, help='Separate known-good image of the SAME immutable data snapshot')
++    cmd.add_argument('--ack-same-snapshot', action='store_true',
++                     help='Confirm these files represent the same point in time; legitimate later writes are NOT corruption')
++    cmd.add_argument('--manifest', required=True)
++    cmd.add_argument('--output', required=True, help='NEW image, never the source disk')
++    cmd.add_argument('--json', action='store_true')
+     cmd = sub.add_parser('verify-images', help='Compare recovered image byte-for-byte with a stable source image')
+     cmd.add_argument('--image', required=True, help='Original regular-file image')
+     cmd.add_argument('--output', required=True, help='Image to verify')
+@@ -623,6 +648,14 @@ def _run_extras(args) -> int:
+     elif args.command == 'salvage-zip':
+         result = salvage_zip(args.archive, args.output_dir, max_files=args.max_files,
+                              max_file_mib=args.max_file_mib, max_total_mib=args.max_total_mib)
++    elif args.command == 'integrity-baseline':
++        result = build_manifest(args.image, args.output, chunk_mib=args.chunk_mib)
++    elif args.command == 'integrity-audit':
++        result = audit_image(args.image, args.manifest)
++    elif args.command == 'integrity-restore-copy':
++        if not args.ack_same_snapshot:
++            raise ValueError('Require --ack-same-snapshot: differences between dates may be legitimate data, not flipped bits')
++        result = restore_image_from_reference(args.image, args.reference, args.manifest, args.output)
+     elif args.command == 'verify-images':
+         result = verify_images(args.image, args.output)
+     elif args.command == 'inspect-encryption':
+@@ -981,11 +1014,15 @@ def _run_extras(args) -> int:
+                     raise ValueError('--multi-pass and --retry-missing cannot be combined')
+                 _rescue_last_emit = [0.0]
+                 _rescue_last_identity = [0.0]
++                _rescue_last_capacity = [0.0]
++                _rescue_capacity = [None]
++                rescue_emitter = ProgressEmitter(enabled=bool(args.progress_jsonl), min_interval_s=0.2)
++                rescue_console = RescueTerminal() if not args.no_live_dashboard and not args.progress_jsonl else None
++                rescue_phase = ['FORWARD']
+ 
+-                def check_progress(state):
++                def check_progress(state, *, force=False):
+                     now = time.monotonic()
+-                    # Identity re-check is expensive on Windows (Get-Disk via PowerShell).
+-                    # Re-query a few times per minute — not once per 8 MiB chunk.
++                    # Discover identity periodically; do not launch PowerShell per chunk.
+                     if is_device and (now - _rescue_last_identity[0] >= 15.0 or
+                                       state.get('status', '').startswith('completed')):
+                         _rescue_last_identity[0] = now
+@@ -993,19 +1030,22 @@ def _run_extras(args) -> int:
+                                   else select_external_device(args.device))
+                         if latest.fingerprint != source_token:
+                             raise RuntimeError('Patient device changed mid-recovery; job halted')
+-                    # Throttled operator progress so long rescues do not look hung
+-                    # under --json (final JSON still prints only at the end).
+-                    if now - _rescue_last_emit[0] >= 2.0 or state.get('status', '').startswith('completed'):
+-                        _rescue_last_emit[0] = now
+-                        cursor = int(state.get('cursor') or 0)
+-                        recovered = int(state.get('recovered_bytes') or 0)
+-                        pct = (100.0 * cursor / size) if size else 0.0
+-                        print(
+-                            f"RESCUE  cursor={cursor} ({pct:.1f}%) recovered={recovered} "
+-                            f"missing={len(state.get('missing_ranges') or [])} "
+-                            f"status={state.get('status')}",
+-                            file=sys.stderr, flush=True,
+-                        )
++                    # The map is bounded but constructing it for every fsynced chunk
++                    # is unnecessary on multi-terabyte disks.
++                    if not force and now - _rescue_last_emit[0] < 0.5:
++                        return
++                    _rescue_last_emit[0] = now
++                    if now - _rescue_last_capacity[0] >= 5.0:
++                        _rescue_last_capacity[0] = now
++                        _rescue_capacity[0] = destination_free_space(args.output)
++                    event = rescue_event(
++                        state, total=size, phase=rescue_phase[0],
++                        destination=args.output, free_bytes=_rescue_capacity[0],
++                    )
++                    # stderr remains a machine-readable stream when JSONL is requested.
++                    rescue_emitter.emit(event, force=force)
++                    if rescue_console:
++                        rescue_console.show(event, force=force)
+                 result = rescue_reader(reader, size=size, sector=sector,
+                                        output=args.output, source_token=source_token,
+                                        chunk=args.chunk_mib * 1024 * 1024,
+@@ -1015,7 +1055,8 @@ def _run_extras(args) -> int:
+                                        max_chunks=getattr(args, 'max_chunks', None))
+                 if args.multi_pass and result.get('status') == 'completed_with_missing_data':
+                     # Revalidate device immediately before targeted retries.
+-                    check_progress(result)
++                    check_progress(result, force=True)
++                    rescue_phase[0] = 'RETRY'
+                     result = rescue_reader(reader, size=size, sector=sector,
+                                            output=args.output, source_token=source_token,
+                                            chunk=args.chunk_mib * 1024 * 1024,
+@@ -1023,6 +1064,9 @@ def _run_extras(args) -> int:
+                                            resume=True, retry_missing=True,
+                                            progress=check_progress,
+                                            max_chunks=getattr(args, 'max_chunks', None))
++                check_progress(result, force=True)
++                if rescue_console:
++                    rescue_console.finish()
+             else:
+                 result = read_benchmark(reader, size=size, sector=sector,
+                                         mode=args.mode, samples=args.samples,
+@@ -1041,6 +1085,8 @@ def _run_extras(args) -> int:
+         print(json.dumps(result, indent=2))
+     else:
+         print(json.dumps(result, indent=2))
++    if args.command in {'integrity-baseline', 'integrity-audit', 'integrity-restore-copy'}:
++        return 0 if result.get('status') in {'manifest_created_unattested', 'matches_unattested_manifest', 'verified_restored_copy'} else 2
+     if args.command in {'refresh-image', 'refresh-external', 'refresh-system'}:
+         return 0 if result.get('status') == 'completed' else 2
+     return 0 if result.get('status') in {'completed', 'comparison_only', 'smart_passed_limited',
+@@ -1082,7 +1128,8 @@ def run(argv: list[str] | None = None) -> int:
+                             'undelete-fat32', 'list-deleted-fat32',
+                             'list-deleted-tsk', 'recover-selected-tsk',
+                             'detect-filesystems', 'recover-image',
+-                            'verify-images', 'check-ext-image', 'repair-ext-image',
++                            'verify-images', 'integrity-baseline', 'integrity-audit',
++                            'integrity-restore-copy', 'check-ext-image', 'repair-ext-image',
+                             'compare-benchmarks', 'health', 'refresh-image', 'refresh-external', 'refresh-system',
+                             'ram-journal-check', 'monitor-external', 'evidence-image',
+                             'inspect-encryption'}:
+@@ -1150,7 +1197,8 @@ def run(argv: list[str] | None = None) -> int:
+             result = scan_reader(reader, size=size, sector=sector,
+                                  mode=args.mode, samples=args.samples,
+                                  chunk=args.chunk_mib * 1024 * 1024,
+-                                 max_errors=args.max_errors, progress=report)
++                                 max_errors=args.max_errors,
++                                 compare_suspects=args.compare_suspects, progress=report)
+             print(file=sys.stderr)
+         finally:
+             reader.close()
+diff --git a/desktop/driverepair_desktop/gui.py b/desktop/driverepair_desktop/gui.py
+index ad62f43..76b0370 100644
+--- a/desktop/driverepair_desktop/gui.py
++++ b/desktop/driverepair_desktop/gui.py
+@@ -16,6 +16,9 @@ import threading
+ import time
+ from pathlib import Path
+ 
++from .rescue_display import RescueDisplayState, format_duration
++from .console_ui import fmt_bytes
++
+ 
+ # Industrial dark palette (high-contrast status colors, no purple/glow stack).
+ C = {
+@@ -78,7 +81,8 @@ def launch() -> None:
+     q: queue.Queue[tuple[str, object]] = queue.Queue()
+     process: subprocess.Popen[str] | None = None
+     busy = False
+-    map_width, map_height = 64, 18
++    map_width, map_height = 64, 12
++    rescue_metrics = RescueDisplayState()
+     map_cells = ["."] * (map_width * map_height)
+     map_dirty = True
+     last_map_draw = 0.0
+@@ -101,12 +105,25 @@ def launch() -> None:
+     image = tk.StringVar()
+     dest_file = tk.StringVar()
+     dest_dir = tk.StringVar()
++    integrity_manifest = tk.StringVar()
++    integrity_reference = tk.StringVar()
++    integrity_output = tk.StringVar()
++    integrity_summary = tk.StringVar(value="No integrity check run. Readable bytes are NOT necessarily correct bytes.")
+     journal_dir = tk.StringVar(value=str(Path.home() / "DriveRepairJournal"))
+     status = tk.StringVar(value="Recovery engine idle — presentation layer only draws throttled progress")
+     phase_var = tk.StringVar(value="IDLE")
+     health_var = tk.StringVar(value="Media unknown · Transport unknown · Mechanical unknown (no diagnostic yet)")
+     metric_var = tk.StringVar(value="—")
+     msg_var = tk.StringVar(value="Select a workflow. Disk I/O runs in a child process.")
++    recovered_var = tk.StringVar(value="—")
++    errors_var = tk.StringVar(value="—")
++    speed_var = tk.StringVar(value="—")
++    eta_var = tk.StringVar(value="—")
++    destination_var = tk.StringVar(value="Destination: not selected")
++    capacity_var = tk.StringVar(value="Free space: not checked")
++    warning_var = tk.StringVar(value="Progress is from committed recovery state; unscanned media stays unknown.")
++    advanced_open = tk.BooleanVar(value=False)
++    last_result: dict | None = None
+ 
+     shell = ttk.Frame(root, padding=16)
+     shell.pack(fill="both", expand=True)
+@@ -133,18 +150,47 @@ def launch() -> None:
+     right.pack(side="right", padx=10, pady=6)
+     tk.Label(right, textvariable=metric_var, bg=C["panel"], fg=C["text"],
+              font=("Consolas", 11), justify="right").pack(anchor="e")
+-    pbar = ttk.Progressbar(ops, mode="determinate", maximum=1000)
+-    pbar.pack(fill="x", padx=10, pady=(0, 8))
++    # The progress bar is outside the pack-managed left/right strip so it spans
++    # the actual window width (not the tiny gap left between side panels).
++    pbar = ttk.Progressbar(shell, mode="determinate", maximum=1000)
++    pbar.pack(fill="x", pady=(0, 8))
++
++    # Rescue overview: always visible while navigating across workflow tabs.
++    summary = tk.Frame(shell, bg=C["bg"])
++    summary.pack(fill="x", pady=(0, 8))
++    summary_labels = []
++    for label, variable in (("DATA SAVED TO IMAGE", recovered_var),
++                            ("UNREADABLE / UNKNOWN", errors_var),
++                            ("CURRENT SPEED", speed_var), ("TIME REMAINING", eta_var)):
++        card = tk.Frame(summary, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
++        card.pack(side="left", fill="both", expand=True, padx=3)
++        heading = tk.Label(card, text=label, bg=C["panel"], fg=C["muted"],
++                           font=("Segoe UI", 8))
++        heading.pack(anchor="w", padx=10, pady=(8, 0))
++        summary_labels.append(heading)
++        tk.Label(card, textvariable=variable, bg=C["panel"], fg=C["text"],
++                 font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=10, pady=(2, 8))
++    dest_line = tk.Frame(shell, bg=C["bg"])
++    dest_line.pack(fill="x", pady=(0, 6))
++    tk.Label(dest_line, textvariable=destination_var, bg=C["bg"], fg=C["muted"],
++             font=("Segoe UI", 9), anchor="w").pack(side="left", fill="x", expand=True)
++    tk.Label(dest_line, textvariable=capacity_var, bg=C["bg"], fg=C["muted"],
++             font=("Segoe UI", 9)).pack(side="right")
++    warning_label = tk.Label(shell, textvariable=warning_var, anchor="w", bg=C["panel"],
++                             fg=C["muted"], font=("Segoe UI", 9), padx=10, pady=5)
++    warning_label.pack(fill="x", pady=(0, 8))
+ 
+     # Sector map
+     map_frame = tk.Frame(shell, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
+     map_frame.pack(fill="both", expand=False, pady=(0, 10))
+-    tk.Label(map_frame, text="Surface activity map  ·  . pending   o ok   S slow   ! escalate   X error",
++    legend_var = tk.StringVar(value="Activity map  ·  . unscanned   o read to image   ? in progress   X unreadable/failed")
++    tk.Label(map_frame, textvariable=legend_var,
+              bg=C["panel"], fg=C["muted"], font=("Segoe UI", 9)).pack(anchor="w", padx=10, pady=(8, 2))
+-    canvas = tk.Canvas(map_frame, height=170, bg=C["panel2"], highlightthickness=0)
++    canvas = tk.Canvas(map_frame, height=115, bg=C["panel2"], highlightthickness=0)
+     canvas.pack(fill="x", padx=10, pady=(0, 10))
+ 
+-    color_for = {".": C["pending"], "o": C["ok"], "S": C["slow"], "!": C["warn"], "X": C["fail"]}
++    color_for = {".": C["pending"], "o": C["ok"], "?": C["current"],
++                 "S": C["slow"], "!": C["warn"], "X": C["fail"]}
+ 
+     def redraw_map(force: bool = False) -> None:
+         nonlocal map_dirty, last_map_draw
+@@ -184,20 +230,32 @@ def launch() -> None:
+ 
+     notebook = ttk.Notebook(shell)
+     notebook.pack(fill="both", expand=True)
+-    tab_start = ttk.Frame(notebook, padding=12)
+-    tab_drive = ttk.Frame(notebook, padding=12)
+-    tab_image = ttk.Frame(notebook, padding=12)
+-    tab_refresh = ttk.Frame(notebook, padding=12)
+-    tab_undelete = ttk.Frame(notebook, padding=12)
+-    tab_fs = ttk.Frame(notebook, padding=12)
+-    tab_system = ttk.Frame(notebook, padding=12)
+-    notebook.add(tab_start, text=" Start here ")
+-    notebook.add(tab_drive, text=" Diagnose / Rescue ")
+-    notebook.add(tab_system, text=" Recover OS drive ")
+-    notebook.add(tab_image, text=" Image recovery ")
+-    notebook.add(tab_undelete, text=" Recover deleted files ")
+-    notebook.add(tab_refresh, text=" In-place refresh ")
+-    notebook.add(tab_fs, text=" Clone repair ")
++    # Every workflow page is independently scrollable. Otherwise on a typical
++    # laptop the lower controls (including Start/Restore) can be unreachable.
++    tab_canvases = {}
++    def workflow_tab(name: str, title: str):
++        container = ttk.Frame(notebook)
++        scroller = tk.Canvas(container, bg=C['bg'], highlightthickness=0, borderwidth=0)
++        scrollbar = ttk.Scrollbar(container, orient='vertical', command=scroller.yview)
++        scroller.configure(yscrollcommand=scrollbar.set)
++        scrollbar.pack(side='right', fill='y')
++        scroller.pack(side='left', fill='both', expand=True)
++        page = ttk.Frame(scroller, padding=12)
++        window_id = scroller.create_window((0, 0), window=page, anchor='nw')
++        page.bind('<Configure>', lambda e: scroller.configure(scrollregion=scroller.bbox('all')))
++        scroller.bind('<Configure>', lambda e: scroller.itemconfigure(window_id, width=e.width))
++        notebook.add(container, text=title)
++        tab_canvases[name] = scroller
++        return page
++
++    tab_start = workflow_tab('start', ' Start here ')
++    tab_drive = workflow_tab('drive', ' Diagnose / Rescue ')
++    tab_system = workflow_tab('system', ' Recover OS drive ')
++    tab_image = workflow_tab('image', ' Image recovery ')
++    tab_integrity = workflow_tab('integrity', ' Integrity / bit errors ')
++    tab_undelete = workflow_tab('undelete', ' Recover deleted files ')
++    tab_refresh = workflow_tab('refresh', ' In-place refresh ')
++    tab_fs = workflow_tab('filesystem', ' Clone repair ')
+ 
+     # Guided workflows: no unnecessary expertise or hidden destructive defaults.
+     ttk.Label(tab_start, text='What would you like to do?',
+@@ -214,6 +272,8 @@ def launch() -> None:
+          'Find the device by model, capacity and identity; run fast triage or rescue.', tab_drive),
+         ('I need a forensic working copy',
+          'Rescue an image, verify bytes, preserve original evidence and recovery maps.', tab_image),
++        ('I suspect silent file corruption / flipped bits',
++         'Compare image chunks against a previously trusted baseline; recover only provably correct regions.', tab_integrity),
+         ('My filesystem is corrupted',
+          'Check and repair a NEW filesystem image copy; original stays unchanged.', tab_fs),
+         ('I want to refresh readable media',
+@@ -228,8 +288,11 @@ def launch() -> None:
+               'environment. The custom boot components are experimental, not validated recovery media.',
+               style='Muted.TLabel', wraplength=850).pack(anchor='w', pady=14)
+ 
++    log_controls = ttk.Frame(shell)
++    log_controls.pack(fill='x', pady=(8, 0))
++    ttk.Checkbutton(log_controls, text='Advanced details / engine log', variable=advanced_open,
++                    command=lambda: show_advanced()).pack(anchor='w')
+     log_holder = tk.Frame(shell, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
+-    log_holder.pack(fill="both", expand=True, pady=(10, 0))
+     tk.Label(log_holder, text="Operation log", bg=C["panel"], fg=C["muted"],
+              font=("Segoe UI", 9)).pack(anchor="w", padx=8, pady=(6, 0))
+     log = tk.Text(log_holder, height=8, wrap="word", state="disabled",
+@@ -237,10 +300,20 @@ def launch() -> None:
+                   font=("Consolas", 9), relief="flat", borderwidth=0)
+     log.pack(fill="both", expand=True, padx=8, pady=6)
+ 
++    def show_advanced() -> None:
++        if advanced_open.get():
++            log_holder.pack(side='bottom', fill='both', expand=False, pady=(5, 0), before=log_controls)
++        else:
++            log_holder.pack_forget()
++
+     def write(text: str) -> None:
+         log.configure(state="normal")
+         log.insert("end", text)
+-        log.see("end")
++        # Keep a bounded log buffer: GUI memory must not grow over multi-day rescues.
++        if int(log.index('end-1c').split('.')[0]) > 2500:
++            log.delete('1.0', '500.0')
++        if advanced_open.get():
++            log.see("end")
+         log.configure(state="disabled")
+ 
+     def require(var: tk.StringVar, name: str) -> str:
+@@ -278,7 +351,53 @@ def launch() -> None:
+         if chosen:
+             journal_dir.set(os.path.join(chosen, "driverepair-journal-new"))
+ 
++    def apply_rescue(event: dict) -> None:
++        view = rescue_metrics.update(event)
++        phase = str(view.get('phase', 'FORWARD'))
++        total = int(view.get('total_bytes') or 0)
++        processed = int(view.get('processed_bytes') or 0)
++        recovered = int(view.get('recovered_bytes') or 0)
++        missing = int(view.get('unreadable_bytes') or 0)
++        phase_var.set('RETRYING UNREADABLE REGIONS' if phase == 'RETRY' else 'RECOVERING IMAGE')
++        pct = view['percent']
++        pbar['value'] = max(0, min(1000, int(pct * 10)))
++        msg_var.set(f'{pct:.2f}% of first pass processed · {fmt_bytes(processed)} / {fmt_bytes(total)}'
++                    if total else 'Preparing recovery')
++        recovered_var.set(fmt_bytes(recovered))
++        errors_var.set(f'{fmt_bytes(missing)}  ·  {view.get("missing_regions", 0)} region(s)')
++        speed = view['speed_bytes_per_sec']
++        speed_var.set(f'{fmt_bytes(int(speed))}/s' if speed else 'Measuring…')
++        eta_var.set(format_duration(view['eta_seconds']) if view['eta_seconds'] is not None
++                    else ('Retry pass (unknown)' if phase == 'RETRY' else 'Calculating…'))
++        metric_var.set(f'{pct:.1f}%  ·  {view.get("failed_reads", 0)} read failures')
++        health_var.set('Data saved = OS reads committed to image; not verified against original hashes.')
++        legend_var.set('Recovery map · . unscanned   o read to image   ? partial   X unreadable/unknown')
++        free = view.get('destination_free_bytes')
++        remaining = max(0, total - processed)
++        capacity_var.set(f'Free destination space: {fmt_bytes(free)}' if free is not None
++                         else 'Free destination space: unknown')
++        destination_var.set('Destination: ' + str(view.get('destination', 'unknown'))[-110:])
++        if missing:
++            warning_var.set('Some bytes could not be read. This image is INCOMPLETE; see the recovery map.')
++            warning_label.configure(fg=C['fail'])
++        elif free is not None and phase != 'RETRY' and free < remaining:
++            warning_var.set('Destination may run out of space before the image finishes; free space is below the remaining logical data.')
++            warning_label.configure(fg=C['warn'])
++        else:
++            warning_var.set('No unreadable regions reported so far. Unscanned areas are NOT confirmed healthy.')
++            warning_label.configure(fg=C['muted'])
++        compact = event.get('map')
++        if isinstance(compact, str) and compact:
++            nonlocal map_dirty
++            for i in range(len(map_cells)):
++                idx = min(len(compact) - 1, i * len(compact) // len(map_cells))
++                map_cells[i] = compact[idx] if compact[idx] in color_for else '.'
++            map_dirty = True
++
+     def apply_progress(event: dict) -> None:
++        if event.get('workflow') == 'rescue':
++            apply_rescue(event)
++            return
+         nonlocal map_dirty
+         phase = str(event.get("phase") or stats["phase"])
+         stats["phase"] = phase
+@@ -335,7 +454,7 @@ def launch() -> None:
+             map_dirty = True
+ 
+     def start(args: list[str], title: str, *, risky: bool = False, destructive: bool = False) -> None:
+-        nonlocal process, busy
++        nonlocal process, busy, last_result
+         if busy:
+             messagebox.showwarning("Busy", "A job is already active.")
+             return
+@@ -360,12 +479,27 @@ def launch() -> None:
+             if typed != selected_id:
+                 messagebox.showerror("Not authorized", "Device ID confirmation did not match; no write started.")
+                 return
++        if args and args[0].startswith('rescue-'):
++            args = [*args, '--progress-jsonl', '--no-live-dashboard']
+         command = [sys.executable, "-m", "driverepair_desktop", *args]
++        last_result = None
+         write(f"\n=== {title} ===\n")
+         status.set(f"Running: {title}")
+         phase_var.set("STARTING")
+         msg_var.set(title)
+         stats["started"] = time.monotonic()
++        rescue_metrics.__init__()
++        recovered_var.set('—')
++        errors_var.set('—')
++        speed_var.set('—')
++        eta_var.set('—')
++        capacity_var.set('Free space: checking…')
++        warning_var.set('Recovery may stress failing hardware. This display is not a drive-health verdict.')
++        warning_label.configure(fg=C['muted'])
++        for label, text in zip(summary_labels, ('DATA SAVED TO IMAGE', 'UNREADABLE / UNKNOWN',
++                                                'CURRENT SPEED', 'TIME REMAINING')):
++            label.configure(text=text)
++        legend_var.set('Activity map · . unscanned  o read to image  ? in progress  X unreadable/unknown')
+         reset_map()
+         busy = True
+         cancel_button.configure(state="normal")
+@@ -379,14 +513,29 @@ def launch() -> None:
+                 )
+                 process = child
+ 
++                output_lines: list[str] = []
++                output_chars = [0]
+                 def pump(stream, kind: str) -> None:
+                     assert stream is not None
+                     for line in stream:
++                        if kind == 'stdout' and output_chars[0] < 2_000_000:
++                            output_lines.append(line)
++                            output_chars[0] += len(line)
+                         q.put((kind, line))
+ 
+-                threading.Thread(target=pump, args=(child.stdout, "stdout"), daemon=True).start()
+-                threading.Thread(target=pump, args=(child.stderr, "stderr"), daemon=True).start()
++                stdout_thread = threading.Thread(target=pump, args=(child.stdout, "stdout"), daemon=True)
++                stderr_thread = threading.Thread(target=pump, args=(child.stderr, "stderr"), daemon=True)
++                stdout_thread.start()
++                stderr_thread.start()
+                 code = child.wait()
++                stdout_thread.join(timeout=3)
++                stderr_thread.join(timeout=3)
++                try:
++                    final_result = json.loads(''.join(output_lines))
++                    if isinstance(final_result, dict):
++                        q.put(('job_result', final_result))
++                except (ValueError, TypeError):
++                    pass
+                 q.put(("done", (title, code)))
+             except (OSError, ValueError) as exc:
+                 q.put(("stdout", f"Unable to start: {exc}\n"))
+@@ -448,12 +597,14 @@ def launch() -> None:
+             elif kind == "benchmark":
+                 start(["benchmark-external", "--device", dev, "--ack-risk", "--json"],
+                       "Benchmark", risky=True)
+-            elif kind == "rescue":
++            elif kind in {"rescue", "resume"}:
+                 if not sys.platform.startswith("linux"):
+                     raise ValueError("Direct external rescue is Linux-only in this build.")
+                 out = require(dest_file, "new image destination")
+-                start(["rescue-external", "--device", dev, "--output", out, "--ack-risk", "--json"],
+-                      "External rescue", risky=True)
++                opts = (["--resume"] if kind == "resume" else [])
++                start(["rescue-external", "--device", dev, "--output", out,
++                       "--ack-risk", "--multi-pass", *opts, "--json"],
++                      "Resume external rescue" if kind == "resume" else "External rescue", risky=True)
+         except ValueError as exc:
+             messagebox.showerror("Input", str(exc))
+ 
+@@ -461,7 +612,8 @@ def launch() -> None:
+     bf.pack(anchor="w", pady=8)
+     ttk.Button(bf, text="Refresh inventory", command=refresh_devices).pack(side="left", padx=(0, 6))
+     for label, kind in [("SMART", "health"), ("Quick scan", "sample"), ("Full scan", "full"),
+-                        ("Benchmark", "benchmark"), ("Rescue (Linux)", "rescue")]:
++                        ("Benchmark", "benchmark"), ("Rescue (Linux)", "rescue"),
++                        ("Resume rescue", "resume")]:
+         ttk.Button(bf, text=label, command=lambda k=kind: device_action(k)).pack(side="left", padx=(0, 6))
+     row(tab_drive, "Rescue image output", dest_file, pick_output)
+ 
+@@ -477,9 +629,13 @@ def launch() -> None:
+             src = require(image, "source image")
+             if kind == "scan":
+                 start(["scan-image", "--image", src, "--mode", "sample", "--json"], "Scan image")
+-            elif kind == "rescue":
++            elif kind in {"rescue", "resume", "retry"}:
++                flags = (["--resume", "--retry-missing"] if kind == "retry" else
++                         ["--resume", "--multi-pass"] if kind == "resume" else ["--multi-pass"])
+                 start(["rescue-image", "--image", src, "--output", require(dest_file, "output"),
+-                       "--json"], "Rescue image")
++                       *flags, "--json"],
++                      "Retry unreadable regions" if kind == "retry" else
++                      "Resume image rescue" if kind == "resume" else "Rescue image")
+             elif kind == "verify":
+                 start(["verify-images", "--image", src,
+                        "--output", require(dest_file, "rescued image"), "--json"], "Verify images")
+@@ -497,10 +653,67 @@ def launch() -> None:
+ 
+     ib = ttk.Frame(tab_image)
+     ib.pack(anchor="w", pady=8)
+-    for label, kind in [("Scan", "scan"), ("Rescue", "rescue"), ("Verify", "verify"),
++    for label, kind in [("Scan", "scan"), ("Rescue", "rescue"),
++                        ("Resume", "resume"), ("Retry gaps", "retry"), ("Verify", "verify"),
+                         ("Carve", "carve"), ("FAT32 undelete", "undelete"), ("ZIP salvage", "zip")]:
+         ttk.Button(ib, text=label, command=lambda k=kind: image_action(k)).pack(side="left", padx=(0, 6))
+ 
++    # --- Image integrity: reference hashes and verified replacement data ---
++    ttk.Label(tab_integrity, text='Integrity checks require a PREVIOUSLY trusted baseline or independent good copy. '
++              'A new checksum of already-corrupt data cannot reveal the original value. '
++              'No physical disk writes are performed here.',
++              style='Muted.TLabel', wraplength=910).pack(anchor='w', pady=(0, 8))
++    row(tab_integrity, 'Image to examine', image, pick_file)
++    def select_integrity_file(var, title, save=False):
++        chosen = (filedialog.asksaveasfilename(title=title, defaultextension='.json' if 'manifest' in title.lower() else '.img')
++                  if save else filedialog.askopenfilename(title=title))
++        if chosen:
++            var.set(chosen)
++    row(tab_integrity, 'Reference hash manifest', integrity_manifest,
++        lambda: select_integrity_file(integrity_manifest, 'Choose known-good manifest'))
++    row(tab_integrity, 'Known-good image', integrity_reference,
++        lambda: select_integrity_file(integrity_reference, 'Choose independent good reference image'))
++    row(tab_integrity, 'New corrected image', integrity_output,
++        lambda: select_integrity_file(integrity_output, 'Save NEW corrected image', save=True))
++    ttk.Label(tab_integrity, textvariable=integrity_summary, style='Muted.TLabel',
++              wraplength=900).pack(anchor='w', pady=(5, 10))
++    def integrity_action(kind):
++        try:
++            src = require(image, 'image')
++            manifest = require(integrity_manifest, 'manifest location')
++            if kind == 'baseline':
++                # Creating a baseline does NOT certify the image. A separate, trusted
++                # baseline must have been captured before corruption occurred.
++                if not messagebox.askyesno('Baseline trust',
++                    'This saves hashes of the current image, even if it is already corrupted. '
++                    'It does NOT restore earlier correct bits. Continue?'):
++                    return
++                start(['integrity-baseline', '--image', src, '--output', manifest, '--json'],
++                      'Create UNATTESTED integrity baseline')
++            elif kind == 'audit':
++                start(['integrity-audit', '--image', src, '--manifest', manifest, '--json'],
++                      'Audit known-hash integrity')
++            elif kind == 'restore':
++                if not messagebox.askyesno('Trusted restoration',
++                    'The independent reference must represent the SAME data snapshot. '
++                    'Legitimate file changes since the baseline will otherwise look corrupt. '
++                    'This creates a NEW image; it never modifies the original. Continue?'):
++                    return
++                start(['integrity-restore-copy', '--image', src,
++                       '--reference', require(integrity_reference, 'known-good reference image'),
++                       '--manifest', manifest, '--ack-same-snapshot',
++                       '--output', require(integrity_output, 'new corrected image'), '--json'],
++                      'Restore hash-verified chunks to new image')
++        except ValueError as exc:
++            messagebox.showerror('Integrity input', str(exc))
++    actions_integrity = ttk.Frame(tab_integrity)
++    actions_integrity.pack(anchor='w', pady=5)
++    for label, kind in [('Create baseline (not a proof)', 'baseline'),
++                        ('Check for changed chunks', 'audit'),
++                        ('Restore proven chunks to NEW image', 'restore')]:
++        ttk.Button(actions_integrity, text=label,
++                   command=lambda k=kind: integrity_action(k)).pack(side='left', padx=(0, 6))
++
+     # --- Targeted deleted-file recovery (read-only catalog, explicit selection) ---
+     ttk.Label(tab_undelete,
+               text="1. Choose a disk image.  2. Preview deleted files without writing.  "
+@@ -664,7 +877,7 @@ def launch() -> None:
+         except ValueError as exc:
+             messagebox.showerror('Preflight', str(exc))
+ 
+-    def rescue_offline():
++    def rescue_offline(resume=False):
+         try:
+             opts = offline_args()
+             if not messagebox.askyesno('Offline system drive only',
+@@ -673,7 +886,9 @@ def launch() -> None:
+                     'separate storage. Continue?'):
+                 return
+             start(['rescue-system', *opts, '--ack-risk', '--ack-offline-system',
+-                   '--multi-pass', '--json'], 'Read-only rescue of offline OS disk', risky=True)
++                   '--multi-pass', *(['--resume'] if resume else []), '--json'],
++                  'Resume read-only OS rescue' if resume else 'Read-only rescue of offline OS disk',
++                  risky=True)
+         except ValueError as exc:
+             messagebox.showerror('Offline recovery', str(exc))
+     row_sys = ttk.Frame(tab_system)
+@@ -682,6 +897,8 @@ def launch() -> None:
+     ttk.Button(row_sys, text='2. Check destination', command=plan_offline).pack(side='left', padx=4)
+     ttk.Button(row_sys, text='3. Rescue to image', style='Accent.TButton',
+                command=rescue_offline).pack(side='left', padx=4)
++    ttk.Button(row_sys, text='Resume image rescue',
++               command=lambda: rescue_offline(resume=True)).pack(side='left', padx=4)
+ 
+     ttk.Separator(tab_system).pack(fill='x', pady=12)
+     ttk.Label(tab_system, text='Last resort: refresh readable sectors without a second drive',
+@@ -858,14 +1075,63 @@ def launch() -> None:
+     ttk.Button(fb, text="Read-only check", command=inspect_ext).pack(side="left", padx=(0, 6))
+     ttk.Button(fb, text="Repair NEW copy", command=repair_ext).pack(side="left")
+ 
++    def save_report() -> None:
++        if last_result is None:
++            messagebox.showinfo('No completed result', 'Finish a job before saving its final JSON report.')
++            return
++        chosen = filedialog.asksaveasfilename(title='Save DriveRepair job report',
++                                              defaultextension='.json',
++                                              filetypes=[('JSON report', '*.json')])
++        if not chosen:
++            return
++        try:
++            # Explicit export only; may contain selected device paths or identifiers.
++            with open(chosen, 'x', encoding='utf-8') as f:
++                json.dump(last_result, f, indent=2)
++                f.write('\n')
++            status.set('Saved report to ' + chosen)
++        except FileExistsError:
++            messagebox.showerror('Report exists', 'Choose a new report filename; existing reports are never overwritten.')
++        except OSError as exc:
++            messagebox.showerror('Save failed', str(exc))
++
++    def open_destination() -> None:
++        path = dest_file.get().strip() or dest_dir.get().strip()
++        if not path:
++            messagebox.showinfo('No destination', 'Choose a destination in the workflow first.')
++            return
++        directory = os.path.dirname(os.path.abspath(path))
++        if not os.path.isdir(directory):
++            messagebox.showerror('Destination unavailable', 'Destination parent folder does not exist.')
++            return
++        try:
++            if sys.platform == 'win32':
++                os.startfile(directory)  # type: ignore[attr-defined]
++            elif sys.platform == 'darwin':
++                subprocess.Popen(['open', directory])
++            else:
++                subprocess.Popen(['xdg-open', directory])
++        except OSError as exc:
++            messagebox.showerror('Open failed', str(exc))
++
+     statusbar = ttk.Frame(shell)
+     statusbar.pack(fill="x", pady=(8, 0))
+     ttk.Label(statusbar, textvariable=status).pack(side="left", fill="x", expand=True)
+-    cancel_button = ttk.Button(statusbar, text="Cancel job", command=cancel, state="disabled")
++    cancel_button = ttk.Button(statusbar, text="Stop job", command=cancel, state="disabled")
+     cancel_button.pack(side="right")
++    ttk.Button(statusbar, text='Save report…', command=save_report).pack(side='right', padx=6)
++    ttk.Button(statusbar, text='Open destination', command=open_destination).pack(side='right', padx=6)
++    # Reserve the always-accessible Stop button and Advanced toggle at the
++    # bottom BEFORE allowing the scrollable notebook to expand.
++    notebook.pack_forget()
++    log_controls.pack_forget()
++    statusbar.pack_forget()
++    statusbar.pack(side='bottom', fill='x', pady=(8, 0))
++    log_controls.pack(side='bottom', fill='x', pady=(8, 0))
++    notebook.pack(fill='both', expand=True)
+ 
+     def poll() -> None:
+-        nonlocal process, busy
++        nonlocal process, busy, last_result, map_dirty
+         try:
+             while True:
+                 kind, value = q.get_nowait()
+@@ -931,13 +1197,95 @@ def launch() -> None:
+                         if stats["size"] == 0 and tree.selection() == ():
+                             pass
+                     status.set(f"Found {len(value)} external whole disk(s)")
++                elif kind == 'job_result':
++                    if isinstance(value, dict):
++                        last_result = value
++                        if value.get('status') in {'manifest_created_unattested', 'matches_unattested_manifest',
++                                                   'integrity_mismatch', 'incomplete_unknown_regions',
++                                                   'verified_restored_copy', 'incomplete_unverified_copy'}:
++                            integrity_summary.set(
++                                f"Integrity: {value.get('status')} · "
++                                f"{value.get('hash_mismatched_chunks', value.get('replaced_chunks', 0))} "
++                                f"mismatched/replaced chunks · "
++                                f"{value.get('unknown_chunks', value.get('unverified_chunks', 0))} unknown. "
++                                "See Advanced Details / export report for exact offsets."
++                            )
+                 elif kind == "done":
+                     title, code = value
+                     process = None
+                     busy = False
+                     cancel_button.configure(state="disabled")
+-                    phase_var.set("DONE" if code == 0 else f"EXIT {code}")
+-                    status.set(f"{title}: {'finished' if code == 0 else f'exited {code}'}")
++                    phase_var.set("COMPLETED / REVIEW RESULTS" if code == 0 else f"STOPPED / ERROR {code}")
++                    incomplete = bool(last_result and last_result.get('status') in {
++                        'completed_with_missing_data', 'in_progress', 'retry_in_progress',
++                        'completed_with_skips_or_verify_failures',
++                    })
++                    if incomplete:
++                        phase_var.set('INCOMPLETE IMAGE — FOLLOW-UP NEEDED')
++                    elif code == 0 and rescue_metrics.last_event.get('workflow') == 'rescue':
++                        eta_var.set('Complete')
++                    if rescue_metrics.last_event.get('workflow') == 'rescue':
++                        v = rescue_metrics.last_event
++                        elapsed = float(v.get('elapsed_seconds') or 0)
++                        if elapsed > 0 and int(v.get('recovered_bytes') or 0) > 0:
++                            speed_var.set(f"{fmt_bytes(int(int(v['recovered_bytes']) / elapsed))}/s avg")
++                    warning_var.set(
++                        'INCOMPLETE IMAGE: some areas remain missing or unverified. Keep the recovery journal.' 
++                        if incomplete else
++                        'Job finished. Verify recovered data before relying on the image.'
++                        if code == 0 else
++                        'Job stopped or failed. Preserve the image and recovery journal for resume.')
++                    warning_label.configure(fg=C['warn'] if incomplete else
++                                            C['muted'] if code == 0 else C['fail'])
++                    status.set(f"{title}: {'finished — review results' if code == 0 else f'exited {code} — journal may support resume'}")
++                    if last_result and last_result.get('status') in {
++                        'manifest_created_unattested', 'matches_unattested_manifest',
++                        'integrity_mismatch', 'incomplete_unknown_regions',
++                        'verified_restored_copy', 'incomplete_unverified_copy',
++                    }:
++                        finding = last_result['status']
++                        messages = {
++                            'manifest_created_unattested': ('BASELINE CREATED / NOT TRUSTED',
++                                'Baseline saved. A checksum of already-corrupt data does not reveal original bytes.'),
++                            'matches_unattested_manifest': ('MATCHES REFERENCE HASHES',
++                                'All chunks match the baseline. This is NOT proof the baseline was originally correct.'),
++                            'integrity_mismatch': ('INTEGRITY ALERT — CHANGED CHUNKS',
++                                'Some regions differ from the baseline. They may be corrupt OR legitimate changes; inspect offsets.'),
++                            'incomplete_unknown_regions': ('INTEGRITY UNKNOWN — RESCUE GAPS',
++                                'Unvisited or unreadable regions remain UNKNOWN, not corrected.'),
++                            'verified_restored_copy': ('NEW VERIFIED COPY CREATED',
++                                'New image matches the provided reference hashes. Original image is untouched.'),
++                            'incomplete_unverified_copy': ('NEW COPY INCOMPLETE / UNVERIFIED',
++                                'Some chunks lack trusted replacement bytes. Do not use this copy as fully restored.'),
++                        }
++                        headline, description = messages[finding]
++                        pbar['value'] = 1000
++                        metric_var.set('Completed integrity operation')
++                        phase_var.set(headline)
++                        warning_var.set(description)
++                        warning_label.configure(fg=C['warn'] if finding in {
++                            'integrity_mismatch', 'incomplete_unknown_regions',
++                            'incomplete_unverified_copy'} else C['muted'])
++                        for label, text in zip(summary_labels,
++                                               ('HASH-MATCHED CHUNKS', 'DIFFERENT / UNVERIFIED CHUNKS',
++                                                'OPERATION', 'STATUS')):
++                            label.configure(text=text)
++                        total_chunks = last_result.get('total_chunks')
++                        if type(total_chunks) is int and total_chunks > 0:
++                            mismatch_indices = {r['index'] for r in last_result.get('mismatched_regions', [])}
++                            unknown_indices = {r['index'] for r in last_result.get('unknown_regions', [])}
++                            for i in range(len(map_cells)):
++                                j = min(total_chunks - 1, i * total_chunks // len(map_cells))
++                                map_cells[i] = ('X' if j in mismatch_indices else
++                                                '?' if j in unknown_indices else 'o')
++                            map_dirty = True
++                            legend_var.set('Integrity chunks · o matched reference  X differs  ? unknown; not a health map')
++                        recovered_var.set(str(last_result.get('hash_matched_chunks', '—')))
++                        errors_var.set(str(last_result.get('hash_mismatched_chunks',
++                                                   last_result.get('unverified_chunks', 0))))
++                        speed_var.set('Reference hash comparison')
++                        eta_var.set('Complete')
++                        status.set(f'{title}: findings ready — inspect the integrity page or save report')
+                     write(f"--- Finished: exit code {code} ---\n")
+                     redraw_map(force=True)
+         except queue.Empty:
+diff --git a/desktop/driverepair_desktop/integrity.py b/desktop/driverepair_desktop/integrity.py
+new file mode 100644
+index 0000000..d7b617f
+--- /dev/null
++++ b/desktop/driverepair_desktop/integrity.py
+@@ -0,0 +1,296 @@
++"""Evidence-based, read-only image integrity audit and verified-copy repair.
++
++These are *reference hashes*, not hardware ECC and not general-purpose bit repair.
++No physical device writes; all repairs create NEW regular-file images.
++"""
++from __future__ import annotations
++
++import hashlib
++import json
++import os
++import re
++import stat
++import sys
++from pathlib import Path
++
++from .scanner import ImageReader
++from .recovery import _write_all
++
++_MAX_MANIFEST_BYTES = 128 * 1024 * 1024
++_SHA256 = re.compile(r"^[0-9a-f]{64}$")
++
++
++def _check_new_file(path: str, *sources: str) -> str:
++    absolute = os.path.abspath(path)
++    if os.path.lexists(absolute):
++        raise FileExistsError('Output already exists; use a NEW file to preserve existing evidence')
++    if not os.path.isdir(os.path.dirname(absolute)):
++        raise ValueError('Output parent directory does not exist')
++    test = absolute.replace('\\', '/').lower()
++    if test.startswith('/dev/') or test.startswith('//./') or test.startswith('//?/'):
++        raise ValueError('Raw device outputs are forbidden')
++    if any(os.path.realpath(absolute) == os.path.realpath(src) for src in sources):
++        raise ValueError('Output overlaps an input')
++    return absolute
++
++
++def _identity(fd: int) -> tuple[int, int, int, int]:
++    s = os.fstat(fd)
++    return s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns
++
++
++def _ensure_unchanged(fd: int, initial: tuple[int, int, int, int]):
++    if _identity(fd) != initial:
++        raise RuntimeError('Input image changed during integrity operation; results invalid')
++
++
++def _read_exact(reader: ImageReader, start: int, size: int) -> bytes:
++    result = reader.read_at(start, size)
++    if len(result) != size:
++        raise OSError(f'Short image read at {start}: {len(result)} of {size}')
++    return result
++
++
++def _atomic_new_json(path: str, value: dict):
++    """Write new JSON with private permissions; never overwrite a manifest."""
++    path = _check_new_file(path)
++    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
++    try:
++        data = (json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n').encode()
++        _write_all(fd, data)
++        os.fsync(fd)
++    finally:
++        os.close(fd)
++    if os.name == 'posix':
++        d = os.open(os.path.dirname(path), os.O_RDONLY)
++        try:
++            os.fsync(d)
++        finally:
++            os.close(d)
++
++
++def build_manifest(image: str, output: str, *, chunk_mib: int = 16) -> dict:
++    """Create hashes from a pre-existing stable image. Baseline quality is NOT inferred."""
++    if not 1 <= chunk_mib <= 64:
++        raise ValueError('Chunk size must be 1..64 MiB')
++    output = _check_new_file(output, image)
++    reader = ImageReader(image)
++    try:
++        initial = _identity(reader.fd)
++        size = initial[2]
++        if size <= 0:
++            raise ValueError('Empty image')
++        step = chunk_mib * 1024 * 1024
++        count = (size + step - 1) // step
++        if count > 1_000_000:
++            raise ValueError('Manifest too large; use a larger chunk size')
++        entries, whole = [], hashlib.sha256()
++        for pos in range(0, size, step):
++            data = _read_exact(reader, pos, min(step, size - pos))
++            whole.update(data)
++            entries.append(hashlib.sha256(data).hexdigest())
++        _ensure_unchanged(reader.fd, initial)
++    finally:
++        reader.close()
++    report = {'schema': 1, 'algorithm': 'sha256', 'size_bytes': size,
++              'chunk_bytes': step, 'full_sha256': whole.hexdigest(), 'chunks': entries,
++              'trust': 'UNATTESTED_BASELINE',
++              'warning': 'Hashes reflect this image at creation time. If it was corrupt then, hashes preserve that corruption. Keep an independently trusted baseline.'}
++    _atomic_new_json(output, report)
++    return {'status': 'manifest_created_unattested', 'manifest': output,
++            'image_bytes': size, 'chunks': count, 'chunk_bytes': step,
++            'full_sha256': whole.hexdigest(), 'notes': report['warning']}
++
++
++def _load_manifest(path: str) -> dict:
++    if not stat.S_ISREG(os.lstat(path).st_mode):
++        raise ValueError('Manifest is not a regular file')
++    if os.stat(path).st_size > _MAX_MANIFEST_BYTES:
++        raise ValueError('Manifest exceeds safe size limit')
++    with open(path, encoding='utf-8') as f:
++        m = json.load(f)
++    if not isinstance(m, dict) or m.get('schema') != 1 or m.get('algorithm') != 'sha256':
++        raise ValueError('Unsupported integrity manifest schema')
++    size, step, hashes = m.get('size_bytes'), m.get('chunk_bytes'), m.get('chunks')
++    if (type(size) is not int or size <= 0 or type(step) is not int or
++            not 1024 * 1024 <= step <= 64 * 1024 * 1024 or
++            not isinstance(hashes, list) or len(hashes) > 1_000_000 or
++            len(hashes) != (size + step - 1) // step or
++            any(not isinstance(x, str) or not _SHA256.fullmatch(x) for x in hashes) or
++            not isinstance(m.get('full_sha256'), str) or not _SHA256.fullmatch(m['full_sha256'])):
++        raise ValueError('Malformed or oversized integrity manifest')
++    return m
++
++
++def _untrusted_recovery_regions(image: str, size: int) -> list[tuple[int, int]]:
++    """Unknown areas in incomplete rescue output must not count as bit flips."""
++    map_path = os.path.abspath(image) + '.rescue.json'
++    if not os.path.lexists(map_path):
++        return []
++    if not stat.S_ISREG(os.lstat(map_path).st_mode) or os.stat(map_path).st_size > _MAX_MANIFEST_BYTES:
++        raise ValueError('Unsafe recovery journal')
++    with open(map_path, encoding='utf-8') as f:
++        state = json.load(f)
++    if state.get('size') != size or os.path.realpath(state.get('output', '')) != os.path.realpath(image):
++        raise ValueError('Recovery journal does not match the selected image')
++    from .recovery import _validate_state
++    _validate_state(state)
++    regions = [(int(a), int(a + length)) for key in ('missing_ranges', 'retry_pending_ranges')
++               for a, length in state.get(key, [])]
++    cursor = state['cursor']
++    if cursor < size:
++        regions.append((cursor, size))
++    return sorted(regions)
++
++
++def _evaluate(image: str, manifest: dict, *, max_details: int = 2048) -> dict:
++    reader = ImageReader(image)
++    try:
++        initial = _identity(reader.fd)
++        size, step = manifest['size_bytes'], manifest['chunk_bytes']
++        if initial[2] != size:
++            raise ValueError('Image size does not match integrity manifest')
++        unknowns = _untrusted_recovery_regions(image, size)
++        mismatches, unknown_details = [], []
++        verified = unknown = mismatch_count = 0
++        r = 0
++        for i, expected in enumerate(manifest['chunks']):
++            offset = i * step
++            length = min(step, size - offset)
++            while r < len(unknowns) and unknowns[r][1] <= offset:
++                r += 1
++            if r < len(unknowns) and unknowns[r][0] < offset + length:
++                unknown += 1
++                if len(unknown_details) < max_details:
++                    unknown_details.append({'index': i, 'offset': offset, 'length': length,
++                                            'reason': 'Unvisited or unreadable rescue extent'})
++                continue
++            try:
++                actual = hashlib.sha256(_read_exact(reader, offset, length)).hexdigest()
++            except OSError:
++                unknown += 1
++                if len(unknown_details) < max_details:
++                    unknown_details.append({'index': i, 'offset': offset, 'length': length,
++                                            'reason': 'Read error during integrity audit'})
++                continue
++            if actual == expected:
++                verified += 1
++            else:
++                mismatch_count += 1
++                if len(mismatches) < max_details:
++                    mismatches.append({'index': i, 'offset': offset, 'length': length,
++                                       'observed_sha256': actual, 'expected_sha256': expected})
++        _ensure_unchanged(reader.fd, initial)
++        return {'status': ('integrity_mismatch' if mismatch_count else
++                           'incomplete_unknown_regions' if unknown else 'matches_unattested_manifest'),
++                'image_size_bytes': size, 'total_chunks': len(manifest['chunks']),
++                'hash_matched_chunks': verified, 'hash_mismatched_chunks': mismatch_count,
++                'unknown_chunks': unknown, 'mismatched_regions': mismatches,
++                'unknown_regions': unknown_details,
++                'details_truncated': mismatch_count > len(mismatches) or unknown > len(unknown_details),
++                'notes': 'Hash matches prove agreement with THIS baseline only, not that the baseline was correct. '
++                         'Unknown rescue gaps are not interpreted as zeroes or repaired data.'}
++    finally:
++        reader.close()
++
++
++def audit_image(image: str, manifest_path: str) -> dict:
++    return _evaluate(image, _load_manifest(manifest_path))
++
++
++def _try_linux_reflink(src_fd: int, dest_fd: int) -> bool:
++    """Use filesystem copy-on-write clone when available; transparent safe fallback.
++
++    FICLONE is supported by some modern Linux filesystems (e.g., Btrfs/XFS).
++    It shares physical extents until modified, not an in-place source rewrite.
++    """
++    if not sys.platform.startswith('linux'):
++        return False
++    try:
++        import fcntl
++        fcntl.ioctl(dest_fd, 0x40049409, src_fd)  # Linux FICLONE ioctl.
++        return True
++    except OSError:
++        # Some unsupported filesystems could leave a partially initialized clone.
++        # The output is a NEW regular file, so resetting it does not affect input.
++        os.ftruncate(dest_fd, 0)
++        os.lseek(dest_fd, 0, os.SEEK_SET)
++        return False
++
++
++def restore_image_from_reference(image: str, reference: str, manifest_path: str,
++                                 output: str, *, allow_incomplete: bool = False) -> dict:
++    """Create NEW image with only mismatched chunks replaced from hash-verified reference.
++
++    Never writes to patient disk, candidate image, or reference. Refuses unknown
++    recovery regions by default, because writing zeros into a fresh copy could
++    wrongly imply that data was recovered.
++    """
++    m = _load_manifest(manifest_path)
++    output = _check_new_file(output, image, reference, manifest_path)
++    if os.path.samefile(image, reference):
++        raise ValueError('Reference cannot be the candidate itself')
++    a, ref = ImageReader(image), ImageReader(reference)
++    fd = None
++    try:
++        sa, sr = _identity(a.fd), _identity(ref.fd)
++        size, step = m['size_bytes'], m['chunk_bytes']
++        if sa[2] != size or sr[2] != size:
++            raise ValueError('Candidate/reference dimensions do not match manifest')
++        unknowns = _untrusted_recovery_regions(image, size)
++        if _untrusted_recovery_regions(reference, size):
++            raise ValueError('Reference rescue image still has unknown/unreadable areas')
++        if unknowns and not allow_incomplete:
++            raise ValueError('Candidate rescue map has unknown/unreadable regions; refusing a full-image integrity claim')
++        # The new output MUST NOT be a physical device, and must not already exist.
++        fd = os.open(output, os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
++        if not stat.S_ISREG(os.fstat(fd).st_mode):
++            raise ValueError('Output must be a regular file')
++        reflinked = _try_linux_reflink(a.fd, fd)
++        fixed, unverifiable = 0, 0
++        whole = hashlib.sha256()
++        bad_reference = []
++        for i, expected in enumerate(m['chunks']):
++            off = i * step
++            count = min(step, size - off)
++            data = _read_exact(a, off, count)
++            changed = hashlib.sha256(data).hexdigest() != expected
++            patched = False
++            if changed:
++                alternative = _read_exact(ref, off, count)
++                if hashlib.sha256(alternative).hexdigest() == expected:
++                    data = alternative
++                    fixed += 1
++                    patched = True
++                else:
++                    unverifiable += 1
++                    if len(bad_reference) < 2048:
++                        bad_reference.append({'offset': off, 'length': count})
++            if not reflinked:
++                _write_all(fd, data)
++            elif patched:
++                _write_all(fd, data, off)
++            whole.update(data)
++        os.fsync(fd)
++        _ensure_unchanged(a.fd, sa)
++        _ensure_unchanged(ref.fd, sr)
++        # Read back output for independent verification, not merely a hash of
++        # the source bytes we *intended* to write. Never report verified on
++        # failed/partial writes, nor when the original recovery map has gaps.
++        result = _evaluate(output, m, max_details=64)
++        good = (unverifiable == 0 and not unknowns and
++                result['hash_mismatched_chunks'] == 0 and result['unknown_chunks'] == 0 and
++                whole.hexdigest() == m['full_sha256'])
++        return {'status': 'verified_restored_copy' if good else 'incomplete_unverified_copy',
++                'output': output, 'size_bytes': size, 'replaced_chunks': fixed,
++                'unverified_chunks': unverifiable, 'reference_failures': bad_reference,
++                'intended_output_sha256': whole.hexdigest(), 'matches_manifest_sha256': good,
++                'output_readback': result['status'],
++                'copy_strategy': 'linux_reflink_copy_on_write' if reflinked else 'streaming_copy',
++                'notes': 'Only a NEW image was written. The source and existing image were not modified. '
++                         'No arbitrary bit flip can be corrected without verified reference data.'}
++    finally:
++        if fd is not None:
++            os.close(fd)
++        a.close()
++        ref.close()
+diff --git a/desktop/driverepair_desktop/rescue_display.py b/desktop/driverepair_desktop/rescue_display.py
+new file mode 100644
+index 0000000..5b00480
+--- /dev/null
++++ b/desktop/driverepair_desktop/rescue_display.py
+@@ -0,0 +1,161 @@
++"""Presentation-only rescue progress; never controls patient disk I/O.
++
++Status and map are derived from committed recovery journal state. In particular,
++"recovered" means OS reads were stored, not cryptographic source verification.
++Any unexamined region remains unexamined in the visualization.
++"""
++from __future__ import annotations
++
++import os
++import shutil
++import sys
++import time
++from pathlib import Path
++
++from .console_ui import enable_windows_vt, fmt_bytes
++
++
++def rescue_event(state: dict, *, total: int, phase: str, destination: str,
++                 free_bytes: int | None = None, cells: int = 512) -> dict:
++    """Translate a durable journal snapshot into a compact, bounded event."""
++    cursor = max(0, min(total, int(state.get('cursor', 0))))
++    recovered = int(state.get('recovered_bytes', 0))
++    missing = state.get('missing_ranges') or []
++    pending = state.get('retry_pending_ranges') or []
++    unreadable = sum(length for _, length in missing) + sum(length for _, length in pending)
++    # Map: o = fully processed region, . = not processed, ? = current fractional cell.
++    # X marks a processed cell containing known unreadable bytes. Neither o nor X
++    # represents file correctness or SMART health. Tiny areas are approximate.
++    glyphs = ['.'] * cells
++    if total > 0:
++        for i in range(cells):
++            begin, end = (i * total // cells), ((i + 1) * total // cells)
++            if end <= cursor:
++                glyphs[i] = 'o'
++            elif begin < cursor:
++                glyphs[i] = '?'
++        for begin, length in [*missing, *pending]:
++            if length <= 0:
++                continue
++            a = min(cells - 1, begin * cells // total)
++            b = min(cells - 1, (begin + length - 1) * cells // total)
++            for i in range(a, b + 1):
++                glyphs[i] = 'X'
++    return {
++        'workflow': 'rescue', 'phase': phase, 'status': state.get('status', 'in_progress'),
++        'total_bytes': total, 'processed_bytes': cursor,
++        'recovered_bytes': recovered, 'unreadable_bytes': unreadable,
++        'missing_regions': len(missing) + len(pending),
++        'failed_reads': int(state.get('failed_read_attempts', 0)),
++        'destination_free_bytes': free_bytes, 'destination': destination,
++        'map': ''.join(glyphs),
++    }
++
++
++def destination_free_space(path: str) -> int | None:
++    """Best effort; never let a presentation query fail a recovery."""
++    try:
++        parent = Path(path).resolve(strict=False).parent
++        return shutil.disk_usage(parent).free
++    except (OSError, ValueError):
++        return None
++
++
++def format_duration(seconds: float | None) -> str:
++    if seconds is None or seconds < 0:
++        return '--'
++    n = int(seconds)
++    if n >= 86400:
++        return f'{n // 86400}d {(n % 86400) // 3600}h'
++    if n >= 3600:
++        return f'{n // 3600}h {(n % 3600) // 60}m'
++    if n >= 60:
++        return f'{n // 60}m {n % 60}s'
++    return f'{n}s'
++
++
++class RescueDisplayState:
++    """Smoothed measurements, independent of CLI or Tk for deterministic tests."""
++
++    def __init__(self, *, clock=None):
++        self.clock = clock or time.monotonic
++        self.start = self.clock()
++        self.last_time = self.start
++        self.last_processed = 0
++        self.ema_bytes_per_sec: float | None = None
++        self.last_event: dict = {}
++        self.last_phase = ''
++
++    def update(self, event: dict) -> dict:
++        now = self.clock()
++        current = max(0, int(event.get('processed_bytes', 0)))
++        phase = str(event.get('phase', 'FORWARD'))
++        delta_t = now - self.last_time
++        delta_bytes = current - self.last_processed
++        if phase != self.last_phase:
++            self.ema_bytes_per_sec = None
++        if delta_t >= 0.1 and delta_bytes > 0 and phase == self.last_phase:
++            rate = delta_bytes / delta_t
++            self.ema_bytes_per_sec = (rate if self.ema_bytes_per_sec is None
++                                      else 0.25 * rate + 0.75 * self.ema_bytes_per_sec)
++        self.last_phase = phase
++        self.last_time = now
++        self.last_processed = current
++        total = max(0, int(event.get('total_bytes', 0)))
++        rate = self.ema_bytes_per_sec
++        # Retry passes have nonmonotonic position and no honest wall-clock ETA.
++        eta = ((total - current) / rate if rate and phase == 'FORWARD' and current < total
++               else None)
++        self.last_event = {**event, 'speed_bytes_per_sec': rate,
++                           'eta_seconds': eta, 'elapsed_seconds': now - self.start,
++                           'percent': 100 * current / total if total else 0.0}
++        return self.last_event
++
++
++class RescueTerminal:
++    """Throttled human-readable CLI, with single-line TTY updates and sparse logs."""
++
++    def __init__(self, *, stream=None, tty=None, clock=None):
++        self.stream = stream or sys.stderr
++        self.clock = clock or time.monotonic
++        self.tty = bool(self.stream.isatty()) if tty is None else tty
++        if os.name == 'nt' and self.tty and not enable_windows_vt():
++            self.tty = False  # Old Windows console: avoid printing raw ANSI codes.
++        self.last_print = -1e10
++        self.last_percent = -1
++        self.active_line = False
++        self.state = RescueDisplayState(clock=self.clock)
++
++    def show(self, event: dict, *, force: bool = False) -> None:
++        view = self.state.update(event)
++        now = self.clock()
++        percent = int(view['percent'])
++        # Redirected output receives sparse milestones, not thousands of raw lines.
++        if not force and (now - self.last_print < (0.5 if self.tty else 60.0)):
++            return
++        if not self.tty and not force and percent == self.last_percent and now - self.last_print < 60:
++            return
++        self.last_print = now
++        self.last_percent = percent
++        speed = (f"{fmt_bytes(int(view['speed_bytes_per_sec']))}/s"
++                 if view['speed_bytes_per_sec'] else 'calculating')
++        eta = format_duration(view['eta_seconds'])
++        phase = 'Retry pass' if view.get('phase') == 'RETRY' else 'Rescue'
++        text = (f"{phase}  {view['percent']:5.1f}%  "
++                f"{fmt_bytes(view['recovered_bytes'])} saved  "
++                f"{fmt_bytes(view['unreadable_bytes'])} unreadable  "
++                f"{speed}  ETA {eta}")
++        if self.tty:
++            width = max(20, shutil.get_terminal_size((110, 25)).columns - 1)
++            text = text[:width]
++            self.stream.write('\r\033[2K' + text)
++            self.active_line = True
++        else:
++            self.stream.write(text + '\n')
++        self.stream.flush()
++
++    def finish(self) -> None:
++        if self.active_line:
++            self.stream.write('\n')
++            self.stream.flush()
++            self.active_line = False
+diff --git a/desktop/driverepair_desktop/scanner.py b/desktop/driverepair_desktop/scanner.py
+index 5f80f59..e8b297c 100644
+--- a/desktop/driverepair_desktop/scanner.py
++++ b/desktop/driverepair_desktop/scanner.py
+@@ -162,6 +162,7 @@ def scan_offsets(size: int, chunk: int, mode: str, samples: int):
+ 
+ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
+                 samples: int = 128, chunk: int = 1024 * 1024, max_errors: int = 16,
++                compare_suspects: bool = False,
+                 progress: Callable[[int, int], None] | None = None) -> dict:
+     if (not 0 < sector <= 1024 * 1024 or size <= 0 or size % sector or
+             chunk < sector or chunk % sector or not 1 <= max_errors <= 10000 or
+@@ -251,6 +252,27 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
+             if status.startswith('aborted'):
+                 break
+ 
++    # Extra targeted reads are optional: discrepancies flag instability, NOT the
++    # original/correct value. Only revisit suspicious samples, not all LBAs.
++    inconsistent_reads: list[dict] = []
++    repeated_read_errors = 0
++    if compare_suspects and mode == 'triage' and not status.startswith('aborted'):
++        candidates = sorted(set(anomalous_indices))[:min(64, samples)]
++        for index in candidates:
++            off = index * chunk
++            length = min(chunk, size - off)
++            try:
++                first = reader.read_at(off, length)
++                second = reader.read_at(off, length)
++                if len(first) != length or len(second) != length:
++                    repeated_read_errors += 1
++                elif first != second:
++                    inconsistent_reads.append({'offset': off, 'length': length,
++                                               'interpretation': 'Inconsistent repeated reads; correct bytes UNKNOWN'})
++            except OSError:
++                repeated_read_errors += 1
++        if inconsistent_reads and status == 'completed':
++            status = 'completed_with_inconsistent_reads'
+     if status == 'completed' and failures:
+         status = 'completed_with_read_errors'
+     elif status == 'completed' and slow_regions:
+@@ -267,10 +289,15 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
+         'read_error_chunks': failures,
+         'read_error_ranges': failed_ranges,
+         'slow_regions': slow_regions,
++        'inconsistent_reads': inconsistent_reads,
++        'repeat_probe_failures': repeated_read_errors,
++        'extra_suspect_reads': 2 * min(len(set(anomalous_indices)), 64, samples) if compare_suspects and mode == 'triage' else 0,
+         'follow_up_chunks': max(0, completed - (len(baseline) if baseline is not None else blocks)),
+         'surface_coverage_pct': round(100 * checked / size, 6),
+         'elapsed_seconds': round(time.monotonic() - started, 3),
+         'notes': ('TRIAGE IS A SPOT-CHECK, not a health certification. ' if mode == 'triage' else '') +
+                  'Readability only; no sector repaired, no writes, no correctness guarantee. '
+-                 'Errors locate affected CHUNKS, not defective individual sectors.',
++                 'Errors locate affected CHUNKS, not defective individual sectors. ' +
++                 ('Optional repeated-suspect checks can detect inconsistency but cannot establish correct bits.'
++                  if compare_suspects else ''),
+     }
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index a1450ff..2f017e6 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.1b1"
++version = "0.3.3b1"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_integrity.py b/desktop/tests/test_integrity.py
+new file mode 100644
+index 0000000..3512fb0
+--- /dev/null
++++ b/desktop/tests/test_integrity.py
+@@ -0,0 +1,125 @@
++import json
++import os
++import tempfile
++import unittest
++from pathlib import Path
++
++from driverepair_desktop.integrity import build_manifest, audit_image, restore_image_from_reference
++
++
++class IntegrityTests(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.addCleanup(self.tmp.cleanup)
++        self.root = Path(self.tmp.name)
++        self.baseline = self.root / 'original.img'
++        self.candidate = self.root / 'candidate.img'
++        self.manifest = self.root / 'manifest.json'
++        self.chunk = 1024 * 1024
++        source = b'A' * self.chunk + b'B' * self.chunk + b'C' * 512
++        self.baseline.write_bytes(source)
++        self.candidate.write_bytes(source)
++        build_manifest(str(self.baseline), str(self.manifest), chunk_mib=1)
++
++    def test_matches_unattested_manifest(self):
++        r = audit_image(str(self.candidate), str(self.manifest))
++        self.assertEqual(r['status'], 'matches_unattested_manifest')
++        self.assertEqual(r['hash_matched_chunks'], 3)
++
++    def test_detects_single_bit_and_targets_one_chunk(self):
++        with self.candidate.open('r+b') as f:
++            f.seek(self.chunk + 17)
++            f.write(b'C')  # 0x42 -> 0x43, one bit flipped
++        r = audit_image(str(self.candidate), str(self.manifest))
++        self.assertEqual(r['status'], 'integrity_mismatch')
++        self.assertEqual(r['hash_mismatched_chunks'], 1)
++        self.assertEqual(r['mismatched_regions'][0]['offset'], self.chunk)
++        self.assertEqual(r['hash_matched_chunks'], 2)
++
++    def test_restores_new_copy_only_from_verified_reference(self):
++        with self.candidate.open('r+b') as f:
++            f.seek(self.chunk + 17)
++            f.write(b'C')
++        repaired = self.root / 'repaired.img'
++        r = restore_image_from_reference(str(self.candidate), str(self.baseline), str(self.manifest), str(repaired))
++        self.assertEqual(r['status'], 'verified_restored_copy')
++        self.assertEqual(r['replaced_chunks'], 1)
++        self.assertEqual(repaired.read_bytes(), self.baseline.read_bytes())
++        self.assertNotEqual(self.candidate.read_bytes(), self.baseline.read_bytes())
++
++    def test_bad_reference_not_treated_as_fixed(self):
++        with self.candidate.open('r+b') as f:
++            f.seek(0)
++            f.write(b'X')
++        bad = self.root / 'bad.img'
++        bad.write_bytes(self.baseline.read_bytes())
++        with bad.open('r+b') as f:
++            f.seek(0)
++            f.write(b'Z')
++        repaired = self.root / 'repaired.img'
++        r = restore_image_from_reference(str(self.candidate), str(bad), str(self.manifest), str(repaired))
++        self.assertEqual(r['status'], 'incomplete_unverified_copy')
++        self.assertEqual(r['unverified_chunks'], 1)
++        self.assertEqual(repaired.read_bytes(), self.candidate.read_bytes())
++
++    def test_rescue_holes_not_misreported_as_bit_flips(self):
++        # Existing recovery map says 1MiB in middle is unreadable (not corrupt).
++        journal = {'schema': 1, 'size': len(self.candidate.read_bytes()), 'sector': 512,
++                   'cursor': len(self.candidate.read_bytes()),
++                   'recovered_bytes': len(self.candidate.read_bytes()) - self.chunk,
++                   'missing_ranges': [[self.chunk, self.chunk]], 'status': 'completed_with_missing_data',
++                   'output': str(self.candidate)}
++        Path(str(self.candidate) + '.rescue.json').write_text(json.dumps(journal))
++        with self.candidate.open('r+b') as f:
++            f.seek(self.chunk)
++            f.write(b'Z')
++        r = audit_image(str(self.candidate), str(self.manifest))
++        self.assertEqual(r['unknown_chunks'], 1)
++        self.assertEqual(r['hash_mismatched_chunks'], 0)
++        with self.assertRaisesRegex(ValueError, 'unknown/unreadable'):
++            restore_image_from_reference(str(self.candidate), str(self.baseline), str(self.manifest), str(self.root / 'repaired.img'))
++
++    def test_bad_manifest_or_overwrite_refused(self):
++        m = json.loads(self.manifest.read_text())
++        m['chunks'][0] = 'xyz'
++        self.manifest.write_text(json.dumps(m))
++        with self.assertRaisesRegex(ValueError, 'Malformed'):
++            audit_image(str(self.candidate), str(self.manifest))
++        with self.assertRaises(FileExistsError):
++            build_manifest(str(self.baseline), str(self.manifest))
++
++    def test_identity_and_output_guards(self):
++        with self.assertRaisesRegex(ValueError, 'Reference cannot'):
++            restore_image_from_reference(str(self.baseline), str(self.baseline), str(self.manifest), str(self.root / 'copy.img'))
++        with self.assertRaises(FileExistsError):
++            restore_image_from_reference(str(self.candidate), str(self.baseline), str(self.manifest), str(self.baseline))
++
++if __name__ == '__main__':
++    unittest.main()
++
++class IntegrityCommandTests(unittest.TestCase):
++    def test_cli_detects_and_repairs_only_known_changed_chunk(self):
++        import contextlib
++        import io
++        from driverepair_desktop.cli import run
++        with tempfile.TemporaryDirectory() as td:
++            d = Path(td)
++            truth, candidate = d / 'truth.img', d / 'candidate.img'
++            truth.write_bytes(b'A' * 1024 * 1024 + b'B' * 512)
++            candidate.write_bytes(b'A' * 1024 * 1024 + b'C' * 512)
++            manifest = d / 'truth.json'
++            with contextlib.redirect_stdout(io.StringIO()):
++                self.assertEqual(run(['integrity-baseline', '--image', str(truth), '--output', str(manifest), '--json']), 0)
++            with contextlib.redirect_stdout(io.StringIO()) as out:
++                self.assertEqual(run(['integrity-audit', '--image', str(candidate), '--manifest', str(manifest), '--json']), 2)
++            self.assertEqual(json.loads(out.getvalue())['hash_mismatched_chunks'], 1)
++            with contextlib.redirect_stderr(io.StringIO()):
++                self.assertEqual(run(['integrity-restore-copy', '--image', str(candidate),
++                                      '--reference', str(truth), '--manifest', str(manifest),
++                                      '--output', str(d / 'fixed.img'), '--json']), 1)
++            with contextlib.redirect_stdout(io.StringIO()) as out:
++                self.assertEqual(run(['integrity-restore-copy', '--image', str(candidate),
++                                      '--reference', str(truth), '--manifest', str(manifest),
++                                      '--output', str(d / 'fixed.img'), '--ack-same-snapshot', '--json']), 0)
++            self.assertEqual(json.loads(out.getvalue())['replaced_chunks'], 1)
++            self.assertEqual((d / 'fixed.img').read_bytes(), truth.read_bytes())
+diff --git a/desktop/tests/test_rescue_dashboard.py b/desktop/tests/test_rescue_dashboard.py
+new file mode 100644
+index 0000000..429211c
+--- /dev/null
++++ b/desktop/tests/test_rescue_dashboard.py
+@@ -0,0 +1,100 @@
++"""Regression coverage for professional rescue telemetry (no physical disks)."""
++import contextlib
++import io
++import json
++import os
++from pathlib import Path
++import tempfile
++import unittest
++
++from driverepair_desktop.cli import run
++from driverepair_desktop.rescue_display import (
++    RescueDisplayState, RescueTerminal, rescue_event, destination_free_space,
++    format_duration,
++)
++
++
++class RescuePresentationTests(unittest.TestCase):
++    def test_map_does_not_claim_unscanned_sectors_good(self):
++        total = 1024 * 1024
++        view = rescue_event({"cursor": 1024, "recovered_bytes": 1024,
++                             "missing_ranges": [], "status": "in_progress"},
++                            total=total, phase="FORWARD", destination="out.img", cells=16)
++        self.assertEqual(view['map'][0], '?')
++        self.assertEqual(view['map'][1:], '.' * 15)
++        self.assertEqual(view['processed_bytes'], 1024)
++
++    def test_map_keeps_missing_regions_unknown(self):
++        view = rescue_event({"cursor": 4096, "recovered_bytes": 3072,
++                             "missing_ranges": [[1024, 1024]], "failed_read_attempts": 2,
++                             "status": "completed_with_missing_data"},
++                            total=4096, phase="FORWARD", destination="out.img", cells=4)
++        self.assertEqual(view['map'], 'oXoo')
++        self.assertEqual(view['unreadable_bytes'], 1024)
++        self.assertEqual(view['missing_regions'], 1)
++        self.assertEqual(view['failed_reads'], 2)
++
++    def test_retry_pending_also_counts_as_not_yet_recovered(self):
++        view = rescue_event({"cursor": 4096, "recovered_bytes": 3072,
++                             "missing_ranges": [], "retry_pending_ranges": [[0, 1024]]},
++                            total=4096, phase="RETRY", destination="out.img", cells=4)
++        self.assertEqual(view['map'], 'Xooo')
++        self.assertEqual(view['unreadable_bytes'], 1024)
++
++    def test_rate_and_eta_use_monotonic_elapsed_not_cursor_bytes_per_callback(self):
++        moments = iter([0.0, 1.0, 2.0, 3.0])
++        state = RescueDisplayState(clock=lambda: next(moments))
++        base = {'phase': 'FORWARD', 'total_bytes': 4000}
++        v0 = state.update({**base, 'processed_bytes': 1000})
++        self.assertIsNone(v0['eta_seconds'])
++        v1 = state.update({**base, 'processed_bytes': 2000})
++        self.assertEqual(int(v1['speed_bytes_per_sec']), 1000)
++        self.assertEqual(int(v1['eta_seconds']), 2)
++        v2 = state.update({**base, 'phase': 'RETRY', 'processed_bytes': 4000})
++        self.assertIsNone(v2['eta_seconds'])
++
++    def test_rounded_duration_and_free_space(self):
++        self.assertEqual(format_duration(3661), '1h 1m')
++        with tempfile.TemporaryDirectory() as td:
++            self.assertIsInstance(destination_free_space(str(Path(td) / 'new.img')), int)
++
++    def test_non_tty_output_is_sparse_and_not_raw_cursor_lines(self):
++        clock = iter([0., 0., 0., 1., 1., 2., 2., 62., 62.])
++        stream = io.StringIO()
++        panel = RescueTerminal(stream=stream, tty=False, clock=lambda: next(clock))
++        base = {'phase': 'FORWARD', 'total_bytes': 10240, 'recovered_bytes': 100,
++                'unreadable_bytes': 0}
++        panel.show({**base, 'processed_bytes': 100})
++        panel.show({**base, 'processed_bytes': 1024})
++        panel.show({**base, 'processed_bytes': 2048})
++        panel.show({**base, 'processed_bytes': 3072})
++        self.assertEqual(len(stream.getvalue().splitlines()), 2)
++        self.assertNotIn('RESCUE  cursor=', stream.getvalue())
++
++    def test_rescue_cli_jsonl_is_machine_readable_and_image_exact(self):
++        with tempfile.TemporaryDirectory() as td:
++            src = Path(td) / 'src.img'
++            dst = Path(td) / 'dst.img'
++            data = b'ABCD' * (512 * 1024)
++            src.write_bytes(data)
++            out = io.StringIO()
++            err = io.StringIO()
++            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
++                code = run(['rescue-image', '--image', str(src), '--output', str(dst),
++                            '--progress-jsonl', '--no-live-dashboard', '--json'])
++            self.assertEqual(code, 0)
++            self.assertEqual(dst.read_bytes(), data)
++            self.assertEqual(json.loads(out.getvalue())['status'], 'completed')
++            lines = [ln for ln in err.getvalue().splitlines() if ln.strip()]
++            self.assertTrue(lines, err.getvalue())
++            self.assertTrue(all(json.loads(ln)['type'] == 'progress' for ln in lines))
++            event = json.loads(lines[-1])
++            self.assertEqual(event['processed_bytes'], len(data))
++            self.assertEqual(event['recovered_bytes'], len(data))
++            self.assertEqual(event['unreadable_bytes'], 0)
++            self.assertEqual(event['workflow'], 'rescue')
++            self.assertEqual(len(event['map']), 512)
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/desktop/tests/test_triage.py b/desktop/tests/test_triage.py
+index 1f00840..6d19537 100644
+--- a/desktop/tests/test_triage.py
++++ b/desktop/tests/test_triage.py
+@@ -53,3 +53,24 @@ class TriageTests(unittest.TestCase):
+ 
+ if __name__ == '__main__':
+     unittest.main()
++
++class TargetedIntegrityTriageTests(unittest.TestCase):
++    def test_suspect_recheck_finds_inconsistent_data_without_writes(self):
++        from driverepair_desktop.scanner import scan_reader
++        class Reader:
++            def __init__(self):
++                self.n = 0
++            def read_at(self, offset, count):
++                if offset == 0:
++                    self.n += 1
++                    if self.n == 1:
++                        raise OSError(5, 'synthetic read error')
++                    if self.n >= 3:
++                        return b'Q' * count
++                return b'P' * count
++        r = Reader()
++        result = scan_reader(r, size=1024*1024*3, sector=512, mode='triage', chunk=1024*1024,
++                             samples=3, compare_suspects=True, max_errors=10)
++        self.assertGreaterEqual(result['extra_suspect_reads'], 2)
++        self.assertTrue(result['inconsistent_reads'])
++        self.assertIn('UNKNOWN', result['inconsistent_reads'][0]['interpretation'])
+diff --git a/docs/INTEGRITY_RECOVERY.md b/docs/INTEGRITY_RECOVERY.md
+new file mode 100644
+index 0000000..1a5a70a
+--- /dev/null
++++ b/docs/INTEGRITY_RECOVERY.md
+@@ -0,0 +1,76 @@
++# Data integrity, changed bits and selective recovery
++
++**Status: experimental image-only integrity tools. No physical-disk write support.**
++
++## What a successful read means
++
++A successful raw disk read means that the operating system/device returned bytes. It does **not** prove that the bytes match the data originally written, or that the files are semantically intact. Most ATA/NVMe devices perform their own ECC internally, but corrected/uncorrectable media errors, controller/transport failure, and silent corruption are not interchangeable. Repeated identical reads are not a substitute for previously trusted checksums.
++
++DriveRepair distinguishes:
++
++| Result | Meaning |
++|---|---|
++| Readable | Device responded with bytes; correctness not established |
++| Hash matched | Bytes match an external pre-existing baseline for this chunk |
++| Hash mismatched | Bytes differ from baseline, but that alone doesn't locate physical cause |
++| Unknown | The rescue journal reports unreadable/unvisited bytes, or read returned an error |
++| Verified restored copy | A **new output image** matches all expected reference hashes after suspect chunks were replaced with verified reference bytes |
++
++Only compare copies that represent the **same immutable point-in-time snapshot**. A manifest from last month applied to a live-updated drive could interpret perfectly legitimate file changes as corruption. Do not "restore" an older snapshot over newer data without intending that rollback.
++
++Do not call a blank or sparsely allocated region recovered. An image created from an already-corrupt disk can have a perfectly matching **newly created** manifest and still contain corruption. For trustworthy detection, preserve hashes from before a failure or obtain them from a separately verified known-good copy, backup, signed vendor distribution, or filesystem metadata with verified provenance. These JSON manifests are NOT authenticated or cryptographically signed; protect them from modification and keep an independent copy.
++
++## Guided commands
++
++From `desktop` with Python 3.10+:
++
++```sh
++# On a known-good image, BEFORE corruption is suspected; save outside patient disk.
++python -m driverepair_desktop integrity-baseline \
++  --image known-good.img --output known-good.sha256chunks.json \
++  --chunk-mib 16 --json
++
++# Later, find which chunks in another image differ from the saved baseline.
++python -m driverepair_desktop integrity-audit \
++  --image suspect.img --manifest known-good.sha256chunks.json --json
++
++# Optional: restore only changed chunks from an independent, checksum-matching
++# known-good image into a NEW output image. Original images remain untouched.
++python -m driverepair_desktop integrity-restore-copy \
++  --image suspect.img --reference trusted-copy.img \
++  --manifest known-good.sha256chunks.json \
++  --ack-same-snapshot --output corrected-new.img --json
++
++# Optional: on a sampled diagnostic scan, double-read *suspicious* chunks.
++# May stress a failing device; divergent reads mean UNKNOWN correct bits.
++python -m driverepair_desktop scan-image --image suspect.img \
++  --mode triage --compare-suspects --json
++```
++
++GUI: **Integrity / bit errors** tab. `Create baseline` is an *unattested* manifest and is not itself proof of correctness. `Check for changed chunks` shows offsets and counts. `Restore proven chunks` creates a **new** full-size image, potentially requiring space for another full image. On compatible Linux copy-on-write filesystems, the tool attempts a reflink clone to minimize data duplication and only writes verified changed chunks; it falls back to a full streaming copy if unsupported. Output is read back for hash comparison. Protect the original and do not use the experimental feature directly on valuable physical media.
++
++## Performance / strategy
++
++- **First pass**: sequential rescue copies accessible bytes rapidly, minimizing time spent on failing areas.
++- **Missing reads**: retry only journaled missing ranges, with smaller reads and an explicit failure budget, rather than rescanning the entire disk.
++- **Suspected slow regions**: sampled triage probes nearby chunks; optional repeated-suspect reads detect instability, not the true value.
++- **With a known-good checksum baseline**: hash every image chunk once, report exact **chunk ranges**, and read the independent recovery source **only for mismatched chunks**. Smaller chunk sizes narrow the targeted recovery area but increase manifest size and metadata processing.
++- **Without trustworthy reference data**: DriveRepair cannot identify or safely correct an arbitrary silent bit flip. Prefer recoverable backups, filesystems with checksums and redundant copies (ZFS/Btrfs), parity recovery archives, vendor package signatures, and application-aware checks.
++
++Read/write performance benefits must be measured on equivalent devices and error maps, with **verified correct bytes, source I/O, latency, failure rates, recovered coverage, and destination writes**. A fast scan that never sampled the bad block cannot establish superiority over a full scan.
++
++## Constraints before beta
++
++- Current desktop recovery remains primarily **Python** with a separate experimental Rust image core. The new integrity functionality is Python, not yet in Rust.
++- No source-drive writes, automatic bit fixing, firmware repairs or live filesystem repair are introduced by this release.
++- Incomplete rescue journals produce **UNKNOWN** chunks, not corruption findings. The image repair command declines those inputs rather than presenting a complete result.
++- No end-to-end signed reference-manifest trust chain or per-file filesystem block mapping yet.
++- Hardware disk failure may make extra reads unsafe. Users should choose rescue-first and work on images whenever possible.
++- No BIOS/UEFI boot validation or Windows/macOS hardware qualification is implied.
++
++### Documentation references
++
++- [OpenZFS checksums](https://openzfs.github.io/openzfs-docs/Basic%20Concepts/Data%20Storage/Checksums.html)
++- [OpenZFS scrub and repair](https://openzfs.github.io/openzfs-docs/Basic%20Concepts/Operations/Scrub%20and%20Resilver.html)
++- [Btrfs scrub](https://btrfs.readthedocs.io/en/latest/Scrub.html)
++- [GNU ddrescue manual](https://www.gnu.org/software/ddrescue/manual/ddrescue_manual.html)
+diff --git a/scripts/build_desktop.py b/scripts/build_desktop.py
+index 8f54728..0d3dd1e 100644
+--- a/scripts/build_desktop.py
++++ b/scripts/build_desktop.py
+@@ -14,7 +14,7 @@ from pathlib import Path
+ 
+ REPO = Path(__file__).resolve().parent.parent
+ DESKTOP = REPO / 'desktop'
+-VERSION = '0.3.1b1'
++VERSION = '0.3.3b1'
+ 
+ 
+ def command(args: list[str], cwd: Path = DESKTOP) -> None:

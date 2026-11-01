@@ -27,6 +27,7 @@ from .recovery import rescue_reader
 from .fat32_undelete import undelete_fat32, list_deleted_fat32
 from .filesystem_repair import check_ext_image, repair_ext_image
 from .verification import verify_images
+from .integrity import build_manifest, audit_image, restore_image_from_reference
 from .media_refresh import (
     ImageReadWriter,
     JournalStore,
@@ -39,6 +40,7 @@ from .media_refresh import (
 from .power_guard import VolatilePowerGuard, PowerGuardError
 from .refresh_display import RefreshDashboard
 from .progress_events import ProgressEmitter
+from .rescue_display import RescueTerminal, rescue_event, destination_free_space
 from .encryption import (
     encryption_guidance,
     require_plaintext_filesystem,
@@ -75,6 +77,8 @@ def parser() -> argparse.ArgumentParser:
                          help="Evenly spaced chunks in sample mode (default: 128)")
         cmd.add_argument("--chunk-mib", type=int, default=1, choices=[1, 2, 4, 8],
                          help="Read size in MiB (default: 1)")
+        cmd.add_argument("--compare-suspects", action="store_true",
+                         help="Extra repeated reads of suspicious triage regions; does NOT identify correct bytes")
         cmd.add_argument("--max-errors", type=int, default=16,
                          help="Stop after this many failing reads (default: 16)")
         cmd.add_argument("--ack-risk", action="store_true",
@@ -102,6 +106,10 @@ def parser() -> argparse.ArgumentParser:
                              help="12-character identity hint from list-all-linux")
             cmd.add_argument("--ack-offline-system", action="store_true",
                              help="Only after booting a trusted live OS; original system disk must be unmounted")
+        cmd.add_argument("--progress-jsonl", action="store_true",
+                         help="Send throttled structured rescue progress on stderr (GUI integration)")
+        cmd.add_argument("--no-live-dashboard", action="store_true",
+                         help="Disable human-readable rescue progress (use --progress-jsonl for integrations)")
         cmd.add_argument("--json", action="store_true")
     for name in ("benchmark-image", "benchmark-external"):
         cmd = sub.add_parser(name, help="Measure read throughput and zone latency without writing")
@@ -160,6 +168,23 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser('compare-benchmarks', help='Compare two recorded read benchmarks')
     cmd.add_argument('--before', required=True)
     cmd.add_argument('--after', required=True)
+    cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser('integrity-baseline', help='Create untrusted SHA-256 chunk baseline from a stable image; preserve independently')
+    cmd.add_argument('--image', required=True)
+    cmd.add_argument('--output', required=True, help='NEW manifest JSON, not on the failing device')
+    cmd.add_argument('--chunk-mib', type=int, default=16, choices=[1, 2, 4, 8, 16, 32, 64])
+    cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser('integrity-audit', help='Compare an image to existing external reference hashes; identify suspicious chunks')
+    cmd.add_argument('--image', required=True)
+    cmd.add_argument('--manifest', required=True)
+    cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser('integrity-restore-copy', help='Create NEW corrected image using hash-verified chunks from a known-good reference')
+    cmd.add_argument('--image', required=True, help='Damaged regular-file image')
+    cmd.add_argument('--reference', required=True, help='Separate known-good image of the SAME immutable data snapshot')
+    cmd.add_argument('--ack-same-snapshot', action='store_true',
+                     help='Confirm these files represent the same point in time; legitimate later writes are NOT corruption')
+    cmd.add_argument('--manifest', required=True)
+    cmd.add_argument('--output', required=True, help='NEW image, never the source disk')
     cmd.add_argument('--json', action='store_true')
     cmd = sub.add_parser('verify-images', help='Compare recovered image byte-for-byte with a stable source image')
     cmd.add_argument('--image', required=True, help='Original regular-file image')
@@ -623,6 +648,14 @@ def _run_extras(args) -> int:
     elif args.command == 'salvage-zip':
         result = salvage_zip(args.archive, args.output_dir, max_files=args.max_files,
                              max_file_mib=args.max_file_mib, max_total_mib=args.max_total_mib)
+    elif args.command == 'integrity-baseline':
+        result = build_manifest(args.image, args.output, chunk_mib=args.chunk_mib)
+    elif args.command == 'integrity-audit':
+        result = audit_image(args.image, args.manifest)
+    elif args.command == 'integrity-restore-copy':
+        if not args.ack_same_snapshot:
+            raise ValueError('Require --ack-same-snapshot: differences between dates may be legitimate data, not flipped bits')
+        result = restore_image_from_reference(args.image, args.reference, args.manifest, args.output)
     elif args.command == 'verify-images':
         result = verify_images(args.image, args.output)
     elif args.command == 'inspect-encryption':
@@ -981,11 +1014,15 @@ def _run_extras(args) -> int:
                     raise ValueError('--multi-pass and --retry-missing cannot be combined')
                 _rescue_last_emit = [0.0]
                 _rescue_last_identity = [0.0]
+                _rescue_last_capacity = [0.0]
+                _rescue_capacity = [None]
+                rescue_emitter = ProgressEmitter(enabled=bool(args.progress_jsonl), min_interval_s=0.2)
+                rescue_console = RescueTerminal() if not args.no_live_dashboard and not args.progress_jsonl else None
+                rescue_phase = ['FORWARD']
 
-                def check_progress(state):
+                def check_progress(state, *, force=False):
                     now = time.monotonic()
-                    # Identity re-check is expensive on Windows (Get-Disk via PowerShell).
-                    # Re-query a few times per minute — not once per 8 MiB chunk.
+                    # Discover identity periodically; do not launch PowerShell per chunk.
                     if is_device and (now - _rescue_last_identity[0] >= 15.0 or
                                       state.get('status', '').startswith('completed')):
                         _rescue_last_identity[0] = now
@@ -993,19 +1030,22 @@ def _run_extras(args) -> int:
                                   else select_external_device(args.device))
                         if latest.fingerprint != source_token:
                             raise RuntimeError('Patient device changed mid-recovery; job halted')
-                    # Throttled operator progress so long rescues do not look hung
-                    # under --json (final JSON still prints only at the end).
-                    if now - _rescue_last_emit[0] >= 2.0 or state.get('status', '').startswith('completed'):
-                        _rescue_last_emit[0] = now
-                        cursor = int(state.get('cursor') or 0)
-                        recovered = int(state.get('recovered_bytes') or 0)
-                        pct = (100.0 * cursor / size) if size else 0.0
-                        print(
-                            f"RESCUE  cursor={cursor} ({pct:.1f}%) recovered={recovered} "
-                            f"missing={len(state.get('missing_ranges') or [])} "
-                            f"status={state.get('status')}",
-                            file=sys.stderr, flush=True,
-                        )
+                    # The map is bounded but constructing it for every fsynced chunk
+                    # is unnecessary on multi-terabyte disks.
+                    if not force and now - _rescue_last_emit[0] < 0.5:
+                        return
+                    _rescue_last_emit[0] = now
+                    if now - _rescue_last_capacity[0] >= 5.0:
+                        _rescue_last_capacity[0] = now
+                        _rescue_capacity[0] = destination_free_space(args.output)
+                    event = rescue_event(
+                        state, total=size, phase=rescue_phase[0],
+                        destination=args.output, free_bytes=_rescue_capacity[0],
+                    )
+                    # stderr remains a machine-readable stream when JSONL is requested.
+                    rescue_emitter.emit(event, force=force)
+                    if rescue_console:
+                        rescue_console.show(event, force=force)
                 result = rescue_reader(reader, size=size, sector=sector,
                                        output=args.output, source_token=source_token,
                                        chunk=args.chunk_mib * 1024 * 1024,
@@ -1015,7 +1055,8 @@ def _run_extras(args) -> int:
                                        max_chunks=getattr(args, 'max_chunks', None))
                 if args.multi_pass and result.get('status') == 'completed_with_missing_data':
                     # Revalidate device immediately before targeted retries.
-                    check_progress(result)
+                    check_progress(result, force=True)
+                    rescue_phase[0] = 'RETRY'
                     result = rescue_reader(reader, size=size, sector=sector,
                                            output=args.output, source_token=source_token,
                                            chunk=args.chunk_mib * 1024 * 1024,
@@ -1023,6 +1064,9 @@ def _run_extras(args) -> int:
                                            resume=True, retry_missing=True,
                                            progress=check_progress,
                                            max_chunks=getattr(args, 'max_chunks', None))
+                check_progress(result, force=True)
+                if rescue_console:
+                    rescue_console.finish()
             else:
                 result = read_benchmark(reader, size=size, sector=sector,
                                         mode=args.mode, samples=args.samples,
@@ -1041,6 +1085,8 @@ def _run_extras(args) -> int:
         print(json.dumps(result, indent=2))
     else:
         print(json.dumps(result, indent=2))
+    if args.command in {'integrity-baseline', 'integrity-audit', 'integrity-restore-copy'}:
+        return 0 if result.get('status') in {'manifest_created_unattested', 'matches_unattested_manifest', 'verified_restored_copy'} else 2
     if args.command in {'refresh-image', 'refresh-external', 'refresh-system'}:
         return 0 if result.get('status') == 'completed' else 2
     return 0 if result.get('status') in {'completed', 'comparison_only', 'smart_passed_limited',
@@ -1082,7 +1128,8 @@ def run(argv: list[str] | None = None) -> int:
                             'undelete-fat32', 'list-deleted-fat32',
                             'list-deleted-tsk', 'recover-selected-tsk',
                             'detect-filesystems', 'recover-image',
-                            'verify-images', 'check-ext-image', 'repair-ext-image',
+                            'verify-images', 'integrity-baseline', 'integrity-audit',
+                            'integrity-restore-copy', 'check-ext-image', 'repair-ext-image',
                             'compare-benchmarks', 'health', 'refresh-image', 'refresh-external', 'refresh-system',
                             'ram-journal-check', 'monitor-external', 'evidence-image',
                             'inspect-encryption'}:
@@ -1150,7 +1197,8 @@ def run(argv: list[str] | None = None) -> int:
             result = scan_reader(reader, size=size, sector=sector,
                                  mode=args.mode, samples=args.samples,
                                  chunk=args.chunk_mib * 1024 * 1024,
-                                 max_errors=args.max_errors, progress=report)
+                                 max_errors=args.max_errors,
+                                 compare_suspects=args.compare_suspects, progress=report)
             print(file=sys.stderr)
         finally:
             reader.close()

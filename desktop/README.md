@@ -1,6 +1,61 @@
-# DriveRepair desktop — 0.3.1b1
+# DriveRepair desktop — 0.3.3b1
 
 A privacy-first guided Python 3.10+ desktop UI/CLI, with incremental Rust recovery-core migration. This is not a signed standalone native installer. The GUI requires Tk. Raw-device repair remains experimental; do not operate on irreplaceable disks.
+
+## Image integrity and targeted hash-verified repair
+
+The **Integrity / bit errors** GUI page and `integrity-baseline`, `integrity-audit`,
+and `integrity-restore-copy` commands add SHA-256 reference chunk checking and
+optional restoration of mismatched chunks from a separately verified source into
+a **NEW output image**. The original remains untouched. Newly computed hashes
+are **not** evidence that already-corrupt original data was correct. An incomplete
+rescue map produces unknown chunks rather than falsely labeling holes as flipped bits.
+
+Triage scans may use `--compare-suspects` to reread a bounded number of
+suspicious regions and flag inconsistent results (correct bytes remain unknown).
+Read [the data integrity guide](../docs/INTEGRITY_RECOVERY.md) before relying
+on results. No physical-media bit correction was added.
+
+## New recovery dashboard
+
+The standard graphical interface now displays an always-visible status/progress
+strip, four recovery metrics, a compact activity map and destination-space
+warnings during **image rescue, Linux external rescue and Linux live-USB
+system-drive rescue**. By default, technical log messages are folded away; use
+**Advanced details / engine log** when investigating a problem. The controls on
+all workflow tabs scroll on small laptop displays, while Stop/Save report/Open
+destination remain accessible at the bottom of the application window.
+
+To rescue a disk image, open **Image recovery**, select the source and NEW output
+file, and click **Rescue**. An incomplete job can be continued using **Resume**.
+After a complete first pass with missing regions, use **Retry gaps**; the
+original bytes from a failing source are never invented. A resumed image's
+recovery map remains `OUTPUT.rescue.json` until you explicitly choose to keep
+or remove it. The GUI never automatically deletes recovery images.
+
+The disk map is approximate and shows **scanned/read regions** rather than
+certifying media health: green means bytes were read and saved, red indicates
+unreadable regions, blue indicates a partially covered segment, and dark means
+unscanned. A 100% first-pass indicator during retries does **not** mean all
+bytes were recovered. The calculated ETA covers the forward pass only; retries
+have no reliable ETA. Destination free-space estimates may be inaccurate for
+sparse images or remote-share quotas. Confirm the saved result with image
+verification and a filesystem check on a **copy** before relying on it.
+
+New CLI progress options for the Python rescue engine:
+
+```sh
+# Human-readable, compact terminal progress by default
+python3 -m driverepair_desktop rescue-image --image source.img --output new.img --multi-pass
+# Machine-readable progress (stderr JSONL), with final result on stdout
+python3 -m driverepair_desktop rescue-image --image source.img --output new.img \
+  --progress-jsonl --no-live-dashboard --json
+```
+
+The optional Rust rescue-image executable remains experimental and has not yet
+been integrated with this Python progress protocol; no claim of Rust/OS/hardware
+performance parity is made. Native Windows/macOS hardware testing and BIOS/UEFI
+boot validation remain separate release gates.
 
 ## Install and launch
 

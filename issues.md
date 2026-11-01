@@ -17,3 +17,6 @@
 15. Live ISO (`scripts/build_live_iso.sh`) is recipe-only — not built or BIOS/UEFI/Secure Boot tested.
 16. `rescue-system` / offline internal imaging is Linux-only; Windows/macOS cannot yet isolate destination ancestry the same way.
 17. Unrestricted public beta still blocked: real USB power-loss, journal fault injection, and competitor benchmarks unmet.
+18. Integrity workflow is **image + trusted reference** only — no automatic silent-bit correction on physical disks; cannot reconstruct bits without a good reference/redundancy (ZFS/Btrfs principle).
+19. Readable OS copy ≠ checksum-verified; first-pass rescue still counts successful reads as copied, not as original-content verified.
+20. Filesystem-aware integrity (map chunks → files; use FS checksums/redundancy) and Rust hot-path still pending.

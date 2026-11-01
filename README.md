@@ -2,10 +2,33 @@
 
 **Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
 
-**Current build: 0.3.1b1 / engineering beta candidate — NOT approved for public hardware-repair use.**
+**Current build: 0.3.3b1 / engineering beta candidate — NOT approved for public hardware-repair use.**
 The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
 
 **If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
+
+## Graphical recovery dashboard (0.3.2b1)
+
+Run `python3 -m driverepair_desktop gui` to launch the guided interface. Image,
+external-device, and offline-system-drive rescue jobs now send **structured,
+throttled rescue progress events** from the committed recovery map instead of
+flooding PowerShell with raw offsets. The persistent dashboard shows a
+progress bar, data saved, unreadable bytes, current/average throughput,
+forward-pass ETA, an approximate activity map, destination free space and
+incomplete-recovery warnings. Completed means the source reads were copied;
+**it does not mean the original files are correct or verified**.
+
+Use **Advanced details / engine log** to inspect technical output. Workflow
+pages scroll on smaller screens; **Stop job** stays visible. Interrupted
+image/external/system-drive rescues may be resumed with the corresponding
+**Resume** action, provided the source and destination identity matches the
+journal. Use **Retry gaps** only after the first pass is complete. Output
+images, recovered files and maps are never automatically deleted by the UI.
+
+For automation, rescue commands accept `--progress-jsonl --no-live-dashboard`.
+JSONL events go to stderr; final result JSON remains on stdout. CLI terminal
+output is now a compact single-line status on interactive terminals, or sparse
+log milestones if redirected.
 
 ## Workflows
 
@@ -143,3 +166,14 @@ python3 scripts/build_desktop.py
 ## License / privacy / contribution
 
 MIT, see [LICENSE](LICENSE). No proprietary recovery algorithms or source code are bundled. Consult [SECURITY.md](SECURITY.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before reporting test results or opening issues. Never publish patient serial numbers, file contents, authentication tokens, or recovery maps containing private paths without redaction.
+
+
+### Integrity and verified-copy restoration (0.3.3b1)
+
+The desktop GUI now offers an **Integrity / bit errors** tab. It compares
+SHA-256 chunk hashes against a previously captured baseline, distinguishes
+unreadable data from mismatches, and can build a **new** corrected image from
+verified reference chunks. Baselines created after corruption are not proof of
+original correctness. See [Integrity Recovery](docs/INTEGRITY_RECOVERY.md).
+
+This release does **not** introduce automatic on-disk bit correction.

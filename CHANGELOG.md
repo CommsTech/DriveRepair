@@ -1,3 +1,32 @@
+## 0.3.3b1 — Integrity-aware image recovery (experimental)
+
+- Added per-chunk SHA-256 reference baselines, image audits, and only-if-reference-matches restoration into a NEW image.
+- Incomplete/unknown rescue ranges are not mislabeled bit flips.
+- Added bounded optional repeat reads of suspicious triage regions to detect inconsistent OS-returned bytes.
+- Added GUI integrity page and safety/trust documentation.
+- Added optional Linux copy-on-write reflink optimization for new corrected images, with streaming fallback and output readback; existing images remain untouched.
+- Kept raw-device write behavior unchanged; no new hardware repair claims.
+
+## 0.3.2b1 — 2026-11-01 — Professional recovery dashboard (engineering candidate)
+
+- Replaced repeated `RESCUE cursor=...` log spam with compact terminal progress
+  and structured, throttled JSONL events for the GUI; machine-readable final
+  JSON remains on stdout.
+- Recovery dashboard: committed rescue data, unreadable bytes/regions, status,
+  current speed, forward-pass ETA, destination free space and a bounded sector
+  activity map. Unscanned regions are never colored as healthy.
+- Integrated image/external/offline-system rescue GUI progress; rescued-data
+  visualizations do not claim cryptographic correctness or physical health.
+- Added **Resume**, **Retry gaps**, explicit **Save report** and **Open
+  destination** controls. Technical logs remain available but hidden by
+  default; bounded the log buffer for long-running work.
+- Fixed progress-bar layout, made individual workflow pages scrollable on
+  laptop screens, and kept the Stop control visible at the bottom.
+- Added synthetic telemetry/CLI tests and virtual-display GUI end-to-end
+  smoke test; production drive hardware not touched.
+- Release remains NOT CLEARED for unattended patient writes, unverified
+  BIOS/UEFI boot media or claims of superiority to competing software.
+
 ## 0.3.1b1 — 2026-11-01 — Last-resort + offline recovery (NOT RELEASE-CLEARED)
 
 - Last-resort Linux `refresh-system`: experimental Adaptive in-place refresh of an
