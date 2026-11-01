@@ -142,21 +142,31 @@ class WindowsReadWriter:
         from ctypes import wintypes
         import subprocess
 
+        # SilentlyContinue: wiped RAW disks have zero partitions / access paths.
         script = (
-            f"Get-Partition -DiskNumber {int(disk_number)} -ErrorAction Stop | "
-            "ForEach-Object { $_.AccessPaths } | ConvertTo-Json -Compress"
+            f"$parts = @(Get-Partition -DiskNumber {int(disk_number)} -ErrorAction SilentlyContinue); "
+            "if ($parts.Count -eq 0) { '[]' } else { "
+            "$parts | ForEach-Object { $_.AccessPaths } | ConvertTo-Json -Compress }"
         )
         try:
-            raw = subprocess.run(
+            completed = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-                capture_output=True, check=True, timeout=25,
-            ).stdout.decode("utf-8-sig").strip()
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
+                capture_output=True, timeout=25,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
             raise RuntimeError(f"Cannot enumerate all patient volume access paths: {exc}") from exc
+        if completed.returncode != 0:
+            err = (completed.stderr or completed.stdout or b"").decode("utf-8-sig", errors="replace").strip()
+            raise RuntimeError(
+                f"Cannot enumerate all patient volume access paths: {err or completed.returncode}"
+            )
+        raw = completed.stdout.decode("utf-8-sig").strip()
         parsed = json.loads(raw) if raw and raw != "null" else []
         paths = [parsed] if isinstance(parsed, str) else list(parsed or [])
         volume_paths = []
         for path in paths:
+            if path is None or path == "":
+                continue
             if not isinstance(path, str):
                 raise RuntimeError("Unrecognized volume path in patient partition inventory")
             if path.startswith("\\\\?\\Volume{") and path.endswith("}\\"):
@@ -311,27 +321,38 @@ def assert_stable_identity(expected: Device, observed: Device) -> None:
 
 
 def assert_patient_idle_windows(device: Device) -> None:
-    """Refuse refresh when Windows reports a drive letter on the patient."""
+    """Refuse refresh when Windows reports a drive letter on the patient.
+
+    A wiped RAW disk with no partitions is idle — Get-Partition failing with
+    "no MSFT_Partition" must not block full-surface write verification.
+    """
     if sys.platform != "win32":
         return
     import subprocess
     number = int(device.path.rsplit("PhysicalDrive", 1)[-1])
+    # SilentlyContinue: unpartitioned/RAW patients are a valid wipe+refresh target.
     script = (
-        f"$p = Get-Partition -DiskNumber {number} -ErrorAction Stop; "
+        f"$p = @(Get-Partition -DiskNumber {number} -ErrorAction SilentlyContinue); "
         "$letters = @($p | Where-Object { $_.DriveLetter } | ForEach-Object { [string]$_.DriveLetter }); "
-        "$letters | ConvertTo-Json -Compress"
+        "if ($letters.Count -eq 0) { '[]' } else { $letters | ConvertTo-Json -Compress }"
     )
     try:
-        raw = subprocess.run(
+        completed = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-            capture_output=True, check=True, timeout=25,
-        ).stdout.decode("utf-8-sig").strip()
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            capture_output=True, timeout=25,
+        )
+    except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"Unable to verify patient mount state: {exc}") from exc
+    if completed.returncode != 0:
+        err = (completed.stderr or completed.stdout or b"").decode("utf-8-sig", errors="replace").strip()
+        raise RuntimeError(f"Unable to verify patient mount state: {err or completed.returncode}")
+    raw = completed.stdout.decode("utf-8-sig").strip()
     if not raw or raw == "null":
         return
     parsed = json.loads(raw)
     letters = [parsed] if isinstance(parsed, str) else list(parsed or [])
+    # Filter empty strings PowerShell may emit for blank DriveLetter fields.
+    letters = [str(item) for item in letters if str(item).strip()]
     if letters:
         raise RuntimeError(
             "Patient has mounted drive letter(s) "
