@@ -25,6 +25,23 @@ On restart, an interrupted `SAVED`/`WRITING` region is restored from the journal
 
 Unreadable or inconsistent sectors are **never** auto-rewritten.
 
+## Live dashboard
+
+Non-JSON runs show a terminal dashboard (phase, bar, surface map, latency, health indicators).  
+`mechanical*` is inferred from extreme latency streaks / I/O patterns — USB docks do not provide acoustic microphones.
+
+`--auto-escalate` (default on) subdivides slow/failed probe zones for deeper testing before refresh.
+
+## Journal backends
+
+| Backend | Region bytes | Meta | Resume strength | Speed |
+|---|---|---|---|---|
+| `hybrid` (default) | RAM | disk | queue/meta durable; in-flight region needs process memory or leftover `region.bin` | Fast |
+| `disk` | disk | disk | Strongest | Slower |
+| `memory` | RAM | tiny disk checkpoint | Weakest across crashes | Fastest |
+
+`--after-run keep|delete|ask` controls whether the journal directory is removed after a successful run.
+
 ## Live hardware gate
 
 External refresh requires `--ack-unvalidated-hardware`. On Windows, an **elevated Administrator** terminal is required for `GENERIC_WRITE` on `\\.\PhysicalDriveN`.

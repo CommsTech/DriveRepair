@@ -25,12 +25,14 @@ from .filesystem_repair import check_ext_image, repair_ext_image
 from .verification import verify_images
 from .media_refresh import (
     ImageReadWriter,
+    JournalStore,
     assert_patient_idle_windows,
     assert_stable_identity,
     open_device_readwrite,
     refresh_media,
     require_destructive_acknowledgements,
 )
+from .refresh_display import RefreshDashboard
 
 
 
@@ -125,9 +127,12 @@ def parser() -> argparse.ArgumentParser:
         cmd = sub.add_parser(name, help=help_text)
         cmd.add_argument('--image' if name == 'refresh-image' else '--device', required=True)
         cmd.add_argument('--journal', required=True,
-                         help='Directory for the rolling journal (meta.json + region.bin); keep OFF the patient')
+                         help='Directory for the rolling journal; keep OFF the patient')
         cmd.add_argument('--mode', choices=['adaptive', 'full'], default='adaptive',
                          help='adaptive=refresh slow readable regions; full=whole surface (high risk)')
+        cmd.add_argument('--journal-backend', choices=['hybrid', 'disk', 'memory'], default='hybrid',
+                         help='hybrid=region in RAM + meta on disk (fast); disk=fully durable; '
+                              'memory=RAM region with tiny meta checkpoint (fastest, weakest resume)')
         cmd.add_argument('--resume', action='store_true')
         cmd.add_argument('--chunk-mib', type=int, choices=[1, 2, 4, 8], default=1)
         cmd.add_argument('--max-errors', type=int, default=4096)
@@ -136,7 +141,13 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument('--adaptive-samples', type=int, default=256)
         cmd.add_argument('--slow-multiplier', type=float, default=2.0,
                          help='Adaptive: refresh regions at/above median_latency * multiplier')
+        cmd.add_argument('--auto-escalate', action=argparse.BooleanOptionalAction, default=True,
+                         help='On slow/failed probes, automatically subdivide and retest (default: on)')
         cmd.add_argument('--no-verify', action='store_true', help='Skip post-write reread comparison')
+        cmd.add_argument('--live-dashboard', action=argparse.BooleanOptionalAction, default=True,
+                         help='Animated terminal dashboard during refresh (default: on; off with --json)')
+        cmd.add_argument('--after-run', choices=['keep', 'delete', 'ask'], default='ask',
+                         help='Keep or delete the journal directory when the run finishes')
         cmd.add_argument('--ack-risk', action='store_true', help='Accept stress on failing media')
         cmd.add_argument('--ack-destructive', action='store_true', help='Accept patient-media writes')
         cmd.add_argument('--ack-no-backup', action='store_true',
@@ -284,12 +295,18 @@ def _run_extras(args) -> int:
             source_token, size = _source_image_token(args.image)
             media = ImageReadWriter(args.image)
             sector = 512 if size % 512 == 0 else 1
+        # Live progress always goes to stderr (TTY dashboard or line-mode for logs).
+        dashboard = RefreshDashboard(
+            mode=args.mode, size=size, enabled=bool(args.live_dashboard),
+            journal_backend=args.journal_backend,
+        )
         try:
             if not args.json:
                 print(
-                    f'DESTRUCTIVE In-Place Media Refresh ({args.mode}). '
+                    f'DESTRUCTIVE In-Place Media Refresh ({args.mode}, journal={args.journal_backend}). '
                     'Rolling journal protects only the active region. '
-                    'Unreadable/inconsistent sectors are skipped, not invented.',
+                    'Unreadable/inconsistent sectors are skipped, not invented. '
+                    'mechanical*=latency proxy (USB docks have no acoustic mic).',
                     file=sys.stderr,
                 )
 
@@ -300,17 +317,7 @@ def _run_extras(args) -> int:
 
             def check_progress(state):
                 identity_check()
-                if args.json:
-                    return
-                if state.get('status') == 'probing' and state.get('message'):
-                    print(state['message'], file=sys.stderr)
-                    return
-                cursor = int(state.get('cursor') or 0)
-                rewritten = int(state.get('rewritten_bytes') or 0)
-                if rewritten and rewritten % (8 * 1024 * 1024) < int(state.get('chunk') or 1):
-                    print(f"Refresh rewritten {rewritten:,} bytes mode={args.mode}", file=sys.stderr)
-                elif args.mode == 'full' and cursor % (64 * 1024 * 1024) < int(state.get('chunk') or 1):
-                    print(f"Refresh cursor {cursor:,}/{size:,} mode={args.mode}", file=sys.stderr)
+                dashboard.handle(state)
 
             result = refresh_media(
                 media, size=size, sector=sector, source_token=source_token,
@@ -318,14 +325,32 @@ def _run_extras(args) -> int:
                 mode=args.mode, verify=not args.no_verify, resume=args.resume,
                 max_errors=args.max_errors, consistency_reads=args.consistency_reads,
                 adaptive_samples=args.adaptive_samples, slow_multiplier=args.slow_multiplier,
+                journal_backend=args.journal_backend, auto_escalate=args.auto_escalate,
                 progress=check_progress, identity_check=identity_check,
             )
+            if not args.json:
+                dashboard.finish(result)
         finally:
             media.close()
         if is_device:
             latest = select_external_device(args.device)
             if latest.fingerprint != source_token:
                 result['status'] = 'aborted_device_identity_changed'
+        # Journal retention policy after a finished run.
+        keep = args.after_run
+        if keep == 'ask' and not args.json and sys.stdin.isatty():
+            answer = input(f"Keep refresh journal at {args.journal}? [y/N]: ").strip().lower()
+            keep = 'keep' if answer in {'y', 'yes'} else 'delete'
+        elif keep == 'ask':
+            keep = 'keep'
+        result['journal_retained'] = keep == 'keep'
+        if keep == 'delete' and result.get('status') not in {'interrupted', 'aborted_device_or_access_error'}:
+            try:
+                JournalStore(args.journal, args.journal_backend).cleanup()
+                result['journal_deleted'] = True
+            except OSError as exc:
+                result['journal_deleted'] = False
+                result['journal_delete_error'] = str(exc)
     else:
         is_device = args.command.endswith('-external')
         if is_device:
