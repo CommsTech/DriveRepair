@@ -123,7 +123,14 @@ class WindowsReadWriter:
         flags = 0x80000000  # FILE_FLAG_WRITE_THROUGH
         self.handle = self.kernel.CreateFileW(device.path, access, 0x3, None, 3, flags, None)
         if self.handle == ctypes.c_void_p(-1).value or self.handle is None:
-            raise ctypes.WinError(ctypes.get_last_error())
+            err = ctypes.get_last_error()
+            if err == 5:  # ERROR_ACCESS_DENIED
+                raise PermissionError(
+                    "Windows refused GENERIC_WRITE on the physical drive (WinError 5). "
+                    "Re-run DriveRepair from an elevated Administrator terminal for "
+                    "in-place refresh. Read-only scan/rescue-image do not require this."
+                )
+            raise ctypes.WinError(err)
         self._volume_handles: list[int] = []
 
     def lock_volumes(self, disk_number: int) -> None:
@@ -387,32 +394,53 @@ def _probe_adaptive_targets(
     chunk: int,
     samples: int,
     slow_multiplier: float,
-) -> list[tuple[int, int]]:
-    """Return slow-but-readable regions for Adaptive Refresh."""
+    progress: Callable[[str], None] | None = None,
+) -> tuple[list[tuple[int, int]], dict]:
+    """Return slow-but-readable regions plus probe telemetry for Adaptive Refresh."""
     blocks = max(1, (size + chunk - 1) // chunk)
     n = min(samples, blocks)
     timings: list[tuple[int, int, float]] = []
+    probe_failures = 0
     for i in range(n):
         index = (i * (blocks - 1) // (n - 1)) if n > 1 else 0
         offset = index * chunk
         length = min(chunk, size - offset)
         if length <= 0:
             continue
+        if progress and (i == 0 or i + 1 == n or (i + 1) % max(1, n // 8) == 0):
+            progress(f"Adaptive probe {i + 1}/{n} @ offset {offset:,}")
         started = time.perf_counter()
         try:
             data = media.read_at(offset, length)
             if len(data) != length:
+                probe_failures += 1
                 continue
         except OSError:
+            probe_failures += 1
             continue
         elapsed = time.perf_counter() - started
         timings.append((offset, length, elapsed))
     if not timings:
-        return []
+        return [], {
+            "adaptive_samples_requested": samples,
+            "adaptive_samples_readable": 0,
+            "adaptive_probe_failures": probe_failures,
+            "adaptive_targets": 0,
+            "adaptive_median_seconds": None,
+            "adaptive_threshold_seconds": None,
+        }
     times = sorted(t for _, _, t in timings)
     median = times[len(times) // 2]
     threshold = max(median * slow_multiplier, median + 1e-6)
-    return [(o, l) for o, l, t in timings if t >= threshold]
+    targets = [(o, l) for o, l, t in timings if t >= threshold]
+    return targets, {
+        "adaptive_samples_requested": samples,
+        "adaptive_samples_readable": len(timings),
+        "adaptive_probe_failures": probe_failures,
+        "adaptive_targets": len(targets),
+        "adaptive_median_seconds": round(median, 6),
+        "adaptive_threshold_seconds": round(threshold, 6),
+    }
 
 
 def _default_meta(
@@ -541,12 +569,16 @@ def refresh_media(
             mode=mode, verify=verify, consistency_reads=consistency_reads,
         )
         if mode == "adaptive":
-            targets = _probe_adaptive_targets(
+            def probe_progress(message: str) -> None:
+                if progress:
+                    progress({"status": "probing", "message": message, "cursor": 0, "chunk": chunk})
+
+            targets, probe_stats = _probe_adaptive_targets(
                 media, size=size, chunk=chunk, samples=adaptive_samples,
-                slow_multiplier=slow_multiplier,
+                slow_multiplier=slow_multiplier, progress=probe_progress,
             )
             meta["queue"] = [[o, l] for o, l in targets]
-            meta["adaptive_targets"] = len(targets)
+            meta.update(probe_stats)
         else:
             meta["queue"] = None  # sequential via cursor
         _state_save(meta_path, meta)
@@ -713,7 +745,7 @@ def refresh_media(
     meta["status"] = status
     meta["elapsed_seconds"] = round(time.monotonic() - started, 3)
     save()
-    return {
+    result = {
         "schema": 2,
         "operation": "media_refresh_rolling",
         "status": meta["status"],
@@ -737,4 +769,12 @@ def refresh_media(
         "consistency_reads": consistency_reads,
         "elapsed_seconds": meta["elapsed_seconds"],
         "notes": meta["notes"],
+        "windows_admin_required": sys.platform == "win32",
     }
+    for key in (
+        "adaptive_samples_requested", "adaptive_samples_readable", "adaptive_probe_failures",
+        "adaptive_targets", "adaptive_median_seconds", "adaptive_threshold_seconds",
+    ):
+        if key in meta:
+            result[key] = meta[key]
+    return result

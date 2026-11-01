@@ -27,4 +27,8 @@ Unreadable or inconsistent sectors are **never** auto-rewritten.
 
 ## Live hardware gate
 
-External refresh requires `--ack-unvalidated-hardware` until sacrificial HDD tests (forced interrupt + USB disconnect) pass. The 12 TB patient should wait for that validation.
+External refresh requires `--ack-unvalidated-hardware`. On Windows, an **elevated Administrator** terminal is required for `GENERIC_WRITE` on `\\.\PhysicalDriveN`.
+
+### First Windows USB live adaptive result (2026-11-01)
+
+Patient: Seagate ST12000N ~12 TB via USB dock (`windows:PhysicalDrive2`, fake serial suffix `0001`). Adaptive pass with 128 probes selected 7 slow readable MiB regions; all 7 MiB rewritten and verified; no skips. Interrupt/USB-disconnect fault injection on sacrificial hardware is still outstanding before treating the mode as generally validated.

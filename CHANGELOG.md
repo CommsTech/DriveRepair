@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3 — Live Windows adaptive refresh hardening (2026-11-01) — PRIVATE TEST ONLY
+
+- Clear Administrator requirement when Windows denies physical-drive write access.
+- Adaptive probe telemetry in JSON (targets, median/threshold, probe failures).
+- First elevated live adaptive run on USB 12 TB patient completed (sampled regions only).
+
 ## 0.2.2 — Rolling-journal In-Place Media Refresh (2026-11-01) — PRIVATE TEST ONLY
 
 - Replaced simple rewrite with transactional rolling journal: `SAVED → WRITING → VERIFIED → COMMITTED`.

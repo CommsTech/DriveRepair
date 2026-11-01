@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -178,6 +179,23 @@ class RollingJournalTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), self.raw)
         self.assertGreaterEqual(result["rewritten_bytes"], 1024)
         self.assertLess(result["rewritten_bytes"], len(self.raw))
+        self.assertIn("adaptive_targets", result)
+        self.assertGreaterEqual(result["adaptive_targets"], 1)
+
+    def test_windows_access_denied_message_is_actionable(self):
+        from driverepair_desktop.devices import Device
+        from driverepair_desktop.media_refresh import WindowsReadWriter
+        if sys.platform != "win32":
+            self.skipTest("Windows only")
+        device = Device("windows:PhysicalDrive2", r"\\.\PhysicalDrive2", "x", 4096, 512, "usb", "1")
+        # Non-elevated opens commonly fail; message must mention Administrator.
+        try:
+            WindowsReadWriter(device)
+        except PermissionError as exc:
+            self.assertIn("Administrator", str(exc))
+        except OSError:
+            # Other failures (missing drive, etc.) are acceptable outside live lab.
+            pass
 
     def test_cli_full_refresh_image(self):
         code = run([
