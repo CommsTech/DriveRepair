@@ -6,7 +6,6 @@ import io
 import json
 import sys
 import unittest
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from driverepair_desktop.cli import run

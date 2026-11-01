@@ -26,18 +26,22 @@ class EvidenceTests(unittest.TestCase):
 
     def test_never_overwrite_existing_report(self):
         with tempfile.TemporaryDirectory() as td:
-            src = Path(td)/'image'; src.write_bytes(b'x')
-            report = Path(td)/'report'; report.write_text('old')
+            src = Path(td) / 'image'
+            src.write_bytes(b'x')
+            report = Path(td) / 'report'
+            report.write_text('old')
             with self.assertRaises(FileExistsError):
                 image_evidence_manifest(str(src), str(report))
             self.assertEqual(report.read_text(), 'old')
 
     def test_rejects_symlinked_image(self):
         with tempfile.TemporaryDirectory() as td:
-            src = Path(td)/'image'; src.write_bytes(b'x')
-            link = Path(td)/'link'; link.symlink_to(src)
+            src = Path(td) / 'image'
+            src.write_bytes(b'x')
+            link = Path(td) / 'link'
+            link.symlink_to(src)
             with self.assertRaises(ValueError):
-                image_evidence_manifest(str(link), str(Path(td)/'out'))
+                image_evidence_manifest(str(link), str(Path(td) / 'out'))
 
 if __name__ == '__main__':
     unittest.main()

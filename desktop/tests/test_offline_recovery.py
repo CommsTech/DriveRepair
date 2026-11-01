@@ -19,7 +19,8 @@ class OfflineRecoveryTests(unittest.TestCase):
             {"path": "/dev/loop0", "type": "loop", "size": 1048576,
              "log-sec": 512},
         ]}
-        run_fake = lambda cmd: json.dumps(raw).encode()
+        def run_fake(cmd):
+            return json.dumps(raw).encode()
         self.assertEqual([d.id for d in linux_devices(run_fake)], ["linux:/dev/sdb"])
         self.assertEqual([d.id for d in linux_all_devices(run_fake)],
                          ["linux:/dev/sda", "linux:/dev/sdb"])
@@ -68,7 +69,9 @@ class OfflineRecoveryTests(unittest.TestCase):
         self.assertEqual(evaluate_snapshot(None, sample)['status'], 'baseline_recorded')
 
 
-if __name__ == '__main__': unittest.main()
+if __name__ == '__main__':
+    unittest.main()
+
 
 class OfflineRescueIntegrationTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform.startswith('linux'),

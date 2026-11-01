@@ -1,7 +1,6 @@
 """Tests for filesystem detection, NTFS undelete, and unified recover-image."""
 from __future__ import annotations
 
-import json
 import os
 import struct
 import tempfile
@@ -93,6 +92,37 @@ class FilesystemRecoverTests(unittest.TestCase):
         found = detect_filesystems(path)
         kinds = [d.kind for d in found]
         self.assertIn("ntfs", kinds)
+
+    def test_detect_exfat_boot(self):
+        path = os.path.join(self.tmp.name, "exfat.img")
+        boot = bytearray(512)
+        boot[3:11] = b"EXFAT   "
+        boot[510:512] = b"\x55\xaa"
+        with open(path, "wb") as f:
+            f.write(boot)
+            f.write(b"\x00" * 4096)
+        kinds = [d.kind for d in detect_filesystems(path)]
+        self.assertIn("exfat", kinds)
+
+    def test_detect_rejects_raw_device_path(self):
+        raw = r"\\.\PhysicalDrive0" if os.name == "nt" else "/dev/sda"
+        with self.assertRaises(ValueError):
+            detect_filesystems(raw)
+
+    def test_recover_image_filesystem_mode_on_ntfs(self):
+        path = os.path.join(self.tmp.name, "ntfs_fs_mode.img")
+        boot = _ntfs_boot(mft_lcn=1, spc=1)
+        record = _mft_record_deleted_resident("memo.txt", b"fs-mode-payload")
+        with open(path, "wb") as f:
+            f.write(boot)
+            f.write(record)
+            f.write(b"\x00" * 2048)
+        out = os.path.join(self.tmp.name, "out_fs_mode")
+        result = recover_image(path, out, mode="filesystem", max_files=10)
+        self.assertEqual(result["status"], "completed")
+        self.assertGreaterEqual(result["files_recovered_total"], 1)
+        self.assertTrue(result["filesystem_passes"])
+        self.assertGreaterEqual(result["filesystem_passes"][0].get("files_recovered", 0), 1)
 
     def test_ntfs_undelete_resident_deleted(self):
         path = os.path.join(self.tmp.name, "ntfs_del.img")

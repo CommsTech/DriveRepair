@@ -16,10 +16,12 @@ class PowerGuardTests(unittest.TestCase):
         sample = 'ups.status: OL CHRG\nbattery.charge: 99\nbattery.runtime: 3600\ndriver.name: usbhid-ups\n'
         class Proc:
             stdout = sample
-        with patch('subprocess.run', return_value=Proc()):
+        with patch('subprocess.run', return_value=Proc()) as run:
             result = _nut_status('backup')
         self.assertEqual(result['power_status'], 'OL')
         self.assertEqual(result['runtime_seconds'], 3600)
+        # Local-only NUT: loopback address, never a remote hostname.
+        self.assertEqual(run.call_args.args[0], ['upsc', 'backup@127.0.0.1'])
 
     def test_nut_rejects_low_battery_and_remote(self):
         class Proc:
