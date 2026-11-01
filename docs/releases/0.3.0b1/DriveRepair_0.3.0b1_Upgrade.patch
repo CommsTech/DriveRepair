@@ -1,0 +1,2772 @@
+diff --git a/.gitea/workflows/ci.yml b/.gitea/workflows/ci.yml
+index 4ce0b58..f8a6227 100644
+--- a/.gitea/workflows/ci.yml
++++ b/.gitea/workflows/ci.yml
+@@ -92,3 +92,18 @@ jobs:
+ 
+       - name: Smoke check portable desktop build
+         run: python scripts/build_desktop.py --no-wheel
++
++  native-recovery-core:
++    name: Standalone Rust regular-image rescue core tests
++    runs-on: ${{ matrix.os }}
++    strategy:
++      matrix:
++        os: [ubuntu-latest, windows-latest, macos-latest]
++    steps:
++      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
++      - name: Install Rust
++        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
++      - name: Build standalone Rust core
++        run: cargo build --manifest-path rust/recovery-core/Cargo.toml
++      - name: Test small image recovery core
++        run: cargo test --manifest-path rust/recovery-core/Cargo.toml
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index bc714e2..7aeca97 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,3 +1,15 @@
++## 0.3.0b1 — 2026-11-01 (controlled engineering candidate)
++
++- Read-only deleted FAT32 candidate catalog with stable selection IDs, selected-only restore and revalidation.
++- Optional Sleuth Kit `fls`/`icat` deleted-file preview/selected extraction for additional filesystems (installation dependent).
++- Guided GUI Start Here workflow and multi-select deleted-file table with filesystem backend chooser.
++- Bounded deterministic stratified quick triage sampling with neighboring suspect region investigation; never certifies unsampled areas.
++- Python image-rescue `--multi-pass` to perform first-pass salvage and targeted retries in one operation.
++- Standalone `rust/recovery-core` no-dependency regular-image multipass rescue crate (compiler/CI validation pending).
++- Scheduled read-only drive-health trend monitor (SMART/NVMe and optional sampled triage); no automatic patient rewrites.
++- Privacy-minimized SHA-256 evidence-image manifest without unsupported chain-of-custody claims.
++- Updated guides, benchmark plan and honest public-beta safety gates; original bootloader sources preserved as experimental.
++
+ # Changelog
+ 
+ ## 0.2.9b1 — Public-beta candidate safety and throughput groundwork (2026-11-01)
+diff --git a/README.md b/README.md
+index bb107f0..bad4930 100644
+--- a/README.md
++++ b/README.md
+@@ -1,97 +1,126 @@
+ # DriveRepair
+ 
+-**Experimental desktop drive diagnostics, image-first rescue, filesystem-aware undelete, and clone-only repair toolkit.**
++**Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
+ 
+-DriveRepair is intended to grow into a single desktop/bootable workflow for inspecting drives, rescuing readable sectors, recovering files, repairing filesystems, assessing media reliability and measuring maintenance outcomes. **It does not yet do all of those things**. The current supported desktop CLI runs from Python 3.10+ without rebooting; the historical Rust BIOS/UEFI code remains experimental and is not the desktop recovery engine. A Tkinter graphical interface now connects the supported desktop features.
++**Current build: 0.3.0b1 / engineering beta candidate — NOT approved for public hardware-repair use.**
++The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
+ 
+-**Release status: 0.2.9b1 BETA CANDIDATE — PRIVATE TEST ONLY.** This implementation has synthetic unit tests but no validated Windows/macOS physical-device rescue, no physically failing-disk recovery benchmarks and no verified firmware-level remediation.
++**If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
+ 
+-## Install and run (desktop, without restarting)
++## Workflows
+ 
+-```bash
++| Goal | Operation | Data at risk | Implementation |
++|---|---|---|---|
++| Identify a USB/external drive | `list` | No patient writes | Windows, Linux, macOS inventory (physical QA pending) |
++| Find suspicious areas quickly | `scan --mode triage` | Read stress only | Deterministic stratified sample and bounded neighboring probes |
++| Full surface readability | `scan --mode full --ack-risk` | Read stress only | Entire readable address space, no data correctness proof |
++| Rescue data first | `rescue-image --multi-pass`, `rescue-external` | Source read-only; output written | Python imaging/resume; direct physical rescue currently Linux experimental |
++| Recover selected deleted files | `list-deleted-fat32` → `undelete-fat32 --file-id ...` | Source image read-only | Conservative FAT32 contiguous candidate extraction |
++| Recover across more filesystems | `list-deleted-tsk` → `recover-selected-tsk --file-id ...` | Source image read-only | Optional Sleuth Kit (`fls`, `icat`) binary; OS/filesystem support depends on installation |
++| Salvage identifiable files | `carve-image`, `salvage-zip` | Source image read-only | PNG/JPEG and CRC-valid ZIP members (limited, no universal reconstruction) |
++| Repair an ext filesystem | `check-ext-image`, `repair-ext-image` | Writes a NEW copy only | `e2fsck` required; original preserved |
++| Monitor deterioration on schedule | `monitor-external` | SMART only by default; optional read stress | Private local trend history; never auto-refreshes |
++| Capture forensic hashes | `evidence-image` | Source image read-only | SHA-256 + minimal privacy-preserving JSON report; not a chain-of-custody certification |
++| Rejuvenate readable media in place | `refresh-image`, `refresh-external` | **CAN PERMANENTLY LOSE DATA** | Private hardware experiment; separate journal and explicit approvals |
++| Sanitize before disposal | Not yet enabled | Intentional destruction | Implement media-appropriate validated methods; no unsupported DoD certification |
++| Recover broken boot/system disk | Trustworthy live USB OS, run desktop CLI | Depends on workflow | Internal bootloader currently experimental/unverified |
++
++## Install
++
++```sh
+ cd desktop
+-python -m pip install .
+-python -m driverepair_desktop gui
++python3 -m pip install .
++python3 -m driverepair_desktop gui
+ # or: driverepair-gui
+ ```
+ 
+-`tkinter` may require your OS Python/Tk package. Windows and macOS can use regular-file recovery and read-only external-drive scanning; Linux also has experimental physical-disk image rescue.
+-
+-## Implemented desktop commands
+-
+-| Command | What it currently does | Source writes |
+-|---|---|---|
+-| `list` | Enumerate eligible external whole disks | None |
+-| `health` | Optional `smartctl` SMART/NVMe health snapshot without self-tests | None |
+-| `scan` / `scan-image` | Read-only sample/full diagnostics | None |
+-| `rescue-image` | Clone readable regions of a regular-file disk image to a new sparse image; journal/resume/targeted retry | None |
+-| `rescue-external` | **Linux only, experimental:** rescue selected external whole disk into a regular-file image on a different verified storage device | None to raw patient; destination written |
+-| `benchmark-image` / `benchmark-external` | Read throughput, percentile latency and slow-zone measurements | None |
+-| `compare-benchmarks` | Compare two same-source benchmark JSON files; *does not prove improved lifespan* | None |
+-| `carve-image` | Extract intact PNGs with CRC checks; best-effort JPEGs from disk images | None to image; output files created |
+-| `undelete-fat32` | Recover contiguous, apparently unallocated FAT32 deleted files; names/content unverified | None to image; output files created |
+-| `verify-images` | Byte-compare a stable source image and recovered image; report SHA-256/mismatches | None |
+-| `check-ext-image` | Non-modifying ext2/3/4 filesystem check through e2fsck | None |
+-| `repair-ext-image` | Clone ext filesystem image and run e2fsck repair on **the copy** | None to original; copy modified |
+-| `salvage-zip` | Recover CRC-valid, intact ZIP members even if other ZIP members are corrupt | None to archive; output files created |
+-| `ram-journal-check` | Read-only check of Linux tmpfs + local UPS/battery readiness for optional volatile journaling | None |
+-| `refresh-image` / `refresh-external` | **In-Place Media Refresh (experimental):** rolling journal `SAVED→WRITING→VERIFIED→COMMITTED`; `--mode adaptive` (default) or `full`; skips unreadable/inconsistent regions | **Writes patient media** after multi-flag acknowledgement; journal holds only the active region |
+-
+-**Not yet implemented:** NTFS/exFAT/APFS/ext4 undelete, fragmented FAT32 recovery, whole-disk partition-table repair, damaged-file reconstruction without redundancy, proven hardware media rejuvenation, physical-wear reversal, native signed installers, and a fully integrated modern bootable environment. In-place refresh is experimental and does **not** claim wear reversal. The desktop GUI is present but needs real-platform testing. Optional `health` uses local `smartctl` when present; absence or `unknown` does not mean healthy.
+-
+-## Get started
+-
+-```bash
+-cd desktop
+-python3 -m unittest discover -s tests -v
+-python3 -m driverepair_desktop --help
+-python3 -m driverepair_desktop list
+-python3 -m driverepair_desktop health --device linux:/dev/sdX --json
+-python3 -m driverepair_desktop benchmark-image --image /path/to/test.img --json
+-python3 -m driverepair_desktop rescue-image --image /path/to/test.img --output /safe/different/path/rescue.img --json
+-python3 -m driverepair_desktop carve-image --image /safe/path/rescue.img --output-dir /safe/path/carved --json
+-python3 -m driverepair_desktop salvage-zip --archive damaged.zip --output-dir recovered-members
+-```
++A portable `.pyz` is also produced by `python scripts/build_desktop.py`. The GUI requires Tk. No cloud, account, or telemetry is required. `smartctl`, `e2fsck`, and The Sleuth Kit are optional local programs for their corresponding functions.
+ 
+-For rescue after incomplete reads, use `rescue-image --resume --retry-missing` with the exact same source/image/output/chunk size. The `.rescue.json` map records unknown ranges. **A zero byte in a sparse rescue image might mean an unreadable/unattempted sector, not recovered original data. Always examine the map.**
++### Quick sample scan
+ 
+-Never put a recovery destination on the drive being rescued. By design the Linux live-device command refuses destinations that cannot be verified as separate block-device storage. Image-based workflows run on Windows, macOS and Linux; physical-device acquisition on Windows/macOS needs additional work.
++```sh
++python3 -m driverepair_desktop list --json
++python3 -m driverepair_desktop scan --device linux:/dev/sdX --mode triage --samples 128 --json
++# Scan IDs are returned by `list`; do not guess disk names or paths.
++```
+ 
+-See [desktop guide](desktop/README.md), [project status](docs/PROJECT_STATUS.md), and [media recovery research](docs/MEDIA_REFRESH_RESEARCH.md).
++A triage scan is only a **spot check**: even a clean result says nothing about unsampled sectors. If symptoms are severe, image before scanning repeatedly.
+ 
+-## Safety
++### Restore only selected deleted files
+ 
+-- Diagnostics and rescue use read-only source handles. All writes go to **new output files**.
+-- Default recovery commands do not rewrite physical sectors. `repair-ext-image` repairs a **new output copy** using optional `e2fsck`.
+-- `refresh-external` / `refresh-image` are a dedicated In-Place Media Refresh mode alongside image recovery—not a replacement for it. `refresh-external` requires a **disk-backed, separate-storage journal** and explicit acknowledgements (including `--ack-unvalidated-hardware`). It aborts on write/read-back failure without discarding the original bytes, and refuses to rewrite unreadable/inconsistent regions. A Linux-only, explicitly volatile `ramdisk` option requires verified RAM filesystem, battery/UPS telemetry, separate dock-power acknowledgment, and accepts host-crash data-loss risk. This is a **private experimental hardware feature**, not a full backup or public-release-certified remediation tool.
+-- Read errors can be recoverable later; continued reads and SMART queries can stress or wake a mechanically failing drive. For valuable failing media, professional recovery or a proven imaging tool may be preferable.
+-- Image-first recovery does not magically reconstruct lost data or reverse wear. The user must verify backups and destination identity.
+-- **This code has not undergone physical-hardware validation or security review sufficient for public release.**
++```sh
++python3 -m driverepair_desktop list-deleted-fat32 --image safe-copy.img --json
++python3 -m driverepair_desktop undelete-fat32 --image safe-copy.img \
++  --output-dir new-recovered-folder --file-id CATALOG_ID --json
++```
+ 
+-## Historical components
++The GUI's **Recover deleted files** tab supports multi-selection and previews candidates before extraction. FAT32 uses reconstructed partial 8.3 names and assumes contiguous unallocated clusters. For NTFS/ext/exFAT and other TSK-supported volumes, install `fls` and `icat`, choose the Sleuth Kit backend and the partition's start offset **in sectors**, then select files. Even a metadata entry or a SHA-256 of the extracted file cannot prove recovered original content.
+ 
+-`src/` and `src/boot/` contain earlier Rust prototypes. They are intentionally not invoked as hardware-repair drivers by the desktop CLI. The legacy USB writers under `scripts/` remain hard-disabled for safety.
++### Multipass image rescue
+ 
+-## License
++```sh
++python3 -m driverepair_desktop rescue-image --image input.img \
++  --output rescued.img --multi-pass --json
++# If interrupted, repeat with --resume --multi-pass.
++```
+ 
+-MIT, see [LICENSE](LICENSE). No third-party recovery engine is copied or bundled.
++The first pass prioritizes readable regions, and the optional second pass tries missing regions in smaller pieces. The Python map is `rescued.img.rescue.json`; **unreadable areas are not silently certified as recovered**. The experimental Rust core uses its own incompatible `.rmap` map, so never interchange engines on the same job.
+ 
+-## 0.2.9b1 preview — faster scanning and volatile RAM journaling
++### Optional Rust recovery core
+ 
+-**Do not run in-place refresh on irreplaceable media.** Discover a disk with `driverepair list --json`, compare model/size/masked serial, and use the current `identity_hint` in `refresh-external --confirm-identity`. Device paths can change when a USB dock reconnects; never copy a remembered `PhysicalDriveN` or `/dev/sdX` from another session.
++```sh
++cargo test --manifest-path rust/recovery-core/Cargo.toml
++cargo build --release --manifest-path rust/recovery-core/Cargo.toml
++# Set DRIVEREPAIR_RUST_CORE to the compiled executable or place it on PATH.
++python3 -m driverepair_desktop rescue-image --engine rust \
++  --image input.img --output new-rust-rescue.img --json
++```
++
++The standalone Rust core currently handles **regular images only**, not raw physical disks. It uses bounded buffers, a forward pass and a reverse split-retry pass, plus an fsynced progress log. Windows Rust-core resume is disabled pending hard-link identity protections; use the Python engine for Windows resume. **Rust builds have not been run in the analysis environment**; the CI job will compile and test this crate after it is pushed. The existing legacy boot/disk driver code is not a verified native desktop engine. See [architecture](docs/ARCHITECTURE_CURRENT.md).
+ 
+-To check a Linux RAM journal without writing a disk:
++### Forensic / scheduled monitoring
+ 
+ ```sh
+-# Prepare a temporary RAM filesystem with no swapping, if the host/kernel supports it.
+-sudo mkdir -p /mnt/driverepair-ram
+-sudo mount -t tmpfs -o size=256M,noswap,mode=0700 tmpfs /mnt/driverepair-ram
+-python -m driverepair_desktop ram-journal-check \
+-  --journal /mnt/driverepair-ram/job001 --power-source nut:myups --chunk-mib 8
++python3 -m driverepair_desktop evidence-image --image safe-copy.img \
++  --output new-manifest.json --case-ref CASE-001
++python3 -m driverepair_desktop monitor-external --device linux:/dev/sdX \
++  --expect-fingerprint FINGERPRINT12 --state /healthy-storage/drive-health.json --json
++# Optional bounded read sampling: --triage --ack-read-stress
+ ```
+ 
+-A locally connected, USB-managed Network UPS Tools device must report `OL`, at least 70% charge, and at least 15 minutes expected runtime. A Linux laptop battery can use `--power-source battery` while not discharging and at least 80% charged. Power checks repeat during the session. These signals **do not prove** that the external disk and USB dock share battery backup. UPS-backing does not prevent application crashes, USB bridge resets, hardware failure, or kernel crashes. A tmpfs journal survives process exits but **not** host reboot or loss of RAM; do not confuse it with a backup. If system swap is active, a tmpfs mount lacking `noswap` will be rejected. RAM journaling is disabled for physical writes on Windows/macOS until RAM-disk and battery behavior are validated there. For physical disks, durable disk journaling is still the default and recommended choice.
++See [scheduled monitoring](docs/SCHEDULED_MONITORING.md) and [release and safety gates](docs/PUBLIC_BETA_GATES.md).
++
++## Reliability and limits
++
++- Source disk operations are read-only by default. Linux direct-disk rescue verifies separate destination physical ancestry; other operating systems support image workflows until equivalently safe raw-device isolation is proven.
++- Device selection uses model, capacity, bus, location hints, masked serial and a short fingerprint. Revalidate immediately before any raw-device write. USB docks can obscure or change identifiers.
++- In-place media refresh is **experimental, explicitly destructive**. Its disk journal is recommended; optional Linux RAM-file-system journaling requires power telemetry and explicit volatility acceptance. A UPS is not a disk backup, and cannot reverse physical wear.
++- No claim of universal deleted-file restoration, physical-wear reversal, repaired damaged heads/platters, firmware repair, or government-certified sanitization is made.
++- Read success is not proof of file correctness. Forensics requires suitable acquisition controls, provenance, evidence retention and independent review.
++- This project does not transmit disk contents or telemetry to external services by default.
++- Modern SSD sanitization cannot be reduced to seven sequential overwrites. See NIST SP 800-88 Revision 2 and organization-approved media-specific requirements.
++- **Physical USB unplug, power-loss, and platform tests remain release blockers.** See [public beta gates](docs/PUBLIC_BETA_GATES.md).
++
++## Documentation
++
++- [Desktop installation and commands](desktop/README.md)
++- [Current architecture and Rust migration](docs/ARCHITECTURE_CURRENT.md)
++- [Guided system/boot recovery](docs/BOOT_RECOVERY.md)
++- [Scheduled health checks](docs/SCHEDULED_MONITORING.md)
++- [Competitor and laboratory benchmark protocol](docs/BENCHMARK_PROTOCOL.md)
++- [Public beta readiness gates](docs/PUBLIC_BETA_GATES.md)
++- [Project status](docs/PROJECT_STATUS.md)
++
++## Build and tests
++
++```sh
++cd desktop
++python3 -m unittest discover -s tests -v
++cd ..
++python3 scripts/build_desktop.py
++# Rust tools are separately verified in CI when Cargo is available.
++```
+ 
+-`refresh-external` requires additional deliberately verbose risk acknowledgements and is a private lab capability. For synthetic testing use `refresh-image` on a throwaway image. The `--chunk-mib` option supports 1–64 MiB; the best setting needs measured per-device throughput and fault-injection results. Larger regions reduce metadata and fsync frequency but raise the amount of original data simultaneously at risk. The desktop recovery engine is currently **Python**, not an optimized Rust driver; the Rust boot source is separate and unverified.
++## License / privacy / contribution
+ 
+-See [Release audit and beta gate](docs/release-readiness/BETA_CANDIDATE_0.2.9.md).
++MIT, see [LICENSE](LICENSE). No proprietary recovery algorithms or source code are bundled. Consult [SECURITY.md](SECURITY.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before reporting test results or opening issues. Never publish patient serial numbers, file contents, authentication tokens, or recovery maps containing private paths without redaction.
+diff --git a/desktop/README.md b/desktop/README.md
+index 47db8ae..68f789d 100644
+--- a/desktop/README.md
++++ b/desktop/README.md
+@@ -1,84 +1,64 @@
+-# DriveRepair desktop (0.2.7, experimental)
++# DriveRepair desktop — 0.3.0b1
+ 
+-DriveRepair provides a **native-desktop graphical interface** and a programmable CLI on Python 3.10+ for Windows, macOS and Linux. It runs **without rebooting**. The interface is Tk (`tkinter`, included in many Python installs but an extra OS package on some Linux distributions). It is not a signed Windows `.exe`, macOS `.app`, or bootable ISO.
++A privacy-first guided Python 3.10+ desktop UI/CLI, with incremental Rust recovery-core migration. This is not a signed standalone native installer. The GUI requires Tk. Raw-device repair remains experimental; do not operate on irreplaceable disks.
+ 
+ ## Install and launch
+ 
+-```bash
+-cd desktop
+-python -m pip install .
+-python -m driverepair_desktop gui
++```sh
++python3 -m pip install .
++python3 -m driverepair_desktop gui
+ # or: driverepair-gui
++python3 -m driverepair_desktop --help
+ ```
+ 
+-Run with `python3` on systems where `python` is Python 2 or not present. If Tk is unavailable, use `python -m driverepair_desktop --help` (no GUI dependency is required for the CLI). Linux packages may call Tk `python3-tk`. You can also run directly from this folder without installation.
++Native Rust regular-image rescue core (OPTIONAL):
+ 
+-## Functional capabilities
+-
+-| Command | Result | Writes source disk? | Prerequisites / limits |
+-|---|---|---|---|
+-| `list` | Enumerate conservatively filtered external physical whole disks | No | Host OS discovery tools |
+-| `scan` | Read-only sampled/full external-disk scans | No | OS disk read permission |
+-| `health` | SMART/NVMe device-health snapshot | No | Optional `smartctl`; drive/bridge support varies |
+-| `benchmark-external` | Sampled/full read performance | No | Explicit acknowledgment; can stress failing media |
+-| `rescue-external` | Image readable regions of external disk | No to source | **Linux only**; separate physical destination verified |
+-| `scan-image` | Readability scan of a regular-file image | No | Any supported desktop OS |
+-| `rescue-image` | Sparse image rescue, journal, resume, bounded retry | No | New destination image, same source on resume |
+-| `verify-images` | Byte-for-byte comparison and SHA-256 against stable original file | No | Original source file must still be readable/stable |
+-| `benchmark-image` | Regular-image read metrics | No | Cache affected |
+-| `carve-image` | PNG CRC-validated / heuristic JPEG carving | No | May include undeleted or fragmented content |
+-| `undelete-fat32` | Recover plausible contiguous FAT32 deleted files | No | Raw FAT32 volume or MBR FAT32 partition image |
+-| `salvage-zip` | CRC-validated intact ZIP members | No | ZIP central directory still readable |
+-| `check-ext-image` | `e2fsck -f -n` read-only ext2/3/4 filesystem check | No | `e2fsck` from e2fsprogs installed |
+-| `repair-ext-image` | Clone ext2/3/4 image and run `e2fsck -f -y` on the **clone only** | No | `e2fsck`, new path, `--ack-repair` |
+-
+-**Critical distinction:** Undelete is *speculative*. FAT32 directory entries preserve the size and starting cluster, but not the first filename character. A contiguous unallocated region can already have been overwritten or may originally have been fragmented. Every file is marked **UNVERIFIED**. Recovered image sectors likewise are not independently correct unless compared to known-good hashes/data.
+-
+-## Examples
+-
+-```bash
+-python -m driverepair_desktop list
+-python -m driverepair_desktop scan --device linux:/dev/sdX --mode sample --json
+-python -m driverepair_desktop rescue-image --image input.img --output rescued.img --json
+-python -m driverepair_desktop rescue-image --image input.img --output rescued.img --resume --retry-missing --json
+-python -m driverepair_desktop verify-images --image input.img --output rescued.img --json
+-python -m driverepair_desktop carve-image --image rescued.img --output-dir recovered_photos --json
+-python -m driverepair_desktop undelete-fat32 --image fat32.img --output-dir deleted_files --json
+-python -m driverepair_desktop salvage-zip --archive broken.zip --output-dir valid_members --json
+-python -m driverepair_desktop check-ext-image --image ext4_volume.img --json
+-python -m driverepair_desktop repair-ext-image --image ext4_volume.img --output ext4_repaired_copy.img --ack-repair --json
++```sh
++cargo build --release --manifest-path ../rust/recovery-core/Cargo.toml
++export DRIVEREPAIR_RUST_CORE=/path/to/driverepair-recovery-core
++python3 -m driverepair_desktop rescue-image --engine rust --image original.img --output new.img
+ ```
+ 
+-Use **IDs reported by `list`**, not a guessed device path. `rescue-external` currently requires a separately mounted physical destination on Linux and fails closed on unsupported storage layouts. Windows/macOS physical-disk rescue is **not implemented**; image-based recovery and external-disk scans are available without restarting.
+-
+-## Safety and fidelity
+-
+-- **`refresh-external` is a destructive, separately authorized experimental mode** that opens the patient for writing. It is **NOT** enabled by read-only diagnostics and **NOT** a substitute for backup. It requires explicit risk acknowledgements, separate-disk durable journal (`--journal-backend disk`), identity checks, exclusive access where supported, and read-back verification. macOS raw refresh is disabled pending safe exclusive-locking support. Windows/Linux live fault-injection validation is incomplete. Do not use on irreplaceable data.
+-- Clone-based filesystem repair modifies a **newly created image copy**, never the original.
+-- Any attempt to recover an unstable drive adds read stress. When the data is irreplaceable or the drive makes mechanical noises, consult a professional before repeated scans/retries.
+-- The `.rescue.json` journal is required to interpret missing/sparse sectors. **A zero in a sparse rescue output is not evidence of successfully recovered zeroes**. `verify-images` explicitly refuses incomplete recovery journals.
+-- A byte-exact comparison to a known source image is not evidence that the original media was free of corruption.
+-- The ext repair command only accepts *unpartitioned ext filesystem images*. It rejects partitioned whole-disk images; do not use it on mounted or active block devices. `e2fsck` repair can discard inconsistent metadata or file references **on the copy**. Preserve the original, the map, and any available backups.
+-- No deleted-file recovery claims apply to APFS, exFAT, NTFS, ext4, or fragmented FAT32 files at this stage. ZIP salvage needs a usable central directory.
+-- These are software tests and simulated media; actual desktop/raw-hardware validation is still outstanding.
+-
+-## Tests/build
+-
+-```bash
+-cd desktop
+-python -m unittest discover -s tests -v
+-python -m compileall -q driverepair_desktop
+-python -m pip wheel . --no-deps -w dist
++Rust core is experimental; no raw devices and no Windows Rust resume. Default Python engine remains the better-tested reference until CI/hardware comparisons establish parity. Rust `.rmap` is not compatible with Python `.rescue.json`.
++
++## Safe recovery shortcuts
++
++```sh
++# Fast, bounded read-only triage. Sampled areas ONLY.
++python3 -m driverepair_desktop list --json
++python3 -m driverepair_desktop scan --device linux:/dev/sdX --mode triage --samples 128
++# First-pass image rescue + focused retries (separate output drive required).
++python3 -m driverepair_desktop rescue-image --image source.img --output recovered.img --multi-pass
++# Preview BEFORE restoring; IDs are sourced from the current image.
++python3 -m driverepair_desktop list-deleted-fat32 --image recovered.img --json
++python3 -m driverepair_desktop undelete-fat32 --image recovered.img --file-id ID --output-dir newly-created-folder
++# Optional The Sleuth Kit, for additional filesystems; image only.
++python3 -m driverepair_desktop list-deleted-tsk --image recovered.img --offset-sectors 0 --json
++python3 -m driverepair_desktop recover-selected-tsk --image recovered.img --offset-sectors 0 \
++  --file-id ID --output-dir newly-created-folder
++# Evidence hash report, privacy-minimized and not a forensic certification.
++python3 -m driverepair_desktop evidence-image --image recovered.img --output new-evidence.json
++# Scheduled SMART trend check, no automatic repairs.
++python3 -m driverepair_desktop monitor-external --device linux:/dev/sdX \
++  --expect-fingerprint 12HEXCHARS --state /healthy-storage/history.json
+ ```
+ 
+-The `.whl` is portable Python, **not** a native bundled executable. Windows, Linux and macOS should each undergo physical hardware compatibility and GUI smoke tests before public release.
++Both deleted-file backends only return *candidates*, not guaranteed original content; FAT32 assumes a contiguous unallocated extent and does not restore overwritten bytes. TSK support depends on available `fls` and `icat` binaries and their filesystem parser support. Source disks and images are read-only in recovery paths. Destination must be a new path.
+ 
+-## In-place refresh (experimental; not public-release ready)
++GUI: choose a goal on the **Start here** tab, or open **Recover deleted files** for multi-selection. External drive list includes model/size/transport/location and an identity hint. Media-refresh operations remain separately gated and experimental.
+ 
+-`refresh-image` allows a synthetic regular-file test. `refresh-external` attempts original-disk writes only after strict checks; do not test on valuable disks. The rolling journal preserves **one region** on a healthy separate disk, normally 1 MiB, without requiring a 12 TB full image. A journal is **not a backup** against total failure of the source.
++## Optional system utilities
+ 
+-The journal defaults to `disk` and retains original bytes through `SAVED → WRITING → VERIFIED → COMMITTED`. The job stops on any failed write/readback, preserving the active region and its digest for a future resume. On interrupted jobs **never delete `region.bin` or `meta.json`**. Only a clean `completed` run may auto-delete its journal.
++- `smartctl` (smartmontools) for SMART and NVMe health.
++- `e2fsck` (e2fsprogs) for read-only ext checks or clone-only repair.
++- `fls` / `icat` (The Sleuth Kit) for metadata-assisted deleted-file recovery.
++- Cargo/Rust stable for the optional standalone image rescue core.
+ 
+-Use `--journal-backend disk` for physical media. The RAM-only backends are synthetic/image-testing conveniences and cannot survive power loss mid-write. A source disk with mounted partitions/holders must be detached before even considering physical refresh. USB docks can drop connections or report unstable identity: this build remains unvalidated on real hardware under power loss or hot-unplug.
++Physical USB-docked recovery on Windows/macOS, custom BIOS/UEFI boot ISO, 7-pass/DoD-certified erasure, firmware rescue and automated media refresh **are not validated/implemented**. See `../docs/PUBLIC_BETA_GATES.md` for release blockers and `../docs/ARCHITECTURE_CURRENT.md` for Rust migration.
+ 
+-A `completed_with_skips_or_verify_failures` or `completed_with_probe_errors` status is **not success** and returns a nonzero code. Unreadable areas are never filled with invented bytes. Journal/disk storage failures abort the operation.
++## Tests
++
++```sh
++python3 -m unittest discover -s tests -v
++python3 ../scripts/build_desktop.py
++```
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index 49747d7..d63320e 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.2.9b1"
++__version__ = "0.3.0b1"
+diff --git a/desktop/driverepair_desktop/cli.py b/desktop/driverepair_desktop/cli.py
+index 625bf20..fc08b94 100644
+--- a/desktop/driverepair_desktop/cli.py
++++ b/desktop/driverepair_desktop/cli.py
+@@ -10,6 +10,8 @@ from __future__ import annotations
+ import argparse
+ import json
+ import os
++import shutil
++import subprocess
+ import sys
+ import time
+ import zipfile
+@@ -21,7 +23,7 @@ from .carving import carve_image
+ from .archive_recovery import salvage_zip
+ from .health import health_snapshot
+ from .recovery import rescue_reader
+-from .fat32_undelete import undelete_fat32
++from .fat32_undelete import undelete_fat32, list_deleted_fat32
+ from .filesystem_repair import check_ext_image, repair_ext_image
+ from .verification import verify_images
+ from .media_refresh import (
+@@ -42,6 +44,9 @@ from .encryption import (
+     scan_path_for_encryption,
+ )
+ from . import console_ui as cui
++from .monitor import record_monitor_sample
++from .tsk_recovery import list_deleted_tsk, recover_selected_tsk
++from .forensics import image_evidence_manifest
+ 
+ 
+ 
+@@ -56,7 +61,7 @@ def parser() -> argparse.ArgumentParser:
+                              else "Read-only test scan of a regular file image")
+         target = cmd.add_mutually_exclusive_group(required=True)
+         target.add_argument("--device" if name == "scan" else "--image", required=False)
+-        cmd.add_argument("--mode", choices=["sample", "full"], default="sample")
++        cmd.add_argument("--mode", choices=["triage", "sample", "full"], default="triage")
+         cmd.add_argument("--samples", type=int, default=128,
+                          help="Evenly spaced chunks in sample mode (default: 128)")
+         cmd.add_argument("--chunk-mib", type=int, default=1, choices=[1, 2, 4, 8],
+@@ -71,7 +76,12 @@ def parser() -> argparse.ArgumentParser:
+         cmd.add_argument("--image" if name == "rescue-image" else "--device", required=True)
+         cmd.add_argument("--output", required=True, help="New regular-file image path")
+         cmd.add_argument("--resume", action="store_true", help="Resume a journaled recovery")
++        if name == 'rescue-image':
++            cmd.add_argument('--engine', choices=['python', 'rust'], default='python',
++                             help='Rust engine is optional / image-only / requires a separately built core')
+         cmd.add_argument("--retry-missing", action="store_true", help="Retry missing ranges after initial pass")
++        cmd.add_argument("--multi-pass", action="store_true",
++                         help="After first-pass rescue, automatically retry missing regions in smaller pieces")
+         cmd.add_argument("--chunk-mib", type=int, choices=[1, 2, 4, 8], default=1)
+         cmd.add_argument("--max-read-errors", type=int, default=4096)
+         if name == "rescue-external":
+@@ -102,6 +112,11 @@ def parser() -> argparse.ArgumentParser:
+     )
+     cmd.add_argument("--image", required=True)
+     cmd.add_argument("--json", action="store_true")
++    cmd = sub.add_parser('evidence-image', help='Read-only SHA-256 image hash and redacted evidence report')
++    cmd.add_argument('--image', required=True)
++    cmd.add_argument('--output', required=True, help='NEW JSON evidence manifest path')
++    cmd.add_argument('--case-ref', default='', help='Optional non-identifying local case code')
++    cmd.add_argument('--json', action='store_true')
+     cmd = sub.add_parser('salvage-zip', help='Salvage intact CRC-verified ZIP members')
+     cmd.add_argument('--archive', required=True)
+     cmd.add_argument('--output-dir', required=True)
+@@ -109,6 +124,13 @@ def parser() -> argparse.ArgumentParser:
+     cmd.add_argument('--max-file-mib', type=int, default=128)
+     cmd.add_argument('--max-total-mib', type=int, default=1024)
+     cmd.add_argument('--json', action='store_true')
++    cmd = sub.add_parser('monitor-external', help='Scheduled read-only SMART trend (optional sampled triage); NEVER auto-repairs')
++    cmd.add_argument('--device', required=True)
++    cmd.add_argument('--state', required=True, help='Private monitor history on healthy storage')
++    cmd.add_argument('--expect-fingerprint', required=True, help='12-digit identity hint from list --json')
++    cmd.add_argument('--triage', action='store_true', help='Include bounded sampled read check')
++    cmd.add_argument('--ack-read-stress', action='store_true', help='Accept repeated reads of potentially failing disk')
++    cmd.add_argument('--json', action='store_true')
+     cmd = sub.add_parser('health', help='Read SMART/NVMe health using optional smartctl')
+     cmd.add_argument('--device', required=True)
+     cmd.add_argument('--json', action='store_true')
+@@ -120,11 +142,32 @@ def parser() -> argparse.ArgumentParser:
+     cmd.add_argument('--image', required=True, help='Original regular-file image')
+     cmd.add_argument('--output', required=True, help='Image to verify')
+     cmd.add_argument('--json', action='store_true')
++    cmd = sub.add_parser('list-deleted-fat32', help='Preview deleted FAT32 files in an image without writing')
++    cmd.add_argument('--image', required=True)
++    cmd.add_argument('--max-candidates', type=int, default=10000)
++    cmd.add_argument('--max-file-mib', type=int, default=128)
++    cmd.add_argument('--allow-incomplete-image', action='store_true')
++    cmd.add_argument('--ack-encrypted-volume', action='store_true')
++    cmd.add_argument('--json', action='store_true')
++    cmd = sub.add_parser('list-deleted-tsk', help='Preview deleted files using optional Sleuth Kit fls')
++    cmd.add_argument('--image', required=True)
++    cmd.add_argument('--offset-sectors', type=int, default=0)
++    cmd.add_argument('--max-candidates', type=int, default=2000)
++    cmd.add_argument('--json', action='store_true')
++    cmd = sub.add_parser('recover-selected-tsk', help='Restore selected inode IDs using optional Sleuth Kit icat')
++    cmd.add_argument('--image', required=True)
++    cmd.add_argument('--output-dir', required=True)
++    cmd.add_argument('--file-id', action='append', dest='file_ids', required=True)
++    cmd.add_argument('--offset-sectors', type=int, default=0)
++    cmd.add_argument('--max-file-mib', type=int, default=1024)
++    cmd.add_argument('--json', action='store_true')
+     cmd = sub.add_parser('undelete-fat32', help='Recover contiguous deleted files from FAT32 disk images')
+     cmd.add_argument('--image', required=True)
+     cmd.add_argument('--output-dir', required=True)
+     cmd.add_argument('--max-files', type=int, default=100)
+     cmd.add_argument('--max-file-mib', type=int, default=128)
++    cmd.add_argument('--file-id', action='append', dest='file_ids', default=None,
++                     help='Recover ONLY this catalog ID; may be specified multiple times')
+     cmd.add_argument('--allow-incomplete-image', action='store_true')
+     cmd.add_argument('--ack-encrypted-volume', action='store_true',
+                      help='Allow undelete even if BitLocker/LUKS signatures are present (usually wrong)')
+@@ -330,12 +373,60 @@ def _verify_linux_patient_not_in_use(device) -> None:
+ 
+ 
+ def _run_extras(args) -> int:
+-    if args.command == 'health':
++    if args.command == 'monitor-external':
++        selected = select_external_device(args.device)
++        if selected.fingerprint[:12] != args.expect_fingerprint:
++            raise RuntimeError('Drive identity confirmation changed')
++        try:
++            snapshot = health_snapshot(selected)
++        except RuntimeError as exc:
++            snapshot = {'status': 'unknown', 'reason': str(exc)}
++        triage = None
++        if args.triage:
++            if not args.ack_read_stress:
++                raise ValueError('--triage requires --ack-read-stress')
++            reader = open_device_readonly(selected)
++            try:
++                triage = scan_reader(reader, size=selected.size_bytes, sector=selected.sector_size,
++                                     mode='triage', samples=96, chunk=1024 * 1024)
++            finally:
++                reader.close()
++        latest = select_external_device(args.device)
++        if latest.fingerprint != selected.fingerprint:
++            raise RuntimeError('Drive changed during monitoring; history not written')
++        result = record_monitor_sample(args.state, fingerprint=selected.fingerprint,
++                                       size_bytes=selected.size_bytes, health=snapshot, triage=triage)
++    elif args.command == 'health':
+         selected = select_external_device(args.device)
+         latest = select_external_device(args.device)
+         if latest.fingerprint != selected.fingerprint:
+             raise RuntimeError('Patient device changed before SMART query')
+         result = health_snapshot(selected)
++    elif args.command == 'rescue-image' and args.engine == 'rust':
++        # The native engine is opt-in until independent OS builds and crash
++        # recovery tests are complete. Never quietly switch journal formats.
++        from .recovery import _safe_path
++        src, out = os.path.realpath(args.image), _safe_path(args.output)
++        _source_image_token(args.image)
++        if os.path.exists(out) and os.path.samefile(src, out):
++            raise ValueError('Source and destination image are the same file')
++        executable = os.environ.get('DRIVEREPAIR_RUST_CORE') or shutil.which('driverepair-recovery-core')
++        if not executable:
++            raise RuntimeError('Rust core not installed. Build rust/recovery-core and set DRIVEREPAIR_RUST_CORE; '
++                               'or choose --engine python for the tested legacy engine.')
++        if args.retry_missing and not args.resume:
++            raise ValueError('--retry-missing requires --resume')
++        if args.multi_pass and args.retry_missing:
++            raise ValueError('--multi-pass and --retry-missing cannot be combined')
++        command = [executable, 'rescue-image', src, out, '--chunk-mib', str(args.chunk_mib)]
++        if args.resume:
++            command.append('--resume')
++        result = subprocess.run(command, capture_output=True, text=True, timeout=None, check=False)
++        if result.stderr:
++            print(result.stderr, file=sys.stderr)
++        if result.stdout:
++            print(result.stdout)
++        return result.returncode
+     elif args.command == 'ram-journal-check':
+         guard = VolatilePowerGuard(args.power_source, args.journal, args.chunk_mib * 1024 * 1024)
+         result = {'operation': 'ram_journal_check',
+@@ -348,6 +439,8 @@ def _run_extras(args) -> int:
+         with open(args.after, encoding='utf-8') as f:
+             after = json.load(f)
+         result = compare_benchmarks(before, after)
++    elif args.command == 'evidence-image':
++        result = image_evidence_manifest(args.image, args.output, case_ref=args.case_ref)
+     elif args.command == 'salvage-zip':
+         result = salvage_zip(args.archive, args.output_dir, max_files=args.max_files,
+                              max_file_mib=args.max_file_mib, max_total_mib=args.max_total_mib)
+@@ -364,6 +457,23 @@ def _run_extras(args) -> int:
+             "findings": [f.public() for f in findings],
+             "guidance": encryption_guidance(findings),
+         }
++    elif args.command == 'list-deleted-tsk':
++        result = list_deleted_tsk(args.image, offset_sectors=args.offset_sectors,
++                                  max_candidates=args.max_candidates)
++    elif args.command == 'recover-selected-tsk':
++        result = recover_selected_tsk(args.image, args.output_dir, selected_ids=args.file_ids,
++                                      offset_sectors=args.offset_sectors,
++                                      max_file_mib=args.max_file_mib)
++    elif args.command == 'list-deleted-fat32':
++        enc = require_plaintext_filesystem(
++            args.image, ack_encrypted_volume=args.ack_encrypted_volume,
++            operation='FAT32 deleted-file preview',
++        )
++        result = list_deleted_fat32(args.image, max_candidates=args.max_candidates,
++                                    max_file_mib=args.max_file_mib,
++                                    allow_incomplete=args.allow_incomplete_image)
++        if enc:
++            result['encryption_warnings'] = [f.public() for f in enc]
+     elif args.command == 'undelete-fat32':
+         enc = require_plaintext_filesystem(
+             args.image, ack_encrypted_volume=args.ack_encrypted_volume,
+@@ -371,7 +481,8 @@ def _run_extras(args) -> int:
+         )
+         result = undelete_fat32(args.image, args.output_dir, max_files=args.max_files,
+                                 max_file_mib=args.max_file_mib,
+-                                allow_incomplete=args.allow_incomplete_image)
++                                allow_incomplete=args.allow_incomplete_image,
++                                selected_ids=args.file_ids)
+         if enc:
+             result = {**result, "encryption_warnings": [f.public() for f in enc],
+                       "guidance": encryption_guidance(enc)}
+@@ -586,6 +697,8 @@ def _run_extras(args) -> int:
+             sector = 512 if size % 512 == 0 else 1
+         try:
+             if args.command.startswith('rescue-'):
++                if args.multi_pass and args.retry_missing:
++                    raise ValueError('--multi-pass and --retry-missing cannot be combined')
+                 def check_progress(state):
+                     if is_device:
+                         latest = select_external_device(args.device)
+@@ -597,6 +710,15 @@ def _run_extras(args) -> int:
+                                        max_failed_reads=args.max_read_errors,
+                                        resume=args.resume, retry_missing=args.retry_missing,
+                                        progress=check_progress)
++                if args.multi_pass and result.get('status') == 'completed_with_missing_data':
++                    # Revalidate device immediately before targeted retries.
++                    check_progress(result)
++                    result = rescue_reader(reader, size=size, sector=sector,
++                                           output=args.output, source_token=source_token,
++                                           chunk=args.chunk_mib * 1024 * 1024,
++                                           max_failed_reads=args.max_read_errors,
++                                           resume=True, retry_missing=True,
++                                           progress=check_progress)
+             else:
+                 result = read_benchmark(reader, size=size, sector=sector,
+                                         mode=args.mode, samples=args.samples,
+@@ -631,9 +753,10 @@ def run(argv: list[str] | None = None) -> int:
+             return 0
+         if args.command in {'rescue-image', 'rescue-external', 'benchmark-image',
+                             'benchmark-external', 'carve-image', 'salvage-zip',
+-                            'undelete-fat32', 'verify-images', 'check-ext-image', 'repair-ext-image',
++                            'undelete-fat32', 'list-deleted-fat32',
++                            'list-deleted-tsk', 'recover-selected-tsk', 'verify-images', 'check-ext-image', 'repair-ext-image',
+                             'compare-benchmarks', 'health', 'refresh-image', 'refresh-external',
+-                            'ram-journal-check',
++                            'ram-journal-check', 'monitor-external', 'evidence-image',
+                             'inspect-encryption'}:
+             return _run_extras(args)
+         if args.command == "list":
+@@ -715,7 +838,7 @@ def run(argv: list[str] | None = None) -> int:
+             f"errors={err_n}  elapsed={float(result.get('elapsed_seconds') or 0):.1f}s",
+             file=sys.stderr,
+         )
+-        if result.get("mode") == "sample":
++        if result.get("mode") in {"sample", "triage"}:
+             print("Sample scan only - untested regions may still have errors.", file=sys.stderr)
+         if args.json:
+             print(json.dumps(result, indent=2))
+diff --git a/desktop/driverepair_desktop/fat32_undelete.py b/desktop/driverepair_desktop/fat32_undelete.py
+index 9eefdb8..79ba9fb 100644
+--- a/desktop/driverepair_desktop/fat32_undelete.py
++++ b/desktop/driverepair_desktop/fat32_undelete.py
+@@ -131,18 +131,15 @@ def _clean_name(entry: bytes) -> str:
+     return re.sub(r'[^A-Za-z0-9_.-]', '_', name)[:32]
+ 
+ 
+-def undelete_fat32(image: str, output_dir: str, *, max_files: int = 100,
+-                   max_file_mib: int = 128, allow_incomplete: bool = False) -> dict:
+-    """Recover plausibly intact, contiguous deleted files into a fresh directory.
+-
+-    All files are flagged unverified; no directory entries or FAT are modified.
+-    """
+-    if not 1 <= max_files <= 10000 or not 1 <= max_file_mib <= 2048:
+-        raise ValueError('Invalid file limit')
++def _open_fat32_image(image: str, *, allow_incomplete: bool = False):
++    """Open a regular-file image; caller always closes the returned fd."""
+     source = os.path.abspath(image)
+-    target = os.path.abspath(output_dir)
+-    if source.replace('\\', '/').lower().startswith(('/dev/', '//./', '//?/')):
+-        raise ValueError('Use a regular image file, never a raw disk')
++    normalized = source.replace('\\', '/').lower()
++    if image.upper().rstrip(':\\/') in {'NUL', 'CON', 'PRN', 'AUX'} or (
++        normalized.startswith(('/dev/', '//./', '//?/')) or
++        image.startswith(('\\\\.\\', '\\\\?\\'))
++    ):
++        raise ValueError('Raw disk paths are not valid images')
+     if not stat.S_ISREG(os.lstat(source).st_mode):
+         raise ValueError('Source must be a regular file, not a symlink or device')
+     fd = os.open(source, binary_open_flags(os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)))
+@@ -156,92 +153,192 @@ def undelete_fat32(image: str, output_dir: str, *, max_files: int = 100,
+                 state = json.load(f)
+             if state.get('status') != 'completed':
+                 raise RuntimeError('Image contains missing ranges; explicitly allow incomplete image')
+-        if os.path.lexists(target):
+-            raise FileExistsError('Choose a new, nonexistent output directory')
+         volume = _find_volume(fd, st.st_size)
+-        # Creating a directory only after source validation prevents empty outputs
+-        # on unsupported images. Do not descend through symlink targets.
++        return fd, volume
++    except BaseException:
++        os.close(fd)
++        raise
++
++
++def _candidate_id(volume: Volume, offset: int, entry: bytes) -> str:
++    """Stable within this image snapshot; never uses user-controlled filenames."""
++    return hashlib.sha256(struct.pack('<Q', volume.start) +
++                          struct.pack('<Q', offset) + entry).hexdigest()[:20]
++
++
++def _enumerate_candidates(fd: int, volume: Volume, *, max_candidates: int,
++                          max_file_bytes: int) -> tuple[list[dict], dict]:
++    """Bounded read-only FAT32 directory traversal; deleted 8.3 entries only."""
++    from collections import deque
++    candidates: list[dict] = []
++    skipped: dict[str, int] = {}
++    visited_dirs: set[int] = set()
++    queue = deque([volume.root_cluster])
++    scanned_dirs = 0
++    while queue and scanned_dirs < 10000 and len(candidates) < max_candidates:
++        directory = queue.popleft()
++        if directory in visited_dirs:
++            continue
++        visited_dirs.add(directory)
++        try:
++            clusters = _chain(fd, volume, directory, 4096)
++        except (ValueError, OSError):
++            skipped['unreadable_directory'] = skipped.get('unreadable_directory', 0) + 1
++            continue
++        scanned_dirs += 1
++        done = False
++        for directory_cluster in clusters:
++            directory_offset = volume.cluster_offset(directory_cluster)
++            block = _read(fd, directory_offset, volume.cluster_bytes)
++            if len(block) != volume.cluster_bytes:
++                raise OSError('Directory read truncated')
++            for i in range(0, len(block), 32):
++                entry = block[i:i + 32]
++                first, attributes = entry[0], entry[11]
++                if first == 0:
++                    done = True
++                    break
++                if first != 0xe5:
++                    if (attributes & 0x10 and not attributes & 0x08 and
++                            attributes != 0x0f and first not in (0x2e,)):
++                        child = (struct.unpack_from('<H', entry, 20)[0] << 16 |
++                                 struct.unpack_from('<H', entry, 26)[0])
++                        if 2 <= child < volume.total_clusters + 2:
++                            queue.append(child)
++                    continue
++                if attributes == 0x0f or attributes & 0x18:
++                    continue
++                length = struct.unpack_from('<I', entry, 28)[0]
++                cluster = (struct.unpack_from('<H', entry, 20)[0] << 16 |
++                           struct.unpack_from('<H', entry, 26)[0])
++                if length == 0 or length > min(MAX_FILE_BYTES, max_file_bytes):
++                    skipped['size_limit'] = skipped.get('size_limit', 0) + 1
++                    continue
++                required = (length + volume.cluster_bytes - 1) // volume.cluster_bytes
++                if cluster < 2 or cluster + required > volume.total_clusters + 2:
++                    skipped['invalid_cluster'] = skipped.get('invalid_cluster', 0) + 1
++                    continue
++                # A deleted file may no longer have a valid FAT chain. We only
++                # support plausibly contiguous, currently unallocated clusters.
++                allocated = any(_fat_entry(fd, volume, c) != 0
++                                for c in range(cluster, cluster + required))
++                if allocated:
++                    skipped['cluster_reallocated'] = skipped.get('cluster_reallocated', 0) + 1
++                candidates.append({
++                    'id': _candidate_id(volume, directory_offset + i, entry),
++                    'name_hint': _clean_name(entry),
++                    'size_bytes': length,
++                    'starting_cluster': cluster,
++                    'directory_entry_offset': directory_offset + i,
++                    'eligible': not allocated,
++                    'reason': ('clusters_currently_unallocated' if not allocated
++                               else 'cluster_reallocated_or_still_allocated'),
++                    'confidence': 'UNVERIFIED_contiguous_assumption',
++                })
++                if len(candidates) >= max_candidates:
++                    break
++            if done or len(candidates) >= max_candidates:
++                break
++    if queue or scanned_dirs >= 10000:
++        skipped['catalog_truncated'] = 1
++    return candidates, skipped
++
++
++def list_deleted_fat32(image: str, *, max_candidates: int = 10000,
++                       max_file_mib: int = 128, allow_incomplete: bool = False) -> dict:
++    """Display candidates without creating ANY output files or changing the source."""
++    if not 1 <= max_candidates <= 100000 or not 1 <= max_file_mib <= 2048:
++        raise ValueError('Invalid candidate limit')
++    fd, volume = _open_fat32_image(image, allow_incomplete=allow_incomplete)
++    try:
++        candidates, skipped = _enumerate_candidates(
++            fd, volume, max_candidates=max_candidates, max_file_bytes=max_file_mib * 1024 * 1024)
++        return {'status': 'completed', 'filesystem': 'FAT32', 'partition_offset': volume.start,
++                'candidates': candidates, 'candidates_found': len(candidates),
++                'eligible_count': sum(c['eligible'] for c in candidates),
++                'skipped': skipped,
++                'notes': 'Deleted entries do not prove recoverability. Names lose their first character; '
++                         'contiguity is assumed, data may be overwritten or fragmented.'}
++    finally:
++        os.close(fd)
++
++
++def undelete_fat32(image: str, output_dir: str, *, max_files: int = 100,
++                   max_file_mib: int = 128, allow_incomplete: bool = False,
++                   selected_ids: list[str] | None = None) -> dict:
++    """Extract only specified FAT32 candidate IDs; never write to source.
++
++    Without selected_ids, preserves legacy recover-all behavior. With selection,
++    require the entire requested set to exist and be eligible BEFORE making the
++    output directory. Every output is explicitly unverified.
++    """
++    if not 1 <= max_files <= 10000 or not 1 <= max_file_mib <= 2048:
++        raise ValueError('Invalid file limit')
++    if selected_ids is not None and (not selected_ids or len(selected_ids) > max_files or
++                                     len(set(selected_ids)) != len(selected_ids) or
++                                     any(not re.fullmatch(r'[0-9a-f]{20}', i) for i in selected_ids)):
++        raise ValueError('Supply 1..max_files unique valid candidate IDs')
++    target = os.path.abspath(output_dir)
++    if os.path.lexists(target):
++        raise FileExistsError('Choose a new, nonexistent output directory')
++    fd, volume = _open_fat32_image(image, allow_incomplete=allow_incomplete)
++    try:
++        # Filter AFTER discovering IDs to avoid producing different IDs as user
++        # adjusts output limits; do not silently omit user selections.
++        candidates, skipped = _enumerate_candidates(fd, volume, max_candidates=100000,
++                                                    max_file_bytes=max_file_mib * 1024 * 1024)
++        catalog = {c['id']: c for c in candidates}
++        if selected_ids is not None:
++            unknown = [i for i in selected_ids if i not in catalog]
++            unsafe = [i for i in selected_ids if i in catalog and not catalog[i]['eligible']]
++            if unknown or unsafe:
++                raise ValueError(f'Selection no longer valid or clusters allocated; unknown={unknown}, ineligible={unsafe}')
++            chosen = [catalog[i] for i in selected_ids]
++        else:
++            chosen = [c for c in candidates if c['eligible']][:max_files]
++        # Re-read entry and FAT prior to extraction to detect stale selections
++        # caused by a changed/mounted image. Never use filenames for output paths.
++        for item in chosen:
++            raw = _read(fd, item['directory_entry_offset'], 32)
++            if len(raw) != 32 or raw[0] != 0xe5 or _candidate_id(volume, item['directory_entry_offset'], raw) != item['id']:
++                raise RuntimeError('Deleted entry changed since catalog scan')
++            count = (item['size_bytes'] + volume.cluster_bytes - 1) // volume.cluster_bytes
++            if any(_fat_entry(fd, volume, c) != 0
++                   for c in range(item['starting_cluster'], item['starting_cluster'] + count)):
++                raise RuntimeError('Previously free clusters have changed; refusing extraction')
+         os.mkdir(target, 0o700)
+-        files: list[dict] = []
+-        skipped: dict[str, int] = {}
+-        visited_dirs: set[int] = set()
+-        queue = [volume.root_cluster]
+-        scanned_dirs = 0
+-        while queue and scanned_dirs < 10000 and len(files) < max_files:
+-            directory = queue.pop(0)
+-            if directory in visited_dirs:
+-                continue
+-            visited_dirs.add(directory)
++        files = []
++        for item in chosen:
++            name = f"{len(files)+1:05d}_deleted_{item['name_hint']}"
++            dest = os.path.join(target, name)
++            remaining = item['size_bytes']
++            hasher = hashlib.sha256()
++            outfd = os.open(dest, binary_open_flags(os.O_WRONLY | os.O_CREAT | os.O_EXCL), 0o600)
+             try:
+-                clusters = _chain(fd, volume, directory, 4096)
+-            except (ValueError, OSError):
+-                skipped['unreadable_directory'] = skipped.get('unreadable_directory', 0) + 1
+-                continue
+-            scanned_dirs += 1
+-            done = False
+-            for directory_cluster in clusters:
+-                block = _read(fd, volume.cluster_offset(directory_cluster), volume.cluster_bytes)
+-                if len(block) != volume.cluster_bytes:
+-                    raise OSError('Directory read truncated')
+-                for i in range(0, len(block), 32):
+-                    entry = block[i:i + 32]
+-                    first, attributes = entry[0], entry[11]
+-                    if first == 0:
+-                        done = True
+-                        break
+-                    if first != 0xe5:
+-                        if (attributes & 0x10 and not attributes & 0x08 and
+-                                attributes != 0x0f and first not in (0x2e,)):
+-                            child = (struct.unpack_from('<H', entry, 20)[0] << 16 |
+-                                     struct.unpack_from('<H', entry, 26)[0])
+-                            if 2 <= child < volume.total_clusters + 2:
+-                                queue.append(child)
+-                        continue
+-                    if attributes == 0x0f or attributes & 0x18:
+-                        continue
+-                    length = struct.unpack_from('<I', entry, 28)[0]
+-                    cluster = (struct.unpack_from('<H', entry, 20)[0] << 16 |
+-                               struct.unpack_from('<H', entry, 26)[0])
+-                    if length == 0 or length > min(MAX_FILE_BYTES, max_file_mib * 1024 * 1024):
+-                        skipped['size_limit'] = skipped.get('size_limit', 0) + 1
+-                        continue
+-                    required = (length + volume.cluster_bytes - 1) // volume.cluster_bytes
+-                    if (cluster < 2 or cluster + required > volume.total_clusters + 2):
+-                        skipped['invalid_cluster'] = skipped.get('invalid_cluster', 0) + 1
+-                        continue
+-                    if any(_fat_entry(fd, volume, c) != 0 for c in range(cluster, cluster + required)):
+-                        skipped['cluster_reallocated'] = skipped.get('cluster_reallocated', 0) + 1
+-                        continue
+-                    name = f'{len(files)+1:05d}_deleted_{_clean_name(entry)}'
+-                    dest = os.path.join(target, name)
+-                    hasher = hashlib.sha256()
+-                    outfd = os.open(dest, binary_open_flags(os.O_WRONLY | os.O_CREAT | os.O_EXCL), 0o600)
+-                    try:
+-                        with os.fdopen(outfd, 'wb') as out:
+-                            remaining = length
+-                            for c in range(cluster, cluster + required):
+-                                piece = _read(fd, volume.cluster_offset(c), min(volume.cluster_bytes, remaining))
+-                                if len(piece) != min(volume.cluster_bytes, remaining):
+-                                    raise OSError('Short read during file extraction')
+-                                out.write(piece)
+-                                hasher.update(piece)
+-                                remaining -= len(piece)
+-                            out.flush()
+-                            os.fsync(out.fileno())
+-                    except BaseException:
+-                        os.unlink(dest)
+-                        raise
+-                    files.append({'filename': name, 'size_bytes': length,
+-                                  'starting_cluster': cluster, 'sha256': hasher.hexdigest(),
+-                                  'confidence': 'contiguous_unallocated_clusters_UNVERIFIED'})
+-                    if len(files) >= max_files:
+-                        break
+-                if done or len(files) >= max_files:
+-                    break
++                with os.fdopen(outfd, 'wb') as out:
++                    cluster = item['starting_cluster']
++                    while remaining:
++                        amount = min(volume.cluster_bytes, remaining)
++                        data = _read(fd, volume.cluster_offset(cluster), amount)
++                        if len(data) != amount:
++                            raise OSError('Short read during recovery')
++                        out.write(data)
++                        hasher.update(data)
++                        remaining -= amount
++                        cluster += 1
++                    out.flush()
++                    os.fsync(out.fileno())
++            except BaseException:
++                os.unlink(dest)
++                raise
++            files.append({'id': item['id'], 'filename': name,
++                          'size_bytes': item['size_bytes'],
++                          'starting_cluster': item['starting_cluster'],
++                          'sha256': hasher.hexdigest(),
++                          'confidence': 'contiguous_unallocated_clusters_UNVERIFIED'})
+         return {'status': 'completed', 'filesystem': 'FAT32', 'partition_offset': volume.start,
+                 'files_recovered': len(files), 'files': files, 'skipped': skipped,
+-                'notes': 'Recovery is speculative: the deleted first filename character is lost; '
+-                         'clusters may have been overwritten or originally fragmented. '
+-                         'Recovered files require independent validation.'}
++                'notes': 'Recovery is speculative: data may be fragmented or overwritten; '
++                         'validate each file independently. No source bytes were modified.'}
+     finally:
+         os.close(fd)
+diff --git a/current/desktop/driverepair_desktop/forensics.py b/desktop/driverepair_desktop/forensics.py
+new file mode 100644
+index 0000000..8e19ac1
+--- /dev/null
++++ b/desktop/driverepair_desktop/forensics.py
+@@ -0,0 +1,80 @@
++"""Read-only hash acquisition and minimal privacy-preserving evidence manifests.
++
++A hash proves the byte sequence observed; it does NOT establish that a
++software acquisition used a hardware write blocker or preserved every sector.
++"""
++from __future__ import annotations
++
++import hashlib
++import json
++import os
++import platform
++import re
++import stat
++from datetime import datetime, timezone
++
++
++
++def image_evidence_manifest(image: str, output: str, *, case_ref: str = '') -> dict:
++    if case_ref and not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', case_ref):
++        raise ValueError('Case reference must be 1-64 safe characters')
++    original = image.replace('\\', '/').lower()
++    if original.startswith(('/dev/', '//./', '//?/')):
++        raise ValueError('Evidence hashing supports only regular image files')
++    if not stat.S_ISREG(os.lstat(image).st_mode):
++        raise ValueError('Evidence source must be a regular non-symlink file')
++    if os.path.lexists(output):
++        raise FileExistsError('Evidence manifest must be a new path')
++    source = os.path.realpath(image)
++    if os.path.realpath(output) == source:
++        raise ValueError('Cannot overwrite source')
++    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0)
++    fd = os.open(image, flags)
++    try:
++        before = os.fstat(fd)
++        if not stat.S_ISREG(before.st_mode):
++            raise ValueError('Image changed during open')
++        digest = hashlib.sha256()
++        total = 0
++        while True:
++            data = os.read(fd, 4 * 1024 * 1024)
++            if not data:
++                break
++            digest.update(data)
++            total += len(data)
++        after = os.fstat(fd)
++        if (before.st_size != total or after.st_size != before.st_size or
++                after.st_mtime_ns != before.st_mtime_ns or after.st_ino != before.st_ino):
++            raise RuntimeError('Source changed during hashing; manifest NOT generated')
++    finally:
++        os.close(fd)
++    result = {
++        'schema': 1, 'status': 'completed', 'operation': 'hash_image_evidence',
++        'case_reference': case_ref or None,
++        'timestamp_utc': datetime.now(timezone.utc).isoformat(),
++        'source_size_bytes': total, 'source_sha256': digest.hexdigest(),
++        'host_os': platform.system(),
++        'path_redacted': True,
++        'chain_of_custody': 'NOT_CERTIFIED',
++        'warnings': [
++            'Hash represents bytes returned by the OS at acquisition time; cannot prove historic contents.',
++            'This report alone does not prove hardware write blocking, unmodified source, or legal chain of custody.',
++            'Unrecoverable source sectors require separate recovery-map evidence.',
++        ],
++    }
++    flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL |
++             getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0))
++    out_fd = os.open(output, flags, 0o600)
++    try:
++        with os.fdopen(out_fd, 'w', encoding='utf-8') as out:
++            json.dump(result, out, sort_keys=True, indent=2)
++            out.write('\n')
++            out.flush()
++            os.fsync(out.fileno())
++    except BaseException:
++        try:
++            os.unlink(output)
++        except OSError:
++            pass
++        raise
++    return result
+diff --git a/desktop/driverepair_desktop/gui.py b/desktop/driverepair_desktop/gui.py
+index a8a2bd0..badcd7c 100644
+--- a/desktop/driverepair_desktop/gui.py
++++ b/desktop/driverepair_desktop/gui.py
+@@ -115,7 +115,7 @@ def launch() -> None:
+     header.pack(fill="x")
+     ttk.Label(header, text="DriveRepair", style="Title.TLabel").pack(side="left")
+     ttk.Label(header, text="  Recovery Workstation", style="Muted.TLabel").pack(side="left", pady=(10, 0))
+-    ttk.Label(header, text="90% recovery · 10% presentation · cross-platform",
++    ttk.Label(header, text="Privacy-first · Recovery evidence · Cross-platform",
+               style="Muted.TLabel").pack(side="right", pady=(12, 0))
+ 
+     # Live ops strip
+@@ -184,15 +184,46 @@ def launch() -> None:
+ 
+     notebook = ttk.Notebook(shell)
+     notebook.pack(fill="both", expand=True)
++    tab_start = ttk.Frame(notebook, padding=12)
+     tab_drive = ttk.Frame(notebook, padding=12)
+     tab_image = ttk.Frame(notebook, padding=12)
+     tab_refresh = ttk.Frame(notebook, padding=12)
++    tab_undelete = ttk.Frame(notebook, padding=12)
+     tab_fs = ttk.Frame(notebook, padding=12)
++    notebook.add(tab_start, text=" Start here ")
+     notebook.add(tab_drive, text=" Diagnose / Rescue ")
+     notebook.add(tab_image, text=" Image recovery ")
++    notebook.add(tab_undelete, text=" Recover deleted files ")
+     notebook.add(tab_refresh, text=" In-place refresh ")
+     notebook.add(tab_fs, text=" Clone repair ")
+ 
++    # Guided workflows: no unnecessary expertise or hidden destructive defaults.
++    ttk.Label(tab_start, text='What would you like to do?',
++              font=('Segoe UI', 16, 'bold')).pack(anchor='w', pady=(4, 12))
++    ttk.Label(tab_start, text='Choose a goal. DriveRepair separates data rescue from media repair. '
++              'All recovery output should go to healthy storage, never the failing disk.',
++              style='Muted.TLabel', wraplength=880).pack(anchor='w', pady=(0, 14))
++    workflow_cards = [
++        ('My files were accidentally deleted',
++         'Preview deleted file metadata and restore only files I select. Start from an image.', tab_undelete),
++        ('My external drive is slow or failing',
++         'Find the device by model, capacity and identity; run fast triage or rescue.', tab_drive),
++        ('I need a forensic working copy',
++         'Rescue an image, verify bytes, preserve original evidence and recovery maps.', tab_image),
++        ('My filesystem is corrupted',
++         'Check and repair a NEW filesystem image copy; original stays unchanged.', tab_fs),
++        ('I want to refresh readable media',
++         'Expert-only experimental original-media writes. Not a replacement for a backup.', tab_refresh),
++    ]
++    for heading, explanation, target in workflow_cards:
++        card = ttk.Frame(tab_start, style='Card.TFrame', padding=(12, 9))
++        card.pack(fill='x', pady=4)
++        ttk.Button(card, text=heading, command=lambda t=target: notebook.select(t)).pack(side='left', padx=(0, 14))
++        ttk.Label(card, text=explanation, style='Card.TLabel', wraplength=535).pack(side='left')
++    ttk.Label(tab_start, text='Boot/system disk unusable? Start from an independently trusted live USB '
++              'environment. The custom boot components are experimental, not validated recovery media.',
++              style='Muted.TLabel', wraplength=850).pack(anchor='w', pady=14)
++
+     log_holder = tk.Frame(shell, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
+     log_holder.pack(fill="both", expand=True, pady=(10, 0))
+     tk.Label(log_holder, text="Operation log", bg=C["panel"], fg=C["muted"],
+@@ -405,7 +436,7 @@ def launch() -> None:
+             if kind == "health":
+                 start(["health", "--device", dev, "--json"], "SMART health")
+             elif kind == "sample":
+-                start(["scan", "--device", dev, "--mode", "sample", "--json"], "Quick scan", risky=True)
++                start(["scan", "--device", dev, "--mode", "triage", "--json"], "Quick triage scan", risky=True)
+             elif kind == "full":
+                 start(["scan", "--device", dev, "--mode", "full", "--ack-risk", "--json"],
+                       "Full scan", risky=True)
+@@ -465,6 +496,108 @@ def launch() -> None:
+                         ("Carve", "carve"), ("FAT32 undelete", "undelete"), ("ZIP salvage", "zip")]:
+         ttk.Button(ib, text=label, command=lambda k=kind: image_action(k)).pack(side="left", padx=(0, 6))
+ 
++    # --- Targeted deleted-file recovery (read-only catalog, explicit selection) ---
++    ttk.Label(tab_undelete,
++              text="1. Choose a disk image.  2. Preview deleted files without writing.  "
++                   "3. Select only the files you need.  4. Recover to a NEW folder.  "
++                   "FAT32 contiguous files only; overwrites and fragmentation cannot be undone.",
++              style="Muted.TLabel", wraplength=910).pack(anchor="w", pady=(0, 8))
++    row(tab_undelete, "Recovered disk image", image, pick_file)
++    row(tab_undelete, "New recovered-files folder", dest_dir, pick_dir)
++    deleted_options = ttk.Frame(tab_undelete)
++    deleted_options.pack(anchor='w', fill='x', pady=4)
++    backend_choice = tk.StringVar(value='FAT32 built-in')
++    offset_choice = tk.StringVar(value='0')
++    ttk.Label(deleted_options, text='Filesystem backend').pack(side='left')
++    ttk.Combobox(deleted_options, textvariable=backend_choice,
++                 values=['FAT32 built-in', 'Sleuth Kit (optional NTFS/exFAT/ext)'],
++                 width=36, state='readonly').pack(side='left', padx=(4, 12))
++    ttk.Label(deleted_options, text='Partition start (sectors)').pack(side='left')
++    ttk.Entry(deleted_options, textvariable=offset_choice, width=12).pack(side='left', padx=4)
++    deleted_tree = ttk.Treeview(tab_undelete, columns=("name", "size", "condition", "id"),
++                                show="headings", selectmode="extended", height=10)
++    for key, title, width in (("name", "Remaining filename", 260),
++                               ("size", "Size", 110),
++                               ("condition", "Current allocation", 250),
++                               ("id", "Recovery ID", 190)):
++        deleted_tree.heading(key, text=title)
++        deleted_tree.column(key, width=width, stretch=(key == "name"))
++    deleted_tree.pack(fill="both", expand=True, pady=8)
++    catalog_source = {"path": "", "backend": "", "offset": 0}
++    candidate_status = tk.StringVar(value="No deleted-file catalog loaded")
++    ttk.Label(tab_undelete, textvariable=candidate_status, style="Muted.TLabel").pack(anchor="w")
++
++    def preview_deleted() -> None:
++        try:
++            source = require(image, 'FAT32 image')
++            if busy:
++                raise ValueError('Wait for the active job to finish')
++            catalog_source['path'] = ''
++            backend = 'tsk' if backend_choice.get().startswith('Sleuth') else 'fat32'
++            offset = int(offset_choice.get())
++            if not 0 <= offset <= (1 << 48):
++                raise ValueError('Invalid partition start offset')
++            candidate_status.set('Scanning FAT32 directory entries (read-only)...')
++            def worker():
++                try:
++                    from .fat32_undelete import list_deleted_fat32
++                    from .tsk_recovery import list_deleted_tsk
++                    from .encryption import require_plaintext_filesystem
++                    require_plaintext_filesystem(source, operation='deleted-file preview', ack_encrypted_volume=False)
++                    if backend == 'tsk':
++                        result = list_deleted_tsk(source, offset_sectors=offset, max_candidates=2000)
++                    else:
++                        result = list_deleted_fat32(source, max_candidates=2000)
++                    q.put(('deleted_candidates', (source, backend, offset, result)))
++                except (OSError, ValueError, RuntimeError) as exc:
++                    q.put(('deleted_error', str(exc)))
++            threading.Thread(target=worker, daemon=True).start()
++        except ValueError as exc:
++            messagebox.showerror('Preview', str(exc))
++
++    def recover_selected_deleted() -> None:
++        try:
++            src = require(image, 'FAT32 image')
++            current_backend = 'tsk' if backend_choice.get().startswith('Sleuth') else 'fat32'
++            current_offset = int(offset_choice.get())
++            if (os.path.realpath(src) != catalog_source['path'] or
++                    current_backend != catalog_source['backend'] or
++                    current_offset != catalog_source['offset']):
++                raise ValueError('Source or backend changed since preview. Preview again before recovering.')
++            chosen = list(deleted_tree.selection())
++            if not chosen:
++                raise ValueError('Select one or more recoverable files from the list.')
++            blocked = [iid for iid in chosen if deleted_tree.set(iid, 'condition') != 'Unallocated (tentative)']
++            if blocked:
++                raise ValueError('Selected entries include reallocated clusters; those cannot safely be restored.')
++            output = require(dest_dir, 'NEW destination folder')
++            if os.path.lexists(output):
++                raise ValueError('Destination already exists; choose a new folder.')
++            if not messagebox.askyesno('Extract selected files',
++                    f'Extract {len(chosen)} selected speculative file(s) to a new folder? '
++                    'Files may be overwritten or fragmented; the source image stays unchanged.'):
++                return
++            if current_backend == 'tsk':
++                args = ['recover-selected-tsk', '--image', src, '--output-dir', output,
++                        '--offset-sectors', str(current_offset), '--json']
++            else:
++                args = ['undelete-fat32', '--image', src, '--output-dir', output,
++                        '--max-files', str(len(chosen)), '--json']
++            for iid in chosen:
++                args.extend(['--file-id', iid])
++            start(args, f'Restore {len(chosen)} selected deleted files')
++        except ValueError as exc:
++            messagebox.showerror('Recover selected', str(exc))
++
++    deleted_controls = ttk.Frame(tab_undelete)
++    deleted_controls.pack(anchor='w', pady=4)
++    ttk.Button(deleted_controls, text='1. Find deleted files', command=preview_deleted).pack(side='left', padx=4)
++    ttk.Button(deleted_controls, text='2. Restore selected files', style='Accent.TButton',
++               command=recover_selected_deleted).pack(side='left', padx=4)
++    ttk.Label(tab_undelete, text='Optional Sleuth Kit backend uses installed fls/icat binaries. '
++              'Filesystem support varies. Never restore to the patient disk or assume intact results.',
++              style='Muted.TLabel', wraplength=900).pack(anchor='w', pady=6)
++
+     # --- In-place refresh ---
+     ttk.Label(
+         tab_refresh,
+@@ -597,6 +730,26 @@ def launch() -> None:
+                             pass
+                     if line.strip():
+                         write(line + "\n")
++                elif kind == 'deleted_error':
++                    catalog_source['path'] = ''
++                    candidate_status.set('Preview failed: ' + str(value))
++                    write('FAT32 catalog error: ' + str(value) + '\n')
++                elif kind == 'deleted_candidates':
++                    source, backend, offset, result = value
++                    catalog_source['path'] = os.path.realpath(source)
++                    catalog_source['backend'] = backend
++                    catalog_source['offset'] = offset
++                    for item in deleted_tree.get_children():
++                        deleted_tree.delete(item)
++                    for item in result['candidates']:
++                        condition = ('Unallocated (tentative)' if item['eligible']
++                                     else 'Reallocated / unavailable')
++                        deleted_tree.insert('', 'end', iid=item['id'], values=(
++                            item['name_hint'], f"{item['size_bytes']:,} B", condition, item['id']))
++                    candidate_status.set(
++                        f"{result['candidates_found']} entries · {result['eligible_count']} candidates. "
++                        'Shift/Ctrl-click to select; no data is written during preview. '
++                        + ('CATALOG TRUNCATED at its safety limit.' if result.get('truncated') else ''))
+                 elif kind == "devices":
+                     inventory.clear()
+                     inventory.update({d.id: d for d in value})
+diff --git a/current/desktop/driverepair_desktop/monitor.py b/desktop/driverepair_desktop/monitor.py
+new file mode 100644
+index 0000000..e495b08
+--- /dev/null
++++ b/desktop/driverepair_desktop/monitor.py
+@@ -0,0 +1,115 @@
++"""Conservative scheduled health monitoring; NEVER auto-rewrites sectors.
++
++Health can worsen despite a nominal SMART 'passed' result. Hardware counters
++are vendor-specific; trends and unknown conditions are reported separately.
++"""
++from __future__ import annotations
++
++import json
++import os
++import stat
++import tempfile
++from datetime import datetime, timezone
++
++
++def _numbers(snapshot: dict) -> dict[str, int]:
++    health = snapshot.get('health') or {}
++    counters = {}
++    nvme = health.get('nvme') or {}
++    for name in ('media_errors', 'num_err_log_entries', 'critical_warning'):
++        value = nvme.get(name)
++        if type(value) is int and value >= 0:
++            counters[f'nvme.{name}'] = value
++    for attribute in health.get('ata_selected_raw_attributes') or []:
++        if attribute.get('id') not in {5, 187, 197, 198}:
++            continue
++        value = attribute.get('raw_value')
++        if type(value) is int and value >= 0:
++            counters[f'ata.{attribute["id"]}'] = value
++    return counters
++
++
++def evaluate_snapshot(previous: dict | None, current: dict) -> dict:
++    """Compare health counters without claiming failures are predictable."""
++    if previous and previous.get('fingerprint') != current.get('fingerprint'):
++        raise ValueError('Monitor state refers to a different drive; refuse comparison')
++    if previous and previous.get('size_bytes') != current.get('size_bytes'):
++        raise ValueError('Device capacity changed; monitor state cannot be reused')
++    warnings = []
++    health = current.get('health') or {}
++    if health.get('status') == 'failure_reported':
++        warnings.append('SMART reports drive failure or critical concern')
++    elif health.get('status') not in {'smart_passed_limited'}:
++        warnings.append('SMART health unknown or not available')
++    scan = current.get('triage')
++    if scan:
++        if scan.get('read_error_chunks', 0) > 0 or scan.get('status', '').startswith('aborted'):
++            warnings.append('Read errors or access interruption during sampled scan')
++        if scan.get('slow_regions'):
++            warnings.append('Unusually slow sampled regions; repeat under controlled conditions')
++    old = _numbers(previous) if previous else {}
++    new = _numbers(current)
++    for key, value in new.items():
++        if key in old and value > old[key]:
++            warnings.append(f'{key} increased ({old[key]} -> {value}); investigate/backup')
++    if not previous:
++        disposition = 'baseline_recorded'
++    else:
++        disposition = 'attention' if warnings else 'no_new_signal_observed'
++    return {'status': disposition, 'warnings': warnings,
++            'notes': 'Not a health certificate. Read-only monitoring cannot predict all failures, '
++                     'and NEVER starts repair, writes, self-tests, TRIM, or firmware operations.'}
++
++
++def load_history(path: str) -> list[dict]:
++    if not os.path.exists(path):
++        return []
++    if not stat.S_ISREG(os.lstat(path).st_mode):
++        raise ValueError('History must be a regular file; symlinks not permitted')
++    with open(path, encoding='utf-8') as f:
++        state = json.load(f)
++    if state.get('schema') != 1 or not isinstance(state.get('history'), list):
++        raise ValueError('Unrecognized monitor history')
++    if len(state['history']) > 128:
++        raise ValueError('Monitor history exceeds safe bound')
++    return state['history']
++
++
++def save_history(path: str, history: list[dict]) -> None:
++    """Atomic, owner-only sidecar file, never on the patient drive."""
++    parent = os.path.dirname(os.path.abspath(path))
++    if not os.path.isdir(parent):
++        raise ValueError('Monitor state parent directory must exist')
++    # Do not accept a symlink state or redirect writes through one.
++    if os.path.lexists(path) and not stat.S_ISREG(os.lstat(path).st_mode):
++        raise ValueError('Monitor destination is not a regular file')
++    fd, temp = tempfile.mkstemp(prefix='.driverepair-monitor-', dir=parent)
++    try:
++        with os.fdopen(fd, 'w', encoding='utf-8') as out:
++            json.dump({'schema': 1, 'history': history[-30:]}, out, indent=2)
++            out.write('\n')
++            out.flush()
++            os.fsync(out.fileno())
++        os.replace(temp, path)
++        if os.name == 'posix':
++            dirfd = os.open(parent, os.O_RDONLY)
++            try:
++                os.fsync(dirfd)
++            finally:
++                os.close(dirfd)
++    finally:
++        if os.path.exists(temp):
++            os.unlink(temp)
++
++
++def record_monitor_sample(path: str, *, fingerprint: str, size_bytes: int,
++                          health: dict, triage: dict | None = None) -> dict:
++    history = load_history(path)
++    current = {'timestamp_utc': datetime.now(timezone.utc).isoformat(),
++               'fingerprint': fingerprint, 'size_bytes': size_bytes,
++               'health': health, 'triage': triage}
++    report = evaluate_snapshot(history[-1] if history else None, current)
++    save_history(path, history + [current])
++    return {'operation': 'scheduled_monitor', **report, 'history_size': min(len(history)+1, 30),
++            'device_identity_hint': fingerprint[:12],
++            'sample_time_utc': current['timestamp_utc']}
+diff --git a/desktop/driverepair_desktop/scanner.py b/desktop/driverepair_desktop/scanner.py
+index de1557b..5f80f59 100644
+--- a/desktop/driverepair_desktop/scanner.py
++++ b/desktop/driverepair_desktop/scanner.py
+@@ -9,6 +9,8 @@ from __future__ import annotations
+ import ctypes
+ import errno
+ import os
++import random
++import statistics
+ import stat
+ import sys
+ import time
+@@ -130,17 +132,32 @@ def open_device_readonly(device: Device) -> Reader:
+ 
+ 
+ def scan_offsets(size: int, chunk: int, mode: str, samples: int):
+-    if size <= 0 or chunk <= 0 or samples < 1 or mode not in {"sample", "full"}:
++    if size <= 0 or chunk <= 0 or samples < 1 or mode not in {"sample", "full", "triage"}:
+         raise ValueError("Invalid scan parameters")
+     blocks = (size + chunk - 1) // chunk
+     if mode == "full":
+         for index in range(blocks):
+             yield index * chunk, min(chunk, size - index * chunk)
+-    else:
++    elif mode == "sample":
+         n = min(samples, blocks)
+         for i in range(n):
+             index = (i * (blocks - 1) // (n - 1)) if n > 1 else 0
+             yield index * chunk, min(chunk, size - index * chunk)
++    else:
++        # Reproducible stratified sampling. Start/end are included; every
++        # interior stratum uses a deterministic pseudo-random offset. This
++        # samples locations, not a statistically proven health distribution.
++        n = min(samples, blocks)
++        rng = random.Random(0xD12E5C4A ^ blocks ^ n)
++        selected = set()
++        for i in range(n):
++            lo = i * blocks // n
++            hi = min(blocks, (i + 1) * blocks // n)
++            index = (0 if i == 0 else blocks - 1 if i == n - 1
++                     else rng.randrange(lo, max(lo + 1, hi)))
++            selected.add(index)
++        for index in sorted(selected):
++            yield index * chunk, min(chunk, size - index * chunk)
+ 
+ 
+ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
+@@ -151,53 +168,109 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
+             not 1 <= samples <= 100000):
+         raise ValueError("Invalid size, alignment, sample count or error limit")
+     blocks = (size + chunk - 1) // chunk
+-    planned = blocks if mode == "full" else min(samples, blocks)
++    baseline = list(scan_offsets(size, chunk, mode, samples)) if mode != 'full' else None
++    planned = blocks if mode == 'full' else len(baseline)
+     checked = readable = failures = 0
+     failed_ranges: list[dict] = []
+     completed = 0
+     started = time.monotonic()
+-    status = "completed"
+-    for offset, length in scan_offsets(size, chunk, mode, samples):
++    status = 'completed'
++    latencies: list[float] = []
++    probe_latencies: list[tuple[int, float]] = []
++    anomalous_indices: list[int] = []
++    examined: set[int] = set()
++
++    def attempt(offset: int, length: int) -> bool:
++        nonlocal checked, readable, failures, completed, status
+         checked += length
+         completed += 1
++        examined.add(offset // chunk)
+         error = None
++        t0 = time.monotonic()
+         try:
+             data = reader.read_at(offset, length)
+             if len(data) != length:
+-                error = f"short read ({len(data)} of {length} bytes)"
++                error = f'short read ({len(data)} of {length} bytes)'
+             else:
+                 readable += length
+         except OSError as exc:
+-            error = f"read failed ({type(exc).__name__}, errno={exc.errno})"
++            error = f'read failed ({type(exc).__name__}, errno={exc.errno})'
+             if exc.errno in {errno.ENODEV, errno.EBADF, errno.EACCES,
+                              errno.EPERM, errno.EINVAL, errno.ENOENT}:
+-                status = "aborted_device_or_access_error"
++                status = 'aborted_device_or_access_error'
++        latency_ms = (time.monotonic() - t0) * 1000
+         if error:
+             failures += 1
++            anomalous_indices.append(offset // chunk)
+             if len(failed_ranges) < 1000:
+-                failed_ranges.append({"offset": offset, "length": length, "error": error})
++                failed_ranges.append({'offset': offset, 'length': length, 'error': error})
++        elif mode == 'triage':
++            latencies.append(latency_ms)
++            probe_latencies.append((offset, latency_ms))
+         if progress:
+-            progress(completed, planned)
+-        if status.startswith("aborted"):
+-            break
+-        if failures >= max_errors:
+-            status = "aborted_error_limit"
++            progress(min(completed, planned), planned)
++        if failures >= max_errors and status == 'completed':
++            status = 'aborted_error_limit'
++        return error is None
++
++    offsets = baseline if baseline is not None else scan_offsets(size, chunk, mode, samples)
++    for offset, length in offsets:
++        attempt(offset, length)
++        if status.startswith('aborted'):
+             break
+-    if status == "completed" and failures:
+-        status = "completed_with_read_errors"
++
++    slow_regions: list[dict] = []
++    # Triage's second stage investigates neighboring chunks of read failures
++    # and slow samples, *not* the whole drive. Never re-read an already checked
++    # region and never permit unbounded growth of this work list.
++    if mode == 'triage' and not status.startswith('aborted'):
++        median_ms = statistics.median(latencies) if latencies else 0.0
++        threshold = max(50.0, median_ms * 4)
++        # We cannot retroactively detect which probes were slow without storing
++        # their latency, so capture probe timings in `attempt` below.
++        for off, latency in probe_latencies:
++            if latency >= threshold:
++                anomalous_indices.append(off // chunk)
++                slow_regions.append({'offset': off, 'latency_ms': round(latency, 3)})
++        suspects = sorted(set(anomalous_indices))
++        budget = min(samples, 4096)
++        neighbors = set()
++        for suspect in suspects:
++            for delta in (-2, -1, 1, 2):
++                idx = suspect + delta
++                if 0 <= idx < blocks and idx not in examined:
++                    neighbors.add(idx)
++                    if len(neighbors) >= budget:
++                        break
++            if len(neighbors) >= budget:
++                break
++        planned += len(neighbors)
++        for index in sorted(neighbors):
++            offset = index * chunk
++            attempt(offset, min(chunk, size - offset))
++            if status.startswith('aborted'):
++                break
++
++    if status == 'completed' and failures:
++        status = 'completed_with_read_errors'
++    elif status == 'completed' and slow_regions:
++        status = 'completed_with_slow_regions'
+     return {
+-        "status": status,
+-        "mode": mode,
+-        "device_size_bytes": size,
+-        "logical_sector_bytes": sector,
+-        "readable_bytes": readable,
+-        "attempted_bytes": checked,
+-        "attempted_chunks": completed,
+-        "planned_chunks": planned,
+-        "read_error_chunks": failures,
+-        "read_error_ranges": failed_ranges,
+-        "elapsed_seconds": round(time.monotonic() - started, 3),
+-        "notes": ("Readability only; no sector repaired, no source writes, "
+-                  "no checksum-based correctness guarantee. Failed ranges are "
+-                  "chunk-sized and not confirmed individual defective sectors."),
++        'status': status,
++        'mode': mode,
++        'device_size_bytes': size,
++        'logical_sector_bytes': sector,
++        'readable_bytes': readable,
++        'attempted_bytes': checked,
++        'attempted_chunks': completed,
++        'planned_chunks': planned,
++        'read_error_chunks': failures,
++        'read_error_ranges': failed_ranges,
++        'slow_regions': slow_regions,
++        'follow_up_chunks': max(0, completed - (len(baseline) if baseline is not None else blocks)),
++        'surface_coverage_pct': round(100 * checked / size, 6),
++        'elapsed_seconds': round(time.monotonic() - started, 3),
++        'notes': ('TRIAGE IS A SPOT-CHECK, not a health certification. ' if mode == 'triage' else '') +
++                 'Readability only; no sector repaired, no writes, no correctness guarantee. '
++                 'Errors locate affected CHUNKS, not defective individual sectors.',
+     }
+diff --git a/current/desktop/driverepair_desktop/tsk_recovery.py b/desktop/driverepair_desktop/tsk_recovery.py
+new file mode 100644
+index 0000000..50d6a1b
+--- /dev/null
++++ b/desktop/driverepair_desktop/tsk_recovery.py
+@@ -0,0 +1,144 @@
++"""Optional filesystem-aware deleted-file preview/extraction using The Sleuth Kit.
++
++Python only orchestrates known local binaries; TSK handles filesystem parsing.
++Never uses a shell; never writes source images. Recovered bytes are UNVERIFIED.
++Supported formats depend on the installed TSK build, not our marketing claims.
++"""
++from __future__ import annotations
++
++import hashlib
++import os
++import re
++import shutil
++import stat
++import subprocess
++from pathlib import Path
++
++_DELETE_RE = re.compile(r'^\s*r/[a-z-]+\s+\*\s+(\d+(?:-\d+)*):\s*(.*?)\s*$')
++
++
++def _check_image(path: str) -> str:
++    displayed = path.replace('\\', '/').lower()
++    if displayed.startswith(('/dev/', '//./', '//?/')):
++        raise ValueError('Only regular-file images, not physical devices')
++    if not stat.S_ISREG(os.lstat(path).st_mode):
++        raise ValueError('Source must be an ordinary regular file, not symlink')
++    return os.path.realpath(path)
++
++
++def _find_tool(name: str) -> str:
++    tool = shutil.which(name)
++    if not tool:
++        raise RuntimeError(f'{name} is required for filesystem-aware recovery; install The Sleuth Kit')
++    return tool
++
++
++def list_deleted_tsk(image: str, *, offset_sectors: int = 0,
++                     max_candidates: int = 2000) -> dict:
++    """Find deleted FILE metadata entries without opening output paths."""
++    if not 0 <= offset_sectors <= (1 << 48) or not 1 <= max_candidates <= 10000:
++        raise ValueError('Invalid offset or file catalog bound')
++    image = _check_image(image)
++    fls = _find_tool('fls')
++    args = [fls, '-r', '-d', '-p', '-o', str(offset_sectors), image]
++    # Stream instead of capture_output: a 12 TB disk could have millions of
++    # directory entries. Truncate at max_candidates, without allocating them all.
++    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
++                            text=True, encoding='utf-8', errors='replace')
++    candidates = []
++    truncated = False
++    try:
++        assert proc.stdout is not None
++        for line in proc.stdout:
++            match = _DELETE_RE.match(line)
++            if not match:
++                continue
++            inode, name = match.groups()
++            candidate_id = hashlib.sha256(
++                f'{image}\0{offset_sectors}\0{inode}\0{name}'.encode('utf-8')).hexdigest()[:20]
++            candidates.append({
++                'id': candidate_id, 'name_hint': name[:240],
++                'inode': inode, 'eligible': True,
++                'reason': 'metadata_entry_present_UNVERIFIED',
++                'size_bytes': None,
++                'confidence': 'UNVERIFIED_deleted_inode_may_be_reallocated',
++            })
++            if len(candidates) >= max_candidates:
++                truncated = True
++                proc.kill()
++                break
++        proc.stdout.close()
++        rc = proc.wait(timeout=120)
++    except BaseException:
++        proc.kill()
++        proc.wait()
++        raise
++    if rc != 0 and not truncated:
++        raise RuntimeError(f'fls failed with exit status {rc}; unsupported, corrupt or encrypted filesystem')
++    return {'status': 'completed', 'backend': 'sleuthkit', 'offset_sectors': offset_sectors,
++            'candidates': candidates, 'candidates_found': len(candidates),
++            'eligible_count': len(candidates), 'truncated': truncated,
++            'notes': 'Metadata present does NOT prove the file is still intact. '
++                     'Names and inode IDs may have been reused. Output must be validated.'}
++
++
++def recover_selected_tsk(image: str, output_dir: str, *, selected_ids: list[str],
++                         offset_sectors: int = 0, max_file_mib: int = 1024) -> dict:
++    if not selected_ids or len(selected_ids) > 1000 or len(set(selected_ids)) != len(selected_ids) or \
++       any(not re.fullmatch(r'[0-9a-f]{20}', i) for i in selected_ids):
++        raise ValueError('Select 1..1000 distinct valid catalog IDs')
++    if not 1 <= max_file_mib <= 4096:
++        raise ValueError('Maximum file size outside supported range')
++    image = _check_image(image)
++    output = Path(output_dir).absolute()
++    if os.path.lexists(output):
++        raise FileExistsError('Choose a new destination folder')
++    # Validate the entire selection against a fresh read of source metadata
++    # before creating output files. Truncated listings are rejected for unknown IDs.
++    latest = list_deleted_tsk(image, offset_sectors=offset_sectors, max_candidates=10000)
++    known = {c['id']: c for c in latest['candidates']}
++    if any(i not in known for i in selected_ids):
++        raise ValueError('Selected file metadata no longer present or catalog cap exceeded; preview again')
++    icat = _find_tool('icat')
++    output.mkdir(mode=0o700)
++    results = []
++    for n, selection_id in enumerate(selected_ids, 1):
++        candidate = known[selection_id]
++        dest = output / f'recovered_{n:05d}_inode_{candidate["inode"].replace("-", "_")}.bin'
++        proc = subprocess.Popen([icat, '-r', '-o', str(offset_sectors), image, candidate['inode']],
++                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
++        total = 0
++        hasher = hashlib.sha256()
++        try:
++            assert proc.stdout is not None
++            fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
++                         getattr(os, 'O_BINARY', 0), 0o600)
++            with os.fdopen(fd, 'wb') as output_file:
++                while True:
++                    data = proc.stdout.read(1024 * 1024)
++                    if not data:
++                        break
++                    total += len(data)
++                    if total > max_file_mib * 1024 * 1024:
++                        raise ValueError('File recovery exceeds allowed size')
++                    output_file.write(data)
++                    hasher.update(data)
++                output_file.flush()
++                os.fsync(output_file.fileno())
++            proc.stdout.close()
++            rc = proc.wait(timeout=60)
++            if rc != 0:
++                raise RuntimeError(f'icat failed on inode {candidate["inode"]} with status {rc}')
++        except BaseException:
++            proc.kill()
++            proc.wait()
++            if dest.exists():
++                dest.unlink()
++            raise
++        results.append({'id': selection_id, 'filename': dest.name,
++                        'name_hint': candidate['name_hint'], 'size_bytes': total,
++                        'sha256': hasher.hexdigest(),
++                        'confidence': 'UNVERIFIED_filesystem_metadata_recovery'})
++    return {'status': 'completed', 'backend': 'sleuthkit', 'files_recovered': len(results),
++            'files': results, 'notes': 'Selectively recovered from IMAGE into new files only. '
++            'Not cryptographically authenticated to original content; verify independently.'}
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index 0ac3362..1c74d37 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.2.9b1"
++version = "0.3.0b1"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/current/desktop/tests/test_catalog_cli_integration.py b/desktop/tests/test_catalog_cli_integration.py
+new file mode 100644
+index 0000000..71a3243
+--- /dev/null
++++ b/desktop/tests/test_catalog_cli_integration.py
+@@ -0,0 +1,33 @@
++import contextlib
++import io
++import json
++import tempfile
++import unittest
++from pathlib import Path
++from unittest.mock import patch
++from test_fat32_undelete import fat32_image
++from driverepair_desktop.cli import run
++
++
++class CatalogCliIntegration(unittest.TestCase):
++    def test_preview_then_selected_restore(self):
++        with tempfile.TemporaryDirectory() as td:
++            src = Path(td)/'source.img'; payload = fat32_image(src)
++            out = io.StringIO()
++            with contextlib.redirect_stdout(out):
++                code = run(['list-deleted-fat32', '--image', str(src), '--json'])
++            self.assertEqual(code, 0)
++            entries = json.loads(out.getvalue())['candidates']
++            self.assertEqual(len(entries), 1)
++            output_dir = Path(td)/'selected'
++            out = io.StringIO()
++            with contextlib.redirect_stdout(out):
++                code = run(['undelete-fat32', '--image', str(src), '--output-dir', str(output_dir),
++                            '--file-id', entries[0]['id'], '--json'])
++            self.assertEqual(code, 0)
++            result = json.loads(out.getvalue())
++            self.assertEqual(result['files_recovered'], 1)
++            self.assertEqual((output_dir / result['files'][0]['filename']).read_bytes(), payload)
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/current/desktop/tests/test_forensics.py b/desktop/tests/test_forensics.py
+new file mode 100644
+index 0000000..2d01c10
+--- /dev/null
++++ b/desktop/tests/test_forensics.py
+@@ -0,0 +1,40 @@
++import hashlib
++import json
++import tempfile
++import unittest
++from pathlib import Path
++from driverepair_desktop.forensics import image_evidence_manifest
++
++
++class EvidenceTests(unittest.TestCase):
++    def test_readonly_manifest_hashes_real_content_and_redacts_path(self):
++        with tempfile.TemporaryDirectory() as td:
++            src = Path(td) / 'case_sensitive_filename.img'
++            src.write_bytes(b'forensic image data' * 256)
++            before = src.read_bytes()
++            out = Path(td) / 'case-report.json'
++            report = image_evidence_manifest(str(src), str(out), case_ref='CASE-012')
++            self.assertEqual(report['source_sha256'], hashlib.sha256(before).hexdigest())
++            self.assertEqual(json.loads(out.read_text())['source_sha256'], report['source_sha256'])
++            self.assertEqual(src.read_bytes(), before)
++            self.assertNotIn(str(src), out.read_text())
++            self.assertEqual(report['chain_of_custody'], 'NOT_CERTIFIED')
++            self.assertEqual(out.stat().st_mode & 0o077, 0)
++
++    def test_never_overwrite_existing_report(self):
++        with tempfile.TemporaryDirectory() as td:
++            src = Path(td)/'image'; src.write_bytes(b'x')
++            report = Path(td)/'report'; report.write_text('old')
++            with self.assertRaises(FileExistsError):
++                image_evidence_manifest(str(src), str(report))
++            self.assertEqual(report.read_text(), 'old')
++
++    def test_rejects_symlinked_image(self):
++        with tempfile.TemporaryDirectory() as td:
++            src = Path(td)/'image'; src.write_bytes(b'x')
++            link = Path(td)/'link'; link.symlink_to(src)
++            with self.assertRaises(ValueError):
++                image_evidence_manifest(str(link), str(Path(td)/'out'))
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/current/desktop/tests/test_monitor.py b/desktop/tests/test_monitor.py
+new file mode 100644
+index 0000000..a9b5cc0
+--- /dev/null
++++ b/desktop/tests/test_monitor.py
+@@ -0,0 +1,51 @@
++import json
++import tempfile
++import unittest
++from pathlib import Path
++from driverepair_desktop.monitor import evaluate_snapshot, load_history, record_monitor_sample
++
++
++class MonitorTests(unittest.TestCase):
++    def sample(self, *, serial='known', passed=True, errors=0, media=0):
++        return {'fingerprint': serial, 'size_bytes': 4096,
++                'health': {'status': 'smart_passed_limited' if passed else 'unknown',
++                           'nvme': {'media_errors': media},
++                           'ata_selected_raw_attributes': [{'id': 197, 'raw_value': errors}]}}
++
++    def test_first_record_is_not_certified_healthy(self):
++        with tempfile.TemporaryDirectory() as td:
++            path = str(Path(td)/'history.json')
++            s = self.sample()
++            result = record_monitor_sample(path, fingerprint=s['fingerprint'],
++                                           size_bytes=s['size_bytes'], health=s['health'])
++            self.assertEqual(result['status'], 'baseline_recorded')
++            self.assertEqual(len(load_history(path)), 1)
++
++    def test_increasing_health_errors_trigger_attention(self):
++        first = self.sample()
++        next_sample = self.sample(errors=1, media=2)
++        result = evaluate_snapshot(first, next_sample)
++        self.assertEqual(result['status'], 'attention')
++        self.assertTrue(any('ata.197' in x for x in result['warnings']))
++        self.assertTrue(any('nvme.media_errors' in x for x in result['warnings']))
++
++    def test_identity_mismatch_refused(self):
++        with self.assertRaises(ValueError):
++            evaluate_snapshot(self.sample(), self.sample(serial='other'))
++
++    def test_unknown_health_is_warning_not_pass(self):
++        r = evaluate_snapshot(self.sample(), self.sample(passed=False))
++        self.assertEqual(r['status'], 'attention')
++        self.assertIn('SMART health unknown or not available', r['warnings'])
++
++    def test_monitor_history_is_private_file_and_durable(self):
++        with tempfile.TemporaryDirectory() as td:
++            file = Path(td)/'history.json'
++            for i in range(33):
++                record_monitor_sample(str(file), fingerprint='a', size_bytes=1,
++                                      health={'status': 'unknown', 'nvme': {'media_errors': i}})
++            self.assertEqual(len(load_history(str(file))), 30)
++            self.assertEqual(file.stat().st_mode & 0o077, 0)
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/current/desktop/tests/test_selective_undelete.py b/desktop/tests/test_selective_undelete.py
+new file mode 100644
+index 0000000..0a1fb47
+--- /dev/null
++++ b/desktop/tests/test_selective_undelete.py
+@@ -0,0 +1,71 @@
++"""Safety tests: list first, restore only explicitly requested candidates."""
++import hashlib
++import tempfile
++import unittest
++from pathlib import Path
++import struct
++
++from driverepair_desktop.fat32_undelete import list_deleted_fat32, undelete_fat32
++from test_fat32_undelete import fat32_image
++
++
++class SelectiveRecoveryTests(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.addCleanup(self.tmp.cleanup)
++        self.path = Path(self.tmp.name) / 'source.img'
++        self.out = Path(self.tmp.name) / 'selected'
++        self.first = fat32_image(self.path)
++        data = bytearray(self.path.read_bytes())
++        start = 33 * 512 + 32
++        data[start:start+11] = b'\xe5ECOND  BIN'
++        data[start+11] = 0x20
++        struct.pack_into('<H', data, start+26, 4)
++        self.second = b'Second test candidate'
++        struct.pack_into('<I', data, start+28, len(self.second))
++        data[35*512:35*512 + len(self.second)] = self.second
++        self.path.write_bytes(data)
++
++    def test_catalog_does_not_write_or_create_output(self):
++        before = hashlib.sha256(self.path.read_bytes()).digest()
++        one = list_deleted_fat32(str(self.path))
++        two = list_deleted_fat32(str(self.path))
++        self.assertEqual(one['candidates_found'], 2)
++        self.assertEqual([x['id'] for x in one['candidates']],
++                         [x['id'] for x in two['candidates']])
++        self.assertTrue(all(x['eligible'] for x in one['candidates']))
++        self.assertEqual(before, hashlib.sha256(self.path.read_bytes()).digest())
++        self.assertFalse(self.out.exists())
++
++    def test_restore_only_selected_second_candidate(self):
++        before = self.path.read_bytes()
++        candidates = list_deleted_fat32(str(self.path))['candidates']
++        result = undelete_fat32(str(self.path), str(self.out),
++                                selected_ids=[candidates[1]['id']])
++        self.assertEqual(result['files_recovered'], 1)
++        self.assertEqual((self.out / result['files'][0]['filename']).read_bytes(), self.second)
++        self.assertEqual(self.path.read_bytes(), before)
++        self.assertNotIn('ECOVER', result['files'][0]['filename'])
++
++    def test_unknown_selection_refused_before_output_creation(self):
++        with self.assertRaises(ValueError):
++            undelete_fat32(str(self.path), str(self.out), selected_ids=['0'*20])
++        self.assertFalse(self.out.exists())
++
++    def test_reallocated_candidate_is_listed_but_not_extractable(self):
++        data = bytearray(self.path.read_bytes())
++        struct.pack_into('<I', data, 32*512 + 4*4, 0x0fffffff)
++        self.path.write_bytes(data)
++        candidates = list_deleted_fat32(str(self.path))['candidates']
++        self.assertFalse(candidates[1]['eligible'])
++        with self.assertRaises(ValueError):
++            undelete_fat32(str(self.path), str(self.out), selected_ids=[candidates[1]['id']])
++        self.assertFalse(self.out.exists())
++
++    def test_duplicate_selection_is_refused(self):
++        candidate = list_deleted_fat32(str(self.path))['candidates'][0]['id']
++        with self.assertRaises(ValueError):
++            undelete_fat32(str(self.path), str(self.out), selected_ids=[candidate, candidate])
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/current/desktop/tests/test_triage.py b/desktop/tests/test_triage.py
+new file mode 100644
+index 0000000..1f00840
+--- /dev/null
++++ b/desktop/tests/test_triage.py
+@@ -0,0 +1,55 @@
++import errno
++import unittest
++from driverepair_desktop.scanner import scan_offsets, scan_reader
++
++
++class TestReader:
++    def __init__(self, count: int, bad: set[int] | None = None):
++        self.size = count
++        self.bad = bad or set()
++        self.reads = []
++
++    def read_at(self, offset, count):
++        index = offset // 512
++        self.reads.append(index)
++        if index in self.bad:
++            raise OSError(errno.EIO, 'simulated sector unreadable')
++        return b'A' * count
++
++    def close(self):
++        pass
++
++
++class TriageTests(unittest.TestCase):
++    def test_offsets_deterministic_and_stratified(self):
++        first = list(scan_offsets(512*1000, 512, 'triage', 31))
++        self.assertEqual(first, list(scan_offsets(512*1000, 512, 'triage', 31)))
++        self.assertEqual(first[0][0], 0)
++        self.assertEqual(first[-1][0], 512*999)
++        self.assertEqual(len(first), 31)
++        self.assertEqual(len(set(first)), len(first))
++
++    def test_responds_to_fault_with_neighbor_check_bounded(self):
++        candidates = list(scan_offsets(512*1000, 512, 'triage', 50))
++        problem = candidates[24][0] // 512
++        reader = TestReader(1000, {problem})
++        result = scan_reader(reader, size=512*1000, sector=512, chunk=512,
++                             mode='triage', samples=50)
++        self.assertEqual(result['status'], 'completed_with_read_errors')
++        self.assertGreaterEqual(result['follow_up_chunks'], 1)
++        self.assertLessEqual(result['attempted_chunks'], 100)
++        self.assertIn(problem - 1, reader.reads)
++        self.assertIn(problem + 1, reader.reads)
++        self.assertLess(result['surface_coverage_pct'], 100)
++
++    def test_clean_triage_is_not_a_full_scan(self):
++        reader = TestReader(1000)
++        report = scan_reader(reader, size=512*1000, sector=512, chunk=512,
++                             mode='triage', samples=37)
++        self.assertEqual(report['status'], 'completed')
++        self.assertEqual(report['attempted_chunks'], 37)
++        self.assertIn('SPOT-CHECK', report['notes'])
++        self.assertLess(report['surface_coverage_pct'], 4)
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/current/desktop/tests/test_tsk_recovery.py b/desktop/tests/test_tsk_recovery.py
+new file mode 100644
+index 0000000..ee65bfd
+--- /dev/null
++++ b/desktop/tests/test_tsk_recovery.py
+@@ -0,0 +1,68 @@
++"""Optional TSK adapter: mock CLI and verify command injection safety + selection."""
++import hashlib
++import io
++import tempfile
++import unittest
++from pathlib import Path
++from unittest.mock import patch
++from driverepair_desktop.tsk_recovery import list_deleted_tsk, recover_selected_tsk
++
++
++FLS = 'r/r * 70-128-1: deleted/alpha.txt\nr/r * 71-128-1: deleted/../beta.jpg\n'
++
++
++class FakeProcess:
++    def __init__(self, args, **kwargs):
++        self.args = args
++        self.returncode = 0
++        if args[0] == 'fls':
++            self.stdout = io.StringIO(FLS)
++        elif args[0] == 'icat':
++            self.stdout = io.BytesIO(b'raw extracted content')
++        else:
++            raise RuntimeError('unexpected command')
++    def kill(self):
++        self.returncode = -9
++    def wait(self, **kwargs):
++        return self.returncode
++
++
++class TskTests(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.addCleanup(self.tmp.cleanup)
++        self.image = Path(self.tmp.name) / 'image.raw'
++        self.image.write_bytes(b'\0' * 4096)
++        self.out = Path(self.tmp.name) / 'recovered'
++        self.runner = patch('driverepair_desktop.tsk_recovery.subprocess.Popen', side_effect=FakeProcess)
++        self.which = patch('driverepair_desktop.tsk_recovery.shutil.which', side_effect=lambda s:s)
++        self.runner.start(); self.which.start()
++        self.addCleanup(self.runner.stop)
++        self.addCleanup(self.which.stop)
++
++    def test_selectively_extracts_only_requested_inode(self):
++        before = hashlib.sha256(self.image.read_bytes()).digest()
++        found = list_deleted_tsk(str(self.image))['candidates']
++        self.assertEqual(len(found), 2)
++        report = recover_selected_tsk(str(self.image), str(self.out),
++                                      selected_ids=[found[1]['id']])
++        self.assertEqual(report['files_recovered'], 1)
++        recovered = list(self.out.glob('*'))
++        self.assertEqual(len(recovered), 1)
++        self.assertEqual(recovered[0].read_bytes(), b'raw extracted content')
++        self.assertNotIn('..', recovered[0].name)
++        self.assertEqual(before, hashlib.sha256(self.image.read_bytes()).digest())
++
++    def test_missing_selected_id_fails_before_creating_output(self):
++        with self.assertRaises(ValueError):
++            recover_selected_tsk(str(self.image), str(self.out), selected_ids=['f'*20])
++        self.assertFalse(self.out.exists())
++
++    def test_symlinked_source_rejected(self):
++        link = Path(self.tmp.name) / 'alias.raw'
++        link.symlink_to(self.image)
++        with self.assertRaises(ValueError):
++            list_deleted_tsk(str(link))
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/current/docs/ARCHITECTURE_CURRENT.md b/docs/ARCHITECTURE_CURRENT.md
+new file mode 100644
+index 0000000..208f427
+--- /dev/null
++++ b/docs/ARCHITECTURE_CURRENT.md
+@@ -0,0 +1,43 @@
++# DriveRepair architecture — 0.3.0b1
++
++**Status:** Partial Rust migration. Do NOT describe the Python desktop core as fully migrated.
++
++```text
++                  Desktop GUI (Tk) / CLI (Python)
++                       |       |       |
++   read-only inventory |       |       +-- optional local tools:
++   and SMART/health    |       |           smartctl, e2fsck, fls, icat
++                       |       |
++            image & file tools   +-- guided workflows, private JSON
++                       |           history and forensic SHA-256 reports
++                       |
++             optional Rust recovery-core binary
++            (regular image files, never raw disks)
++                       |
++           forward copy / reverse split retry
++                 + .rmap checkpoint sidecar
++
++     Original src/boot/bios + src/boot/uefi retained:
++     experimental only; not a validated bootable rescue image.
++```
++
++## Contract boundaries
++
++1. No source mutations in a rescue/undelete/forensic operation. Output files are always NEW paths and never devices.
++2. A regular-file recovery engine may not be silently substituted for a physical-device recovery engine.
++3. Python image rescue (`.rescue.json`) and Rust image rescue (`.rmap`) use DIFFERENT journal formats; never cross-resume.
++4. Incomplete reads are unverified gaps. The output bytes do NOT certify data correctness.
++5. Low-level raw media refresh is separate and explicitly gated by device identity, idle status and a rollback journal; do not reuse for read-only operations.
++6. Device selection is through stable fingerprint + human model, size, bus/location and masked serial; short fingerprints are not cryptographic proof of authenticity.
++7. Case reports redact paths by default and never upload data to a service.
++
++## Migration stages
++
++- **Stage 1, current:** small no-dependency Rust regular-image rescue, existing Python UI/CLI and filesystem tooling; cross-platform Cargo CI; no direct raw writes from Rust.
++- **Stage 2:** prove Rust engine equivalence on fault injection, interrupted output, map corruption, large images and byte-accurate comparisons on all OSes. Promote Rust image rescue only after repeatable tests. Add documented, versioned machine-readable progress.
++- **Stage 3:** properly isolated platform raw-I/O adapters with handles bound to stable IDs, documented volume locks and provenance. This should be a separately reviewed change, not an extension of file-only code by swapping paths.
++- **Stage 4:** native GUI packaging/installer/signing and independently tested bootable live environment. Prefer a maintained OS's storage drivers, not custom controller/firmware access when standard APIs suffice.
++
++## Technical caution
++
++Moving CPU and memory-bound tasks into Rust can reduce overhead. On a seriously failing HDD, the bottleneck is often disk firmware retries, bad-head mechanics, USB bridge resets or thermal events, not Python execution. Measure throughput, recovered verified bytes, tail latency, read amplification, memory, and source writes under identical conditions. Do not claim superiority from a clean synthetic image.
+diff --git a/current/docs/BENCHMARK_PROTOCOL.md b/docs/BENCHMARK_PROTOCOL.md
+new file mode 100644
+index 0000000..ffada84
+--- /dev/null
++++ b/docs/BENCHMARK_PROTOCOL.md
+@@ -0,0 +1,28 @@
++# DriveRepair repeatable comparison protocol
++
++## Competitor and technique baselines
++
++- GNU ddrescue 1.30 (January 2026) implements copying, trimming, sweeping, scraping and retries; compare its restartable mapfile and recovery coverage, not merely raw MB/s: https://www.gnu.org/software/ddrescue/manual/ddrescue_manual.html
++- The Sleuth Kit supports filesystem metadata inspection (`fls`/`icat`/`tsk_recover`). Measure selected-file restoration and correctness on NTFS/exFAT/ext/FAT with known originals: https://wiki.sleuthkit.org/TSK-Tool-Overview/
++- Include a modern established imaging tool with direct AHCI/controller capability in a physical lab, if licensed and safe.
++- NIST SP 800-88r2 (September 2025) is the relevant media sanitization program guidance; seven-pass rewriting alone is NOT a compliance certificate: https://csrc.nist.gov/pubs/sp/800/88/r2/final
++- For hardware failure research, compare carefully with field SMART data, e.g. Backblaze (large production populations but not USB-dock/casual-user ground truth): https://www.backblaze.com/cloud-storage/resources/hard-drive-test-data
++
++## Workloads
++
++1. Clean verified reference images of various sizes, entropy, alignment and filesystems, including sparse synthetic >12TB virtual disks.
++2. Controlled EIO, intermittent reads, slow reads, disconnect, short reads and destination-write failures (in virtual environments only).
++3. FAT32 deleted contiguous vs fragmented; NTFS/exFAT/ext files with intact and overwritten metadata; ground-truth byte hashes for every file.
++4. Real sacrificial HDDs and SSDs, including 512e/4Kn, USB bridges, CMR/SMR and different firmware versions, never personal/prod drives.
++5. Power-cut and hot-unplug of sacrificial hardware during read and separate in-place-refresh runs. Require rollback evidence and inability to silently certify bad copies.
++6. Cross-platform GUI interaction: selecting a drive by model/capacity/serial and selecting individual recoverable files with no wrong-disk action.
++
++## Measures (per device, condition, and transport)
++
++- **Accuracy:** bytes matching ground truth; file SHA-256 exact match; false positives, failed reads, unverifiable missing regions.
++- **Safety:** writes to patient by workflow (zero for rescue); wrong-disk attempts, crash/power-loss journal integrity, unexpected identity changes.
++- **Speed:** time to first useful copied file, time to 50%/95% verified data, throughput per phase, p95/p99 I/O latency, read amplification, memory use.
++- **Resilience:** restart recovery after simulated/real disconnect, no false success, partial output clearly distinguished from valid data.
++- **Usability:** human selection error rate, task completion rate and time, OS installation friction.
++
++Repeat paired tests over equivalent initial media snapshots. Never run several destructive algorithms successively on the same already-changing faulty surface and declare the last winner. Distinguish performance from data-integrity results. Publish raw logs, versions, hardware, and negative results after privacy review. **No claim of faster, safer or higher recovery success until measured.**
+diff --git a/current/docs/BOOT_RECOVERY.md b/docs/BOOT_RECOVERY.md
+new file mode 100644
+index 0000000..fea3c61
+--- /dev/null
++++ b/docs/BOOT_RECOVERY.md
+@@ -0,0 +1,23 @@
++# Recovering a failed system / boot drive
++
++**Important:** The repository includes experimental BIOS/UEFI source, but no validated, universally bootable DriveRepair recovery image. A booted program that prints a success message does not prove it can enumerate or rescue NVMe/SATA/USB disks safely.
++
++## Supported fallback using an independently trusted live environment
++
++1. On a separate clean PC, prepare a trusted and verified Linux live USB from a maintained distribution. Follow the distribution's checksum/signature verification, not a homemade unsigned image.
++2. Boot the affected computer without mounting or repairing the failing system volume. If the drive is physically noisy/unstable, avoid retries and consult a specialist.
++3. Connect enough healthy destination space for an image; preferably a separate physical drive. Do not attempt to 'repair the only copy' by rewriting every sector.
++4. Run the validated diagnostic/read-only commands from a mounted DriveRepair portable source environment, or a known recovery program. The current direct-physical `rescue-external` workflow is Linux experimental and verifies source/destination ancestry. If unable to confirm safe destination, use a separately validated imaging tool.
++5. Preserve rescue maps and hash manifests off the patient. Analyze/repair a *copy* after acquisition.
++6. Restore verified recovered files or a known-good system backup to replacement media. Reinstall the OS when needed.
++
++Encryption: BitLocker, FileVault and LUKS require authorized credentials/keys; raw carving encrypted data usually yields false results. Secure Boot, RAID, vendor recovery partitions, BitLocker TPM binding and filesystem support must be tested individually.
++
++## Future native boot goals (NOT IMPLEMENTED)
++
++- Reproducible UEFI and BIOS media build with SHA-256 and verified boot smoke tests.
++- Built-in OS storage drivers for NVMe, SATA, USB/UASP and SAS; no proprietary firmware bypass by default.
++- Explicit no-automount, no-write environment, source/destination physical identity, USB disconnect handling.
++- On-device manual recovery journal, encrypted report export and clear recovery/repair separation.
++
++Do not make an untested ISO or USB writer available to beta users as a complete recovery product.
+diff --git a/docs/PROJECT_STATUS.md b/docs/PROJECT_STATUS.md
+index c1539ad..6d06152 100644
+--- a/docs/PROJECT_STATUS.md
++++ b/docs/PROJECT_STATUS.md
+@@ -1,54 +1,9 @@
+-# Project status — 2026-11-01
++# Project status — November 1, 2026
+ 
+-**PRIVATE TEST ONLY. PUBLIC RELEASE NOT APPROVED.**
++**Version:** 0.3.0b1 experimental engineering beta candidate, source patch based on the supplied `DriveRepair-main(3).zip` snapshot.
+ 
+-## Desktop safety update — 0.2.7
++The desktop project currently has source implementations for external-disk inventory, read-only diagnostic scans, bounded image rescue, FAT32 selective deleted-file recovery, optional Sleuth Kit deleted-file selection, limited file carving, corrupted ZIP salvage, ext-image clone-only repair, SMART monitoring, synthetic in-place-refresh tests, and a high-contrast guided Tk interface. A separate no-dependency Rust core for regular-file rescue has been added but cannot be claimed built or validated without Cargo and cross-platform CI.
+ 
+-- Transaction journal hardening with fsynced original bytes, interrupted-write restore/verify and exactly-once commit.
+-- Physical refresh now requires disk journaling on separately verified storage; adaptive probe I/O failures block any write.
+-- 98 Python unit tests run: 97 passed, 1 Windows-only test skipped under Linux. No actual real-disk write was performed during validation.
+-- Physical-drive refresh (especially 12 TB USB dock/hotplug) is still unvalidated after an unexpected USB disconnect/power failure and MUST remain private testing.
++**What is NOT supported/certified:** universal raw disk repair, secure government sanitization, automatic media rejuvenation, firmware recovery, byte-exact recovery of overwritten data, universal filesystem undelete, dependable bootable rescue ISO, certified forensic chain of custody, faster-than-competitors claims. The original boot code remains experimental; physical USB disconnect/power-loss validation must still be completed.
+ 
+-## Desktop development update — 0.2.5
+-
+-- GUI: industrial dark Recovery Workstation (sector map, health strip, metrics); CLI subprocess workers; `--progress-jsonl` at ~10 Hz. Not yet smoke-tested across all desktop OSes.
+-- FAT32 undelete: implemented for plausibly contiguous, unallocated cluster sequences from raw volume or MBR FAT32 image; every recovered file marked **UNVERIFIED**. Does not recover original first filename letter, fragmented or overwritten files.
+-- Image correctness: added whole-file SHA-256 and bytewise comparison against a stable original image; refuses sparse/incomplete recovery journals.
+-- Filesystem repair: implemented an ext2/3/4 workflow that clones a regular filesystem image and runs installed `e2fsck -f -y` **only on the clone**, after explicit acknowledgment. No physical-source writes or in-place drive repair.
+-- The expanded synthetic suite passes 65 tests in this environment; no actual HDD/SSD hardware tests and no Rust boot build were performed here.
+-
+-## Verified in source and synthetic tests
+-
+-- External-drive discovery (existing mock tests), read-only surface scans.
+-- Restartable, sector-aligned image rescue with a durable sparse-output map, targeted retry, conservative source identity checking, and failure propagation.
+-- Linux-only experimental external-disk rescue with separate-destination mount ancestry checks.
+-- Read benchmarks, sampled latency and comparison across same-source measurements.
+-- Optional smartctl JSON health snapshots with unknown/failing status handling; no silent healthy result from missing data.
+-- PNG/JPEG signature carving from regular-file images, with PNG chunk CRC verification.
+-- Intact-member extraction from partially corrupted ZIP archives using standard-library ZIP CRC verification.
+-- Windows host portability for image workflows: binary `O_BINARY` opens, portable `pwrite` fallback; **65 unit tests passed** on Windows workstation (2026-11-01).
+-
+-## Not verified
+-
+-- Hardware operation across Windows, macOS and Linux; Linux physical rescue has **not** been hardware-tested.
+-- User data recovery effectiveness on damaged real media; stress/retry budgets may need optimization.
+-- Linux destination-isolation logic in complex storage setups, including nested device mapper / encryption / multipath.
+-- Proprietary recovery algorithm parity, competitive benchmark outcomes, deep filesystem repair, data-carving completeness.
+-- Production-certified raw-drive write support, live interruption recovery, hardware-backed media-refresh outcomes, physical-wear reversal. Experimental refresh source exists; see IN_PLACE_MEDIA_REFRESH.md.
+-- Bootable disk image integrity and Rust bootloader integration.
+-
+-## Safety boundary
+-
+-Ordinary diagnostics and rescue keep physical sources read-only. Separately authorized `refresh-external` **does open the original drive for writing**; experimental hardware refresh is gated, journaled, and has no independent physical USB disconnect/power-loss certification. Not for valuable data. Bootable Rust experiments are not production-ready.
+-
+-## Next engineering milestones
+-
+-P0: Add independent Linux and Windows/macOS device-mapping verification; actual bench hardware test matrices, fail-safe cancellation, read timeouts and mature multi-pass rescue scheduling.
+-
+-P1: Validate optional smartctl SMART/NVMe snapshots on real hardware and add manufacturer-aware interpretation; add per-LBA latency maps, integrity hashes, and optional external proven rescue engine adapter without copying licensed code.
+-
+-P2: Build metadata-aware undelete on FAT/exFAT/NTFS/ext4/APFS as read-only plugins; enhance format-aware recovery of damaged archives and media files.
+-
+-P3: Develop a **separately authorized** media-refresh / targeted-remap experiment only for backed-up, non-critical disks; evaluate outcome using randomized before/after measurements and drive health indicators. Do not market improvements as physical-wear reversal.
+-
+-P4: Validate desktop GUI on real Windows/macOS/Linux, provide signed native installers, bootable Linux distribution, reproducible builds and release docs.
++See `PUBLIC_BETA_GATES.md` and `BENCHMARK_PROTOCOL.md` before release. Old reports in `docs/release-readiness/` document older snapshots and do not supersede this status.
+diff --git a/current/docs/PUBLIC_BETA_GATES.md b/docs/PUBLIC_BETA_GATES.md
+new file mode 100644
+index 0000000..2762793
+--- /dev/null
++++ b/docs/PUBLIC_BETA_GATES.md
+@@ -0,0 +1,31 @@
++# Public beta release gates — 0.3.0b1
++
++**Decision: NOT READY FOR UNRESTRICTED PUBLIC BETA.** This package is suitable for controlled synthetic and nonvaluable image-based tests. The following work is NOT claimed complete:
++
++| Gate | Requirement | Current status |
++|---|---|---|
++| A: Raw-drive safety | Independent audit of every raw write; correct mounted/held/OS/USB identification across Windows/Linux/macOS | NOT PROVEN |
++| B: Journal crash safety | Force termination, host power loss and USB unplug during physical write on sacrificial drives; no silent success | NOT PROVEN |
++| C: Rust core | Compile, clippy, test, benchmark and cross-OS compare to Python reference; prove map consistency | SOURCE IMPLEMENTED, BUILD NOT VERIFIED HERE |
++| D: Cross-platform physical recovery | Windows/macOS volume locking, separate destination checks, 4Kn/USB bridge handling | NOT PROVEN |
++| E: Deleted-file accuracy | Ground-truth datasets for FAT32 and Sleuth Kit backends; deleted, overwritten, fragmented cases | SYNTHETIC TESTS ONLY |
++| F: Boot recovery | Boot actual ISO/USB on UEFI/legacy hardware; NVMe/USB/SATA access and safe destination selection | EXPERIMENTAL, NOT VERIFIED |
++| G: Sanitization | Approved media-appropriate clear/purge/crypto-erase per organization policy, verified and audited | NOT IMPLEMENTED |
++| H: Firmware remediation | Vendor-approved firmware tools, signed image provenance, supported hardware policy | NOT IMPLEMENTED |
++| I: Packaging | Signed/native binaries and repeatable install/remove/permissions tests for Windows/macOS/Linux | PYZ/WHEEL ONLY; NOT PROVEN |
++| J: Comparative benchmarks | Public datasets and real failing-disk experiments against established vendors | NOT PROVEN |
++| K: Forensic claims | Independent chain-of-custody and write-blocker validation, provenance and hash evidence | NOT CERTIFIED |
++
++## Why not seven-pass as 'DoD approved'?
++
++Seven alternating overwrites are NOT a blanket Department of Defense certification. The current NIST SP 800-88 Revision 2 (September 2025) delegates specific sanitization technique details to applicable standards (e.g. IEEE 2883), NSA specifications or organizationally approved procedures. HDD host writes may not reach reallocated sectors. SSD FTL/overprovisioning makes host overwrites particularly unreliable; prefer supported, verified device-native sanitize/crypto-erase operations where appropriate. Sanitization cannot prove future drive serviceability; post-sanitize capacity, SMART and read/write tests are a SEPARATE assessment. Never advertise compliance without validated process and customer-specific authorizations.
++
++## RAM journaling and automatic rejuvenation
++
++- RAM journaling can reduce temporary disk I/O on Linux when backed by tmpfs, guarded by local power signals, and explicitly accepted as VOLATILE. A UPS doesn't protect against crashes, host reset or USB bridge failure. Disk-backed journal is the default.
++- Scheduled **read-only** health alerts are implemented. Autonomous writes to a drive that starts slowing down are NOT safe by default; the same slowdown may be an early failure warning requiring immediate imaging and replacement. Any future automatic repair would require proven backups, independent evidence, workload-aware policy and strict user opt-in.
++- Firmware repair is highly vendor/device-specific and can brick a disk or eliminate recoverable data; no universal flashing functionality will be shipped as beta.
++
++## Beta publishable subset after gates
++
++The public website can present **experimental image-only** features, with explicit limitations and an installation warning, after code review and CI pass. It must not market untested raw-media refresh, DoD sanitization, native boot recovery, complete cross-filesystem undelete or guaranteed data restoration. Avoid collecting customer images, file contents, serials, or identifiable logs for telemetry.
+diff --git a/current/docs/SCHEDULED_MONITORING.md b/docs/SCHEDULED_MONITORING.md
+new file mode 100644
+index 0000000..3a9b01e
+--- /dev/null
++++ b/docs/SCHEDULED_MONITORING.md
+@@ -0,0 +1,23 @@
++# Scheduled read-only drive monitoring
++
++**Monitoring does not authorize automatic refresh, remapping, or writing.** Rewriting suspect sectors without a protected original copy can erase the only recoverable bytes.
++
++```sh
++python3 -m driverepair_desktop list --json
++# Use the device ID and current 12-hex identity_hint displayed above.
++python3 -m driverepair_desktop monitor-external \
++  --device linux:/dev/sdX --expect-fingerprint 12HEXCHARS \
++  --state /healthy-disk/driverepair-monitor.json --json
++# Optional, only during idle time, and with explicit acknowledgement:
++python3 -m driverepair_desktop monitor-external \
++  --device linux:/dev/sdX --expect-fingerprint 12HEXCHARS \
++  --state /healthy-disk/driverepair-monitor.json --triage --ack-read-stress --json
++```
++
++Run from your OS scheduler (Task Scheduler, launchd or systemd timer) as a dedicated least-privilege user with the minimum read permissions required. Choose a low-frequency interval (for example weekly SMART trend checks, with sampled reads less often only if needed). Never embed administrator passwords in scheduled command lines.
++
++**USB docks:** the OS device number may change on reconnect. Identity mismatch must fail closed; create a new monitor job only after visibly verifying model/size/serial/location. The monitor history is on healthy separate storage. SMART via USB may be unavailable or misleading; status `unknown` is not a pass.
++
++Alerts: health counters 5, 187, 197, 198 and NVMe media errors/critical warnings changing; sampled read errors; slow areas that should be retested under controlled conditions; device disappearance. An individual SMART counter is not a universally calibrated failure predictor. Temperature, caching, competing workloads and USB bridge behavior skew speed measurements.
++
++**Never schedule `refresh-external`, erasure, firmware flashing, filesystem repair, or direct writes automatically.** Schedule warnings, not irreversible corrective action.
+diff --git a/docs/release-readiness/README.md b/docs/release-readiness/README.md
+index 7914b09..6c84108 100644
+--- a/docs/release-readiness/README.md
++++ b/docs/release-readiness/README.md
+@@ -1,3 +1,5 @@
++> **CURRENT RELEASE NOTE (2026-11-01):** This document records an earlier desktop-scanner decision and does not authorize the 0.3.0b1 multi-workflow product for unrestricted public beta. The governing current status and safety requirements are in [`../PUBLIC_BETA_GATES.md`](../PUBLIC_BETA_GATES.md) and [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md). Source-only experimental publication must not imply validated destructive media repair, boot recovery, or government sanitization.
++
+ # Release readiness
+ 
+ Honest gate documentation for DriveRepair’s **public experimental** desktop scanner.
+diff --git a/docs/release-readiness/RELEASE_DECISION.md b/docs/release-readiness/RELEASE_DECISION.md
+index ca44672..4e39f31 100644
+--- a/docs/release-readiness/RELEASE_DECISION.md
++++ b/docs/release-readiness/RELEASE_DECISION.md
+@@ -1,3 +1,5 @@
++> **CURRENT RELEASE NOTE (2026-11-01):** This document records an earlier desktop-scanner decision and does not authorize the 0.3.0b1 multi-workflow product for unrestricted public beta. The governing current status and safety requirements are in [`../PUBLIC_BETA_GATES.md`](../PUBLIC_BETA_GATES.md) and [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md). Source-only experimental publication must not imply validated destructive media repair, boot recovery, or government sanitization.
++
+ # Release decision
+ 
+ **Date:** 2026-10-31  
+diff --git a/current/rust/recovery-core/Cargo.toml b/rust/recovery-core/Cargo.toml
+new file mode 100644
+index 0000000..0772e58
+--- /dev/null
++++ b/rust/recovery-core/Cargo.toml
+@@ -0,0 +1,15 @@
++[package]
++name = "driverepair-recovery-core"
++version = "0.3.0"
++edition = "2021"
++license = "MIT"
++description = "Small dependency-free Rust image rescue core; regular files only"
++
++[[bin]]
++name = "driverepair-recovery-core"
++path = "src/main.rs"
++
++[profile.release]
++opt-level = 3
++lto = true
++codegen-units = 1
+diff --git a/current/rust/recovery-core/src/lib.rs b/rust/recovery-core/src/lib.rs
+new file mode 100644
+index 0000000..4443877
+--- /dev/null
++++ b/rust/recovery-core/src/lib.rs
+@@ -0,0 +1,341 @@
++//! DriveRepair's small, std-only recovery core.
++//!
++//! This crate intentionally operates on REGULAR IMAGE FILES ONLY. Raw-device
++//! writes, destructive sanitization and firmware access are not implemented.
++//! Successful operating-system reads do NOT guarantee logical data correctness.
++
++use std::fs::{self, File, OpenOptions};
++use std::io::{self, Read, Seek, SeekFrom, Write};
++use std::path::Path;
++use std::time::UNIX_EPOCH;
++
++pub const VERSION: &str = "DRIVEREPAIR_IMAGE_MAP_V1";
++pub const DEFAULT_CHUNK: usize = 1024 * 1024;
++
++pub trait ReadAt {
++    fn read_at(&mut self, offset: u64, output: &mut [u8]) -> io::Result<()>;
++}
++pub trait WriteAt {
++    fn write_at(&mut self, offset: u64, data: &[u8]) -> io::Result<()>;
++}
++impl ReadAt for File {
++    fn read_at(&mut self, offset: u64, output: &mut [u8]) -> io::Result<()> {
++        self.seek(SeekFrom::Start(offset))?;
++        self.read_exact(output)
++    }
++}
++impl WriteAt for File {
++    fn write_at(&mut self, offset: u64, data: &[u8]) -> io::Result<()> {
++        self.seek(SeekFrom::Start(offset))?;
++        self.write_all(data)
++    }
++}
++
++/// A failed large read is retried in smaller pieces only during the second pass.
++/// All fully readable pieces are copied; the enclosing chunk is only marked
++/// complete if every byte was read. There is no invented reconstruction.
++pub fn copy_region<S: ReadAt, D: WriteAt>(
++    source: &mut S, destination: &mut D, offset: u64, length: usize,
++    sector: usize, split_failures: bool, buffer: &mut Vec<u8>,
++) -> io::Result<bool> {
++    buffer.resize(length, 0);
++    match source.read_at(offset, &mut buffer[..length]) {
++        Ok(()) => {
++            destination.write_at(offset, &buffer[..length])?;
++            Ok(true)
++        }
++        Err(e) if matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied) => Err(e),
++        Err(_) if !split_failures || length <= sector => Ok(false),
++        Err(_) => {
++            let left = ((length / sector) / 2) * sector;
++            if left == 0 || left == length {
++                return Ok(false);
++            }
++            let lhs = copy_region(source, destination, offset, left, sector, true, buffer)?;
++            let rhs = copy_region(source, destination, offset + left as u64,
++                                  length - left, sector, true, buffer)?;
++            Ok(lhs && rhs)
++        }
++    }
++}
++
++pub fn image_identity(path: &Path) -> io::Result<(String, u64, u128)> {
++    let stat = fs::symlink_metadata(path)?;
++    if !stat.file_type().is_file() {
++        return Err(io::Error::new(io::ErrorKind::InvalidInput, "only regular, non-symlink files supported"));
++    }
++    let absolute = fs::canonicalize(path)?;
++    let name = absolute.to_string_lossy().to_string();
++    if name.contains('\n') || name.contains('\r') {
++        return Err(io::Error::new(io::ErrorKind::InvalidInput, "newline in path unsupported"));
++    }
++    let modified = stat.modified()?.duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
++    Ok((name, stat.len(), modified))
++}
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct Map {
++    pub source: String,
++    pub source_size: u64,
++    pub source_modified_ns: u128,
++    pub chunk: usize,
++    // 0 = not attempted, 1 = all bytes copied and durable, 2 = missing bytes
++    pub chunks: Vec<u8>,
++}
++impl Map {
++    pub fn new(source: String, size: u64, stamp: u128, chunk: usize) -> io::Result<Self> {
++        if size == 0 || !(512..=64 * 1024 * 1024).contains(&chunk) || chunk % 512 != 0 {
++            return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid image size or chunk alignment"));
++        }
++        let count = size.div_ceil(chunk as u64);
++        if count > 100_000_000 {
++            return Err(io::Error::new(io::ErrorKind::InvalidInput, "image too large for this chunk size"));
++        }
++        Ok(Self { source, source_size: size, source_modified_ns: stamp, chunk,
++                  chunks: vec![0; count as usize] })
++    }
++    pub fn header(&self) -> String {
++        format!("{}\n{}\n{}\n{}\n{}\n", VERSION, self.source,
++                self.source_size, self.source_modified_ns, self.chunk)
++    }
++    pub fn load(path: &Path, expected: &Self) -> io::Result<Self> {
++        let contents = fs::read_to_string(path)?;
++        let mut lines = contents.lines();
++        for field in expected.header().lines() {
++            if lines.next() != Some(field) {
++                return Err(io::Error::new(io::ErrorKind::InvalidData, "rescue map source identity mismatch"));
++            }
++        }
++        let mut state = expected.clone();
++        for line in lines {
++            let mut fields = line.split_whitespace();
++            let index: usize = fields.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "map row empty"))?
++                .parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid map index"))?;
++            let value: u8 = fields.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "map value absent"))?
++                .parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid map value"))?;
++            if fields.next().is_some() || index >= state.chunks.len() || !(1..=2).contains(&value) {
++                return Err(io::Error::new(io::ErrorKind::InvalidData, "malformed rescue map update"));
++            }
++            state.chunks[index] = value;
++        }
++        Ok(state)
++    }
++}
++
++#[derive(Default, Debug)]
++pub struct RescueReport {
++    pub chunks_total: usize,
++    pub chunks_good: usize,
++    pub chunks_missing: usize,
++    pub bytes_without_full_read: u64,
++}
++
++#[cfg(unix)]
++fn same_file(a: &Path, b: &Path) -> io::Result<bool> {
++    use std::os::unix::fs::MetadataExt;
++    let a = fs::metadata(a)?;
++    let b = fs::metadata(b)?;
++    Ok(a.dev() == b.dev() && a.ino() == b.ino())
++}
++
++#[cfg(not(unix))]
++fn same_file(a: &Path, b: &Path) -> io::Result<bool> {
++    // The current beta only supports NEW outputs on Windows; resume is
++    // disabled there to avoid a hard-link alias overwriting the source.
++    Ok(fs::canonicalize(a)? == fs::canonicalize(b)?)
++}
++
++pub struct RescueOptions<'a> {
++    pub input: &'a Path,
++    pub output: &'a Path,
++    pub map_path: &'a Path,
++    pub chunk: usize,
++    pub resume: bool,
++    pub second_pass: bool,
++}
++
++/// Safe image-only multipass copier. The input is opened READ-ONLY; the output
++/// is a new regular file (or a previously journaled output on resume).
++/// Map updates are durable only AFTER destination fsync. A crash may force a
++/// harmless reread, but never marks uncommitted output as fully recovered.
++pub fn rescue_image(opts: &RescueOptions<'_>) -> io::Result<RescueReport> {
++    let (source, size, stamp) = image_identity(opts.input)?;
++    #[cfg(windows)]
++    if opts.resume {
++        return Err(io::Error::new(io::ErrorKind::Unsupported,
++            "Windows Rust-core resume is not validated. Use the Python image-rescue engine instead."));
++    }
++    if opts.input == opts.output || opts.input == opts.map_path || opts.output == opts.map_path {
++        return Err(io::Error::new(io::ErrorKind::InvalidInput, "image, destination and map paths must differ"));
++    }
++    // Reject destination aliases or symlinks, even when apparent paths differ.
++    for path in [opts.output, opts.map_path] {
++        if let Ok(canon) = fs::canonicalize(path) {
++            if canon == fs::canonicalize(opts.input)? || same_file(opts.input, path)? {
++                return Err(io::Error::new(io::ErrorKind::InvalidInput, "destination aliases patient"));
++            }
++        }
++    }
++    let sector = if size % 512 == 0 { 512 } else { 1 };
++    let expected = Map::new(source, size, stamp, opts.chunk)?;
++    let mut state;
++    let mut output;
++    let mut journal;
++    if opts.resume {
++        state = Map::load(opts.map_path, &expected)?;
++        image_identity(opts.output).and_then(|(_, n, _)| if n == size { Ok(()) } else {
++            Err(io::Error::new(io::ErrorKind::InvalidData, "destination image size changed"))
++        })?;
++        output = OpenOptions::new().read(true).write(true).open(opts.output)?;
++        journal = OpenOptions::new().append(true).open(opts.map_path)?;
++    } else {
++        if opts.map_path.exists() || opts.output.exists() {
++            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "new output and map paths required"));
++        }
++        output = OpenOptions::new().read(true).write(true).create_new(true).open(opts.output)?;
++        output.set_len(size)?;
++        output.sync_all()?;
++        journal = OpenOptions::new().write(true).create_new(true).open(opts.map_path)?;
++        state = expected;
++        journal.write_all(state.header().as_bytes())?;
++        journal.sync_all()?;
++    }
++    let mut input = File::open(opts.input)?;
++    let mut buffer = Vec::new();
++    let mut pending: Vec<(usize, u8)> = Vec::new();
++    let total = state.chunks.len();
++    let check = |index: usize, split: bool, st: &mut Map, src: &mut File, dst: &mut File,
++                 journal: &mut File, pending: &mut Vec<(usize, u8)>,
++                 scratch: &mut Vec<u8>| -> io::Result<()> {
++        if st.chunks[index] == 1 {
++            return Ok(());
++        }
++        let offset = index as u64 * opts.chunk as u64;
++        let n = usize::try_from((size - offset).min(opts.chunk as u64)).map_err(|_| io::Error::other("length overflow"))?;
++        let result = copy_region(src, dst, offset, n, sector, split, scratch)?;
++        let status = if result { 1 } else { 2 };
++        pending.push((index, status));
++        // Flush blocks in bounded batches. Crash before map update causes
++        // reread, not false recovery claims. No source writes, ever.
++        if pending.len() >= 64 {
++            dst.sync_data()?;
++            for (i, v) in pending.drain(..) {
++                writeln!(journal, "{} {}", i, v)?;
++                st.chunks[i] = v;
++            }
++            journal.sync_all()?;
++        }
++        Ok(())
++    };
++    for i in 0..total {
++        if state.chunks[i] == 0 {
++            check(i, false, &mut state, &mut input, &mut output, &mut journal, &mut pending, &mut buffer)?;
++        }
++    }
++    if !pending.is_empty() {
++        output.sync_data()?;
++        for (i, v) in pending.drain(..) {
++            writeln!(journal, "{} {}", i, v)?;
++            state.chunks[i] = v;
++        }
++        journal.sync_all()?;
++    }
++    if opts.second_pass {
++        // Reverse order on the second pass, splitting only failed regions.
++        for i in (0..total).rev() {
++            if state.chunks[i] == 2 {
++                check(i, true, &mut state, &mut input, &mut output, &mut journal, &mut pending, &mut buffer)?;
++            }
++        }
++        if !pending.is_empty() {
++            output.sync_data()?;
++            for (i, v) in pending.drain(..) {
++                writeln!(journal, "{} {}", i, v)?;
++                state.chunks[i] = v;
++            }
++            journal.sync_all()?;
++        }
++    }
++    // A file being actively modified is not a reliable forensic image.
++    let (final_source, final_size, final_stamp) = image_identity(opts.input)?;
++    if final_source != state.source || final_size != size || final_stamp != stamp {
++        return Err(io::Error::new(io::ErrorKind::InvalidData,
++            "patient image changed during rescue; output must not be certified"));
++    }
++    Ok(RescueReport {
++        chunks_total: total,
++        chunks_good: state.chunks.iter().filter(|&&v| v == 1).count(),
++        chunks_missing: state.chunks.iter().filter(|&&v| v != 1).count(),
++        bytes_without_full_read: state.chunks.iter().enumerate().filter(|(_, &v)| v != 1).map(|(i, _)| {
++            (size - i as u64 * opts.chunk as u64).min(opts.chunk as u64)
++        }).sum(),
++    })
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    struct Injected { bytes: Vec<u8>, bad: std::ops::Range<usize> }
++    struct Sink { output: Vec<u8> }
++    impl ReadAt for Injected {
++        fn read_at(&mut self, offset: u64, output: &mut [u8]) -> io::Result<()> {
++            let start = offset as usize;
++            if start < self.bad.end && start + output.len() > self.bad.start {
++                return Err(io::Error::new(io::ErrorKind::Other, "injected fault"));
++            }
++            output.copy_from_slice(&self.bytes[start..start + output.len()]);
++            Ok(())
++        }
++    }
++    impl WriteAt for Sink {
++        fn write_at(&mut self, offset: u64, data: &[u8]) -> io::Result<()> {
++            self.output[offset as usize..offset as usize + data.len()].copy_from_slice(data);
++            Ok(())
++        }
++    }
++    #[test]
++    fn split_read_salvages_valid_sectors_without_certifying_failed_region() {
++        let mut source = Injected { bytes: vec![0x47; 4096], bad: 1024..1536 };
++        let mut output = Sink { output: vec![0; 4096] };
++        let mut scratch = Vec::new();
++        assert!(!copy_region(&mut source, &mut output, 0, 4096, 512, true, &mut scratch).unwrap());
++        assert_eq!(&output.output[0..1024], &vec![0x47; 1024]);
++        assert_eq!(&output.output[1024..1536], &vec![0; 512]);
++        assert_eq!(&output.output[1536..4096], &vec![0x47; 2560]);
++    }
++    #[test]
++    fn identity_rejects_invalid_chunks() {
++        assert!(Map::new("x".into(), 4096, 0, 513).is_err());
++        assert_eq!(Map::new("x".into(), 4096, 0, 512).unwrap().chunks.len(), 8);
++    }
++    #[test]
++    fn map_roundtrip_rejects_foreign_identity() {
++        let a = Map::new("source_a".into(), 4096, 1, 512).unwrap();
++        let b = Map::new("source_b".into(), 4096, 1, 512).unwrap();
++        assert_ne!(a.header(), b.header());
++    }
++    #[test]
++    fn image_rescue_roundtrip_and_new_destination_requirement() {
++        use std::time::{SystemTime, UNIX_EPOCH};
++        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
++        let dir = std::env::temp_dir().join(format!("driverepair_core_{}_{}", std::process::id(), unique));
++        fs::create_dir(&dir).unwrap();
++        let source = dir.join("source.img");
++        let destination = dir.join("result.img");
++        let map = dir.join("result.rmap");
++        let expected = vec![0xAC; 1536];
++        fs::write(&source, &expected).unwrap();
++        let opts = RescueOptions { input: &source, output: &destination,
++                                   map_path: &map, chunk: 512, resume: false, second_pass: true };
++        let report = rescue_image(&opts).unwrap();
++        assert_eq!(report.chunks_missing, 0);
++        assert_eq!(fs::read(&destination).unwrap(), expected);
++        assert!(rescue_image(&opts).is_err()); // Never silently overwrite.
++        #[cfg(unix)] {
++            let resumed = RescueOptions { resume: true, ..opts };
++            assert_eq!(rescue_image(&resumed).unwrap().chunks_good, 3);
++        }
++        fs::remove_dir_all(&dir).unwrap();
++    }
++
++}
+diff --git a/current/rust/recovery-core/src/main.rs b/rust/recovery-core/src/main.rs
+new file mode 100644
+index 0000000..9bf7f32
+--- /dev/null
++++ b/rust/recovery-core/src/main.rs
+@@ -0,0 +1,49 @@
++use driverepair_recovery_core::{rescue_image, RescueOptions, DEFAULT_CHUNK};
++use std::path::Path;
++
++fn run() -> Result<i32, Box<dyn std::error::Error>> {
++    let args: Vec<String> = std::env::args().collect();
++    if args.len() < 4 || args[1] != "rescue-image" {
++        eprintln!("Usage: driverepair-recovery-core rescue-image SOURCE_IMAGE NEW_OUTPUT_IMAGE [--resume] [--no-second-pass] [--chunk-mib N]");
++        return Ok(64);
++    }
++    let mut resume = false;
++    let mut second_pass = true;
++    let mut chunk = DEFAULT_CHUNK;
++    let mut i = 4;
++    while i < args.len() {
++        match args[i].as_str() {
++            "--resume" => resume = true,
++            "--no-second-pass" => second_pass = false,
++            "--chunk-mib" => {
++                i += 1;
++                let m: usize = args.get(i).ok_or("missing MiB count")?.parse()?;
++                if m == 0 || m > 64 { return Err("chunk size must be 1-64 MiB".into()); }
++                chunk = m * 1024 * 1024;
++            }
++            _ => return Err(format!("unknown argument: {}", args[i]).into()),
++        }
++        i += 1;
++    }
++    let output = Path::new(&args[3]);
++    let map = format!("{}.rmap", output.display());
++    let result = rescue_image(&RescueOptions {
++        input: Path::new(&args[2]), output, map_path: Path::new(&map),
++        resume, second_pass, chunk,
++    })?;
++    println!("{{\"operation\":\"rust_rescue_image\",\"status\":\"{}\",\"chunks_total\":{},\"chunks_good\":{},\"chunks_missing\":{},\"bytes_without_full_read\":{},\"map_path\":\"saved_alongside_output\"}}",
++             if result.chunks_missing == 0 { "completed" } else { "incomplete_with_missing_regions" },
++             result.chunks_total, result.chunks_good, result.chunks_missing,
++             result.bytes_without_full_read);
++    Ok(if result.chunks_missing == 0 { 0 } else { 2 })
++}
++
++fn main() {
++    let result = std::panic::catch_unwind(run);
++    let code = match result {
++        Ok(Ok(code)) => code,
++        Ok(Err(err)) => { eprintln!("DriveRepair Rust core error: {err}"); 1 }
++        Err(_) => { eprintln!("DriveRepair Rust core aborted after panic"); 1 }
++    };
++    std::process::exit(code);
++}
+diff --git a/scripts/build_desktop.py b/scripts/build_desktop.py
+index 6e27c0c..c945bb0 100644
+--- a/scripts/build_desktop.py
++++ b/scripts/build_desktop.py
+@@ -14,7 +14,7 @@ from pathlib import Path
+ 
+ REPO = Path(__file__).resolve().parent.parent
+ DESKTOP = REPO / 'desktop'
+-VERSION = '0.2.9b1'
++VERSION = '0.3.0b1'
+ 
+ 
+ def command(args: list[str], cwd: Path = DESKTOP) -> None:

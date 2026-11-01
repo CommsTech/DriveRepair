@@ -10,6 +10,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 import zipfile
@@ -21,7 +23,7 @@ from .carving import carve_image
 from .archive_recovery import salvage_zip
 from .health import health_snapshot
 from .recovery import rescue_reader
-from .fat32_undelete import undelete_fat32
+from .fat32_undelete import undelete_fat32, list_deleted_fat32
 from .filesystem_repair import check_ext_image, repair_ext_image
 from .verification import verify_images
 from .media_refresh import (
@@ -42,7 +44,11 @@ from .encryption import (
     scan_path_for_encryption,
 )
 from . import console_ui as cui
-
+from .monitor import record_monitor_sample
+from .tsk_recovery import list_deleted_tsk, recover_selected_tsk
+from .forensics import image_evidence_manifest
+from .filesystems import detect_filesystems, recover_image
+from .sensors import SensorSuite
 
 
 def parser() -> argparse.ArgumentParser:
@@ -56,7 +62,7 @@ def parser() -> argparse.ArgumentParser:
                              else "Read-only test scan of a regular file image")
         target = cmd.add_mutually_exclusive_group(required=True)
         target.add_argument("--device" if name == "scan" else "--image", required=False)
-        cmd.add_argument("--mode", choices=["sample", "full"], default="sample")
+        cmd.add_argument("--mode", choices=["triage", "sample", "full"], default="triage")
         cmd.add_argument("--samples", type=int, default=128,
                          help="Evenly spaced chunks in sample mode (default: 128)")
         cmd.add_argument("--chunk-mib", type=int, default=1, choices=[1, 2, 4, 8],
@@ -71,7 +77,12 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument("--image" if name == "rescue-image" else "--device", required=True)
         cmd.add_argument("--output", required=True, help="New regular-file image path")
         cmd.add_argument("--resume", action="store_true", help="Resume a journaled recovery")
+        if name == 'rescue-image':
+            cmd.add_argument('--engine', choices=['python', 'rust'], default='python',
+                             help='Rust engine is optional / image-only / requires a separately built core')
         cmd.add_argument("--retry-missing", action="store_true", help="Retry missing ranges after initial pass")
+        cmd.add_argument("--multi-pass", action="store_true",
+                         help="After first-pass rescue, automatically retry missing regions in smaller pieces")
         cmd.add_argument("--chunk-mib", type=int, choices=[1, 2, 4, 8], default=1)
         cmd.add_argument("--max-read-errors", type=int, default=4096)
         if name == "rescue-external":
@@ -86,10 +97,17 @@ def parser() -> argparse.ArgumentParser:
         if name == "benchmark-external":
             cmd.add_argument("--ack-risk", action="store_true")
         cmd.add_argument("--json", action="store_true")
-    cmd = sub.add_parser("carve-image", help="Extract intact JPEG/PNG signatures from a regular-file image")
+    cmd = sub.add_parser(
+        "carve-image",
+        help="Extract JPEG/PNG/MP4/PDF/Office signatures from a regular-file image",
+    )
     cmd.add_argument("--image", required=True)
     cmd.add_argument("--output-dir", required=True)
-    cmd.add_argument("--formats", nargs="+", choices=["png", "jpeg"], default=["png", "jpeg"])
+    cmd.add_argument(
+        "--formats", nargs="+",
+        choices=["png", "jpeg", "mp4", "pdf", "ole", "doc", "xls", "docx", "xlsx"],
+        default=["png", "jpeg"],
+    )
     cmd.add_argument("--max-files", type=int, default=100)
     cmd.add_argument("--max-file-mib", type=int, default=32)
     cmd.add_argument("--allow-incomplete-image", action="store_true")
@@ -102,12 +120,24 @@ def parser() -> argparse.ArgumentParser:
     )
     cmd.add_argument("--image", required=True)
     cmd.add_argument("--json", action="store_true")
+    cmd = sub.add_parser('evidence-image', help='Read-only SHA-256 image hash and redacted evidence report')
+    cmd.add_argument('--image', required=True)
+    cmd.add_argument('--output', required=True, help='NEW JSON evidence manifest path')
+    cmd.add_argument('--case-ref', default='', help='Optional non-identifying local case code')
+    cmd.add_argument('--json', action='store_true')
     cmd = sub.add_parser('salvage-zip', help='Salvage intact CRC-verified ZIP members')
     cmd.add_argument('--archive', required=True)
     cmd.add_argument('--output-dir', required=True)
     cmd.add_argument('--max-files', type=int, default=1000)
     cmd.add_argument('--max-file-mib', type=int, default=128)
     cmd.add_argument('--max-total-mib', type=int, default=1024)
+    cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser('monitor-external', help='Scheduled read-only SMART trend (optional sampled triage); NEVER auto-repairs')
+    cmd.add_argument('--device', required=True)
+    cmd.add_argument('--state', required=True, help='Private monitor history on healthy storage')
+    cmd.add_argument('--expect-fingerprint', required=True, help='12-digit identity hint from list --json')
+    cmd.add_argument('--triage', action='store_true', help='Include bounded sampled read check')
+    cmd.add_argument('--ack-read-stress', action='store_true', help='Accept repeated reads of potentially failing disk')
     cmd.add_argument('--json', action='store_true')
     cmd = sub.add_parser('health', help='Read SMART/NVMe health using optional smartctl')
     cmd.add_argument('--device', required=True)
@@ -120,14 +150,56 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument('--image', required=True, help='Original regular-file image')
     cmd.add_argument('--output', required=True, help='Image to verify')
     cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser('list-deleted-fat32', help='Preview deleted FAT32 files in an image without writing')
+    cmd.add_argument('--image', required=True)
+    cmd.add_argument('--max-candidates', type=int, default=10000)
+    cmd.add_argument('--max-file-mib', type=int, default=128)
+    cmd.add_argument('--allow-incomplete-image', action='store_true')
+    cmd.add_argument('--ack-encrypted-volume', action='store_true')
+    cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser('list-deleted-tsk', help='Preview deleted files using optional Sleuth Kit fls')
+    cmd.add_argument('--image', required=True)
+    cmd.add_argument('--offset-sectors', type=int, default=0)
+    cmd.add_argument('--max-candidates', type=int, default=2000)
+    cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser('recover-selected-tsk', help='Restore selected inode IDs using optional Sleuth Kit icat')
+    cmd.add_argument('--image', required=True)
+    cmd.add_argument('--output-dir', required=True)
+    cmd.add_argument('--file-id', action='append', dest='file_ids', required=True)
+    cmd.add_argument('--offset-sectors', type=int, default=0)
+    cmd.add_argument('--max-file-mib', type=int, default=1024)
+    cmd.add_argument('--json', action='store_true')
     cmd = sub.add_parser('undelete-fat32', help='Recover contiguous deleted files from FAT32 disk images')
     cmd.add_argument('--image', required=True)
     cmd.add_argument('--output-dir', required=True)
     cmd.add_argument('--max-files', type=int, default=100)
     cmd.add_argument('--max-file-mib', type=int, default=128)
+    cmd.add_argument('--file-id', action='append', dest='file_ids', default=None,
+                     help='Recover ONLY this catalog ID; may be specified multiple times')
     cmd.add_argument('--allow-incomplete-image', action='store_true')
     cmd.add_argument('--ack-encrypted-volume', action='store_true',
                      help='Allow undelete even if BitLocker/LUKS signatures are present (usually wrong)')
+    cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser(
+        'detect-filesystems',
+        help='Identify FAT/NTFS/exFAT/ext/Btrfs/ZFS/APFS signatures on a disk image',
+    )
+    cmd.add_argument('--image', required=True)
+    cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser(
+        'recover-image',
+        help='Unified recovery: FS undelete (FAT32/NTFS/exFAT) and/or RAW signature carve',
+    )
+    cmd.add_argument('--image', required=True)
+    cmd.add_argument('--output-dir', required=True)
+    cmd.add_argument('--mode', choices=['auto', 'filesystem', 'raw'], default='auto')
+    cmd.add_argument('--max-files', type=int, default=100)
+    cmd.add_argument('--max-file-mib', type=int, default=128)
+    cmd.add_argument('--formats', nargs='+',
+                     choices=['png', 'jpeg', 'mp4', 'pdf', 'ole', 'doc', 'xls', 'docx', 'xlsx'],
+                     default=['png', 'jpeg', 'mp4', 'pdf', 'ole', 'docx', 'xlsx'])
+    cmd.add_argument('--allow-incomplete-image', action='store_true')
+    cmd.add_argument('--ack-encrypted-volume', action='store_true')
     cmd.add_argument('--json', action='store_true')
     cmd = sub.add_parser('check-ext-image', help='Read-only ext2/3/4 filesystem check using e2fsck -n')
     cmd.add_argument('--image', required=True)
@@ -188,6 +260,12 @@ def parser() -> argparse.ArgumentParser:
                              help='Required for USB/dock patients: bridges may drop, hide SMART, or fake serials')
             cmd.add_argument('--ack-unvalidated-hardware', action='store_true',
                              help='Required: live hardware refresh is still unvalidated (sacrificial tests pending)')
+        cmd.add_argument('--acoustic-watch', action='store_true',
+                         help='Optional soft acoustic WATCH (needs sounddevice); not a wear meter')
+        cmd.add_argument('--shock-guard', action='store_true',
+                         help='Optional chassis IMU shock STOP (not platter wobble detection)')
+        cmd.add_argument('--smart-deltas', action='store_true',
+                         help='Record SMART counter deltas during the job as soft WATCH signals')
         cmd.add_argument('--json', action='store_true')
     cmd = sub.add_parser('ram-journal-check', help='Validate Linux RAM mount + local UPS/battery; READ-ONLY')
     cmd.add_argument('--journal', required=True, help='Proposed journal path under tmpfs/ramfs')
@@ -330,12 +408,60 @@ def _verify_linux_patient_not_in_use(device) -> None:
 
 
 def _run_extras(args) -> int:
-    if args.command == 'health':
+    if args.command == 'monitor-external':
+        selected = select_external_device(args.device)
+        if selected.fingerprint[:12] != args.expect_fingerprint:
+            raise RuntimeError('Drive identity confirmation changed')
+        try:
+            snapshot = health_snapshot(selected)
+        except RuntimeError as exc:
+            snapshot = {'status': 'unknown', 'reason': str(exc)}
+        triage = None
+        if args.triage:
+            if not args.ack_read_stress:
+                raise ValueError('--triage requires --ack-read-stress')
+            reader = open_device_readonly(selected)
+            try:
+                triage = scan_reader(reader, size=selected.size_bytes, sector=selected.sector_size,
+                                     mode='triage', samples=96, chunk=1024 * 1024)
+            finally:
+                reader.close()
+        latest = select_external_device(args.device)
+        if latest.fingerprint != selected.fingerprint:
+            raise RuntimeError('Drive changed during monitoring; history not written')
+        result = record_monitor_sample(args.state, fingerprint=selected.fingerprint,
+                                       size_bytes=selected.size_bytes, health=snapshot, triage=triage)
+    elif args.command == 'health':
         selected = select_external_device(args.device)
         latest = select_external_device(args.device)
         if latest.fingerprint != selected.fingerprint:
             raise RuntimeError('Patient device changed before SMART query')
         result = health_snapshot(selected)
+    elif args.command == 'rescue-image' and args.engine == 'rust':
+        # The native engine is opt-in until independent OS builds and crash
+        # recovery tests are complete. Never quietly switch journal formats.
+        from .recovery import _safe_path
+        src, out = os.path.realpath(args.image), _safe_path(args.output)
+        _source_image_token(args.image)
+        if os.path.exists(out) and os.path.samefile(src, out):
+            raise ValueError('Source and destination image are the same file')
+        executable = os.environ.get('DRIVEREPAIR_RUST_CORE') or shutil.which('driverepair-recovery-core')
+        if not executable:
+            raise RuntimeError('Rust core not installed. Build rust/recovery-core and set DRIVEREPAIR_RUST_CORE; '
+                               'or choose --engine python for the tested legacy engine.')
+        if args.retry_missing and not args.resume:
+            raise ValueError('--retry-missing requires --resume')
+        if args.multi_pass and args.retry_missing:
+            raise ValueError('--multi-pass and --retry-missing cannot be combined')
+        command = [executable, 'rescue-image', src, out, '--chunk-mib', str(args.chunk_mib)]
+        if args.resume:
+            command.append('--resume')
+        result = subprocess.run(command, capture_output=True, text=True, timeout=None, check=False)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+        if result.stdout:
+            print(result.stdout)
+        return result.returncode
     elif args.command == 'ram-journal-check':
         guard = VolatilePowerGuard(args.power_source, args.journal, args.chunk_mib * 1024 * 1024)
         result = {'operation': 'ram_journal_check',
@@ -348,6 +474,8 @@ def _run_extras(args) -> int:
         with open(args.after, encoding='utf-8') as f:
             after = json.load(f)
         result = compare_benchmarks(before, after)
+    elif args.command == 'evidence-image':
+        result = image_evidence_manifest(args.image, args.output, case_ref=args.case_ref)
     elif args.command == 'salvage-zip':
         result = salvage_zip(args.archive, args.output_dir, max_files=args.max_files,
                              max_file_mib=args.max_file_mib, max_total_mib=args.max_total_mib)
@@ -364,6 +492,23 @@ def _run_extras(args) -> int:
             "findings": [f.public() for f in findings],
             "guidance": encryption_guidance(findings),
         }
+    elif args.command == 'list-deleted-tsk':
+        result = list_deleted_tsk(args.image, offset_sectors=args.offset_sectors,
+                                  max_candidates=args.max_candidates)
+    elif args.command == 'recover-selected-tsk':
+        result = recover_selected_tsk(args.image, args.output_dir, selected_ids=args.file_ids,
+                                      offset_sectors=args.offset_sectors,
+                                      max_file_mib=args.max_file_mib)
+    elif args.command == 'list-deleted-fat32':
+        enc = require_plaintext_filesystem(
+            args.image, ack_encrypted_volume=args.ack_encrypted_volume,
+            operation='FAT32 deleted-file preview',
+        )
+        result = list_deleted_fat32(args.image, max_candidates=args.max_candidates,
+                                    max_file_mib=args.max_file_mib,
+                                    allow_incomplete=args.allow_incomplete_image)
+        if enc:
+            result['encryption_warnings'] = [f.public() for f in enc]
     elif args.command == 'undelete-fat32':
         enc = require_plaintext_filesystem(
             args.image, ack_encrypted_volume=args.ack_encrypted_volume,
@@ -371,7 +516,34 @@ def _run_extras(args) -> int:
         )
         result = undelete_fat32(args.image, args.output_dir, max_files=args.max_files,
                                 max_file_mib=args.max_file_mib,
-                                allow_incomplete=args.allow_incomplete_image)
+                                allow_incomplete=args.allow_incomplete_image,
+                                selected_ids=args.file_ids)
+        if enc:
+            result = {**result, "encryption_warnings": [f.public() for f in enc],
+                      "guidance": encryption_guidance(enc)}
+    elif args.command == 'detect-filesystems':
+        detected = detect_filesystems(args.image)
+        result = {
+            "schema": 1,
+            "operation": "detect_filesystems",
+            "status": "completed",
+            "image": args.image,
+            "filesystems": [
+                {"kind": d.kind, "offset": d.offset, "size_hint": d.size_hint,
+                 "confidence": d.confidence, "notes": d.notes}
+                for d in detected
+            ],
+        }
+    elif args.command == 'recover-image':
+        enc = require_plaintext_filesystem(
+            args.image, ack_encrypted_volume=args.ack_encrypted_volume,
+            operation="unified image recovery",
+        )
+        result = recover_image(
+            args.image, args.output_dir, mode=args.mode, max_files=args.max_files,
+            max_file_mib=args.max_file_mib, allow_incomplete=args.allow_incomplete_image,
+            raw_formats=tuple(args.formats),
+        )
         if enc:
             result = {**result, "encryption_warnings": [f.public() for f in enc],
                       "guidance": encryption_guidance(enc)}
@@ -513,13 +685,59 @@ def _run_extras(args) -> int:
                     file=sys.stderr, flush=True,
                 )
 
+            sensors = SensorSuite(
+                acoustic=bool(getattr(args, 'acoustic_watch', False)),
+                shock=bool(getattr(args, 'shock_guard', False)),
+                smart_deltas=bool(getattr(args, 'smart_deltas', False)),
+            )
+            if sensors.smart and is_device:
+                try:
+                    snap = health_snapshot(selected)
+                    from .monitor import _numbers
+                    sensors.ingest_smart_counters(_numbers({'health': snap}))
+                except Exception:
+                    pass
+
             def identity_check() -> None:
                 if is_device:
                     latest = select_external_device(args.device)
                     assert_stable_identity(selected, latest)
 
+            def pre_write() -> None:
+                if guard:
+                    guard.check()
+                # Shock only on the write path — acoustic sampling is too slow for pre-write.
+                if sensors.shock:
+                    ev = sensors.shock.poll(offset_bytes=sensors.last_offset)
+                    if ev:
+                        sensors.events.append(ev)
+                    if ev and ev.severity == 'stop':
+                        raise RuntimeError(
+                            'Shock STOP: chassis motion exceeded threshold; '
+                            'journal retained. IMU is not platter metrology.'
+                        )
+
             def check_progress(state):
                 identity_check()
+                offset = state.get('offset')
+                if type(offset) is int:
+                    sensors.note_offset(offset)
+                for ev in sensors.poll(offset_bytes=offset if type(offset) is int else None):
+                    if ev.severity == 'watch':
+                        state = {
+                            **state,
+                            'health': {
+                                **(state.get('health') or {}),
+                                'mechanical': 'WATCH',
+                            },
+                            'message': ev.message,
+                            'sensor_event': {
+                                'kind': ev.kind, 'severity': ev.severity,
+                                'offset_bytes': ev.offset_bytes,
+                            },
+                        }
+                    elif ev.severity == 'stop':
+                        raise RuntimeError(ev.message)
                 dashboard.handle(state)
 
             result = refresh_media(
@@ -530,8 +748,9 @@ def _run_extras(args) -> int:
                 adaptive_samples=args.adaptive_samples, slow_multiplier=args.slow_multiplier,
                 journal_backend=args.journal_backend, auto_escalate=args.auto_escalate,
                 progress=check_progress, identity_check=identity_check,
-                pre_write_check=(lambda: guard.check()) if guard else None,
+                pre_write_check=pre_write,
             )
+            result['sensors'] = sensors.public_summary()
             if not args.json:
                 dashboard.finish(result)
         finally:
@@ -586,6 +805,8 @@ def _run_extras(args) -> int:
             sector = 512 if size % 512 == 0 else 1
         try:
             if args.command.startswith('rescue-'):
+                if args.multi_pass and args.retry_missing:
+                    raise ValueError('--multi-pass and --retry-missing cannot be combined')
                 def check_progress(state):
                     if is_device:
                         latest = select_external_device(args.device)
@@ -597,6 +818,15 @@ def _run_extras(args) -> int:
                                        max_failed_reads=args.max_read_errors,
                                        resume=args.resume, retry_missing=args.retry_missing,
                                        progress=check_progress)
+                if args.multi_pass and result.get('status') == 'completed_with_missing_data':
+                    # Revalidate device immediately before targeted retries.
+                    check_progress(result)
+                    result = rescue_reader(reader, size=size, sector=sector,
+                                           output=args.output, source_token=source_token,
+                                           chunk=args.chunk_mib * 1024 * 1024,
+                                           max_failed_reads=args.max_read_errors,
+                                           resume=True, retry_missing=True,
+                                           progress=check_progress)
             else:
                 result = read_benchmark(reader, size=size, sector=sector,
                                         mode=args.mode, samples=args.samples,
@@ -631,9 +861,12 @@ def run(argv: list[str] | None = None) -> int:
             return 0
         if args.command in {'rescue-image', 'rescue-external', 'benchmark-image',
                             'benchmark-external', 'carve-image', 'salvage-zip',
-                            'undelete-fat32', 'verify-images', 'check-ext-image', 'repair-ext-image',
+                            'undelete-fat32', 'list-deleted-fat32',
+                            'list-deleted-tsk', 'recover-selected-tsk',
+                            'detect-filesystems', 'recover-image',
+                            'verify-images', 'check-ext-image', 'repair-ext-image',
                             'compare-benchmarks', 'health', 'refresh-image', 'refresh-external',
-                            'ram-journal-check',
+                            'ram-journal-check', 'monitor-external', 'evidence-image',
                             'inspect-encryption'}:
             return _run_extras(args)
         if args.command == "list":
@@ -715,7 +948,7 @@ def run(argv: list[str] | None = None) -> int:
             f"errors={err_n}  elapsed={float(result.get('elapsed_seconds') or 0):.1f}s",
             file=sys.stderr,
         )
-        if result.get("mode") == "sample":
+        if result.get("mode") in {"sample", "triage"}:
             print("Sample scan only - untested regions may still have errors.", file=sys.stderr)
         if args.json:
             print(json.dumps(result, indent=2))

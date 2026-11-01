@@ -9,6 +9,8 @@ from __future__ import annotations
 import ctypes
 import errno
 import os
+import random
+import statistics
 import stat
 import sys
 import time
@@ -130,16 +132,31 @@ def open_device_readonly(device: Device) -> Reader:
 
 
 def scan_offsets(size: int, chunk: int, mode: str, samples: int):
-    if size <= 0 or chunk <= 0 or samples < 1 or mode not in {"sample", "full"}:
+    if size <= 0 or chunk <= 0 or samples < 1 or mode not in {"sample", "full", "triage"}:
         raise ValueError("Invalid scan parameters")
     blocks = (size + chunk - 1) // chunk
     if mode == "full":
         for index in range(blocks):
             yield index * chunk, min(chunk, size - index * chunk)
-    else:
+    elif mode == "sample":
         n = min(samples, blocks)
         for i in range(n):
             index = (i * (blocks - 1) // (n - 1)) if n > 1 else 0
+            yield index * chunk, min(chunk, size - index * chunk)
+    else:
+        # Reproducible stratified sampling. Start/end are included; every
+        # interior stratum uses a deterministic pseudo-random offset. This
+        # samples locations, not a statistically proven health distribution.
+        n = min(samples, blocks)
+        rng = random.Random(0xD12E5C4A ^ blocks ^ n)
+        selected = set()
+        for i in range(n):
+            lo = i * blocks // n
+            hi = min(blocks, (i + 1) * blocks // n)
+            index = (0 if i == 0 else blocks - 1 if i == n - 1
+                     else rng.randrange(lo, max(lo + 1, hi)))
+            selected.add(index)
+        for index in sorted(selected):
             yield index * chunk, min(chunk, size - index * chunk)
 
 
@@ -151,53 +168,109 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
             not 1 <= samples <= 100000):
         raise ValueError("Invalid size, alignment, sample count or error limit")
     blocks = (size + chunk - 1) // chunk
-    planned = blocks if mode == "full" else min(samples, blocks)
+    baseline = list(scan_offsets(size, chunk, mode, samples)) if mode != 'full' else None
+    planned = blocks if mode == 'full' else len(baseline)
     checked = readable = failures = 0
     failed_ranges: list[dict] = []
     completed = 0
     started = time.monotonic()
-    status = "completed"
-    for offset, length in scan_offsets(size, chunk, mode, samples):
+    status = 'completed'
+    latencies: list[float] = []
+    probe_latencies: list[tuple[int, float]] = []
+    anomalous_indices: list[int] = []
+    examined: set[int] = set()
+
+    def attempt(offset: int, length: int) -> bool:
+        nonlocal checked, readable, failures, completed, status
         checked += length
         completed += 1
+        examined.add(offset // chunk)
         error = None
+        t0 = time.monotonic()
         try:
             data = reader.read_at(offset, length)
             if len(data) != length:
-                error = f"short read ({len(data)} of {length} bytes)"
+                error = f'short read ({len(data)} of {length} bytes)'
             else:
                 readable += length
         except OSError as exc:
-            error = f"read failed ({type(exc).__name__}, errno={exc.errno})"
+            error = f'read failed ({type(exc).__name__}, errno={exc.errno})'
             if exc.errno in {errno.ENODEV, errno.EBADF, errno.EACCES,
                              errno.EPERM, errno.EINVAL, errno.ENOENT}:
-                status = "aborted_device_or_access_error"
+                status = 'aborted_device_or_access_error'
+        latency_ms = (time.monotonic() - t0) * 1000
         if error:
             failures += 1
+            anomalous_indices.append(offset // chunk)
             if len(failed_ranges) < 1000:
-                failed_ranges.append({"offset": offset, "length": length, "error": error})
+                failed_ranges.append({'offset': offset, 'length': length, 'error': error})
+        elif mode == 'triage':
+            latencies.append(latency_ms)
+            probe_latencies.append((offset, latency_ms))
         if progress:
-            progress(completed, planned)
-        if status.startswith("aborted"):
+            progress(min(completed, planned), planned)
+        if failures >= max_errors and status == 'completed':
+            status = 'aborted_error_limit'
+        return error is None
+
+    offsets = baseline if baseline is not None else scan_offsets(size, chunk, mode, samples)
+    for offset, length in offsets:
+        attempt(offset, length)
+        if status.startswith('aborted'):
             break
-        if failures >= max_errors:
-            status = "aborted_error_limit"
-            break
-    if status == "completed" and failures:
-        status = "completed_with_read_errors"
+
+    slow_regions: list[dict] = []
+    # Triage's second stage investigates neighboring chunks of read failures
+    # and slow samples, *not* the whole drive. Never re-read an already checked
+    # region and never permit unbounded growth of this work list.
+    if mode == 'triage' and not status.startswith('aborted'):
+        median_ms = statistics.median(latencies) if latencies else 0.0
+        threshold = max(50.0, median_ms * 4)
+        # We cannot retroactively detect which probes were slow without storing
+        # their latency, so capture probe timings in `attempt` below.
+        for off, latency in probe_latencies:
+            if latency >= threshold:
+                anomalous_indices.append(off // chunk)
+                slow_regions.append({'offset': off, 'latency_ms': round(latency, 3)})
+        suspects = sorted(set(anomalous_indices))
+        budget = min(samples, 4096)
+        neighbors = set()
+        for suspect in suspects:
+            for delta in (-2, -1, 1, 2):
+                idx = suspect + delta
+                if 0 <= idx < blocks and idx not in examined:
+                    neighbors.add(idx)
+                    if len(neighbors) >= budget:
+                        break
+            if len(neighbors) >= budget:
+                break
+        planned += len(neighbors)
+        for index in sorted(neighbors):
+            offset = index * chunk
+            attempt(offset, min(chunk, size - offset))
+            if status.startswith('aborted'):
+                break
+
+    if status == 'completed' and failures:
+        status = 'completed_with_read_errors'
+    elif status == 'completed' and slow_regions:
+        status = 'completed_with_slow_regions'
     return {
-        "status": status,
-        "mode": mode,
-        "device_size_bytes": size,
-        "logical_sector_bytes": sector,
-        "readable_bytes": readable,
-        "attempted_bytes": checked,
-        "attempted_chunks": completed,
-        "planned_chunks": planned,
-        "read_error_chunks": failures,
-        "read_error_ranges": failed_ranges,
-        "elapsed_seconds": round(time.monotonic() - started, 3),
-        "notes": ("Readability only; no sector repaired, no source writes, "
-                  "no checksum-based correctness guarantee. Failed ranges are "
-                  "chunk-sized and not confirmed individual defective sectors."),
+        'status': status,
+        'mode': mode,
+        'device_size_bytes': size,
+        'logical_sector_bytes': sector,
+        'readable_bytes': readable,
+        'attempted_bytes': checked,
+        'attempted_chunks': completed,
+        'planned_chunks': planned,
+        'read_error_chunks': failures,
+        'read_error_ranges': failed_ranges,
+        'slow_regions': slow_regions,
+        'follow_up_chunks': max(0, completed - (len(baseline) if baseline is not None else blocks)),
+        'surface_coverage_pct': round(100 * checked / size, 6),
+        'elapsed_seconds': round(time.monotonic() - started, 3),
+        'notes': ('TRIAGE IS A SPOT-CHECK, not a health certification. ' if mode == 'triage' else '') +
+                 'Readability only; no sector repaired, no writes, no correctness guarantee. '
+                 'Errors locate affected CHUNKS, not defective individual sectors.',
     }

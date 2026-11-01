@@ -1,3 +1,17 @@
+## 0.3.0b1 — 2026-11-01 (controlled engineering candidate)
+
+- Read-only deleted FAT32 candidate catalog with stable selection IDs, selected-only restore and revalidation.
+- Optional Sleuth Kit `fls`/`icat` deleted-file preview/selected extraction for additional filesystems (installation dependent).
+- Guided GUI Start Here workflow and multi-select deleted-file table with filesystem backend chooser.
+- Bounded deterministic stratified quick triage sampling with neighboring suspect region investigation; never certifies unsampled areas.
+- Python image-rescue `--multi-pass` to perform first-pass salvage and targeted retries in one operation.
+- Standalone `rust/recovery-core` no-dependency regular-image multipass rescue crate (compiler/CI validation pending).
+- Scheduled read-only drive-health trend monitor (SMART/NVMe and optional sampled triage); no automatic patient rewrites.
+- Privacy-minimized SHA-256 evidence-image manifest without unsupported chain-of-custody claims.
+- Multi-FS detection + `recover-image` (FAT32/NTFS/exFAT undelete; Btrfs/ZFS/APFS/ext → RAW carve) with expanded carve formats.
+- Soft mechanical indicators on refresh: `--acoustic-watch`, `--shock-guard`, `--smart-deltas` (WATCH/STOP only; latency/SMART remain primary; not platter metrology).
+- Updated guides, benchmark plan and honest public-beta safety gates; original bootloader sources preserved as experimental.
+
 # Changelog
 
 ## 0.2.9b1 — Public-beta candidate safety and throughput groundwork (2026-11-01)
