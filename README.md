@@ -1,117 +1,59 @@
 # DriveRepair
 
-**Cross-platform, read-only external disk surface scanner** for Windows, macOS, and Linux.
+**Experimental cross-platform disk diagnostics, image-first data rescue, and file recovery toolkit.**
 
-DriveRepair helps you discover eligible **external whole disks** and measure whether the operating system can return requested bytes—without writing to the source disk, without rebooting, and without pretending that a successful read means the data is healthy or repaired.
+DriveRepair is intended to grow into a single desktop/bootable workflow for inspecting drives, rescuing readable sectors, recovering files, repairing filesystems, assessing media reliability and measuring maintenance outcomes. **It does not yet do all of those things**. The current supported desktop CLI runs from Python 3.10+ without rebooting; the historical Rust BIOS/UEFI code remains experimental and is not the desktop recovery engine.
 
-| | |
-|---|---|
-| **Status** | Public experimental (`v0.0.1`) |
-| **Product path** | `desktop/` Python 3.10+ CLI |
-| **License** | [MIT](LICENSE) |
-| **Writes to source disks** | Never (desktop scanner) |
+**Release status: PRIVATE TEST ONLY.** This implementation has synthetic unit tests but no validated Windows/macOS physical-device rescue, no physically failing-disk recovery benchmarks and no verified firmware-level remediation.
 
-## What it does today
+## Implemented desktop commands
 
-- Lists external / removable whole disks using OS tools (`lsblk`, `diskutil`, PowerShell `Get-Disk`)
-- Runs **sample** or **full** read-only surface scans with bounded chunk size and error limits
-- Emits human or **JSON** results (readable bytes, attempted ranges, OS read errors)
-- Re-checks device identity before and after a scan
-- Runs offline unit tests without touching physical disks
+| Command | What it currently does | Source writes |
+|---|---|---|
+| `list` | Enumerate eligible external whole disks | None |
+| `health` | Optional `smartctl` SMART/NVMe health snapshot without self-tests | None |
+| `scan` / `scan-image` | Read-only sample/full diagnostics | None |
+| `rescue-image` | Clone readable regions of a regular-file disk image to a new sparse image; journal/resume/targeted retry | None |
+| `rescue-external` | **Linux only, experimental:** rescue selected external whole disk into a regular-file image on a different verified storage device | None to raw patient; destination written |
+| `benchmark-image` / `benchmark-external` | Read throughput, percentile latency and slow-zone measurements | None |
+| `compare-benchmarks` | Compare two same-source benchmark JSON files; *does not prove improved lifespan* | None |
+| `carve-image` | Extract intact PNGs with CRC checks; best-effort JPEGs from disk images | None to image; output files created |
+| `salvage-zip` | Recover CRC-valid, intact ZIP members even if other ZIP members are corrupt | None to archive; output files created |
 
-## What it does *not* do
+**Not yet implemented:** full NTFS/exFAT/APFS/ext4 undelete, partition-table repair, damaged-file reconstruction without redundant copies, production-ready raw sector remapping or media refresh, secure erase, physical-wear reversal, an integrated GUI, signed native installers, and a fully bootable modern rescue environment. Optional `health` uses local `smartctl` when present; absence or `unknown` does not mean healthy.
 
-- Does **not** repair, remap, TRIM, format, or wipe disks
-- Does **not** recover files or reconstruct unreadable data
-- Does **not** prove data integrity (a successful read ≠ correct original content)
-- Does **not** ship a production BIOS/UEFI “repair USB” (those prototypes are experimental and disabled for destructive media writing)
-
-If you need a clone of a failing drive, use a dedicated imaging tool on sacrificial or already-backed-up media. Reading a dying disk can accelerate failure—**image first**.
-
-## Quick start
-
-```bash
-cd desktop
-python3 -m driverepair_desktop list
-# Use an exact ID from the list, then:
-sudo python3 -m driverepair_desktop scan --device linux:/dev/sdX
-```
-
-**Windows** (elevated PowerShell):
-
-```powershell
-cd desktop
-py -3 -m driverepair_desktop list
-py -3 -m driverepair_desktop scan --device windows:PhysicalDriveN
-```
-
-**macOS:**
-
-```bash
-cd desktop
-python3 -m driverepair_desktop list
-sudo python3 -m driverepair_desktop scan --device macos:diskN
-```
-
-Full mode (longer, more stress on failing media):
-
-```bash
-sudo python3 -m driverepair_desktop scan --device <ID> --mode full --ack-risk --json
-```
-
-Hardware-free smoke test:
-
-```bash
-python3 -m driverepair_desktop scan-image --image ./some-regular-file.bin --json
-```
-
-Details, privileges, and limitations: **[desktop/README.md](desktop/README.md)**.
-
-## Tests
+## Get started
 
 ```bash
 cd desktop
 python3 -m unittest discover -s tests -v
+python3 -m driverepair_desktop --help
+python3 -m driverepair_desktop list
+python3 -m driverepair_desktop health --device linux:/dev/sdX --json
+python3 -m driverepair_desktop benchmark-image --image /path/to/test.img --json
+python3 -m driverepair_desktop rescue-image --image /path/to/test.img --output /safe/different/path/rescue.img --json
+python3 -m driverepair_desktop carve-image --image /safe/path/rescue.img --output-dir /safe/path/carved --json
+python3 -m driverepair_desktop salvage-zip --archive damaged.zip --output-dir recovered-members
 ```
 
-Rust library Gate 0 safety tests (fail-closed stubs; not a hardware driver suite):
+For rescue after incomplete reads, use `rescue-image --resume --retry-missing` with the exact same source/image/output/chunk size. The `.rescue.json` map records unknown ranges. **A zero byte in a sparse rescue image might mean an unreadable/unattempted sector, not recovered original data. Always examine the map.**
 
-```bash
-cargo test --features "std,alloc" --lib
-```
+Never put a recovery destination on the drive being rescued. By design the Linux live-device command refuses destinations that cannot be verified as separate block-device storage. Image-based workflows run on Windows, macOS and Linux; physical-device acquisition on Windows/macOS needs additional work.
 
-## Repository layout
+See [desktop guide](desktop/README.md), [project status](docs/PROJECT_STATUS.md), and [media recovery research](docs/MEDIA_REFRESH_RESEARCH.md).
 
-| Path | Role |
-|---|---|
-| `desktop/driverepair_desktop/` | **Supported product:** read-only host scanner |
-| `desktop/tests/` | Synthetic / fixture tests (no real disks) |
-| `src/` | Experimental Rust library (fail-closed unimplemented I/O) |
-| `src/boot/` | Experimental UEFI/BIOS prototypes — **unshipped** |
-| `scripts/` | Legacy USB writers — **hard-disabled** (`exit 2`) |
-| `docs/` | Status, architecture, safety, and release notes |
+## Safety
 
-## Documentation
+- Diagnostics and rescue use read-only source handles. All writes go to **new output files**.
+- No command in the supported desktop CLI rewrites/reassigns/erases physical sectors.
+- Read errors can be recoverable later; continued reads and SMART queries can stress or wake a mechanically failing drive. For valuable failing media, professional recovery or a proven imaging tool may be preferable.
+- Image-first recovery does not magically reconstruct lost data or reverse wear. The user must verify backups and destination identity.
+- **This code has not undergone physical-hardware validation or security review sufficient for public release.**
 
-- [Project status](docs/PROJECT_STATUS.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Safety gate](docs/release-readiness/SAFETY_GATE.md)
-- [Test evidence](docs/release-readiness/TEST_EVIDENCE.md)
-- [Release decision](docs/release-readiness/RELEASE_DECISION.md)
-- [Security policy](SECURITY.md)
-- [Contributing](CONTRIBUTING.md)
-- [Changelog](CHANGELOG.md)
+## Historical components
 
-## Principles
+`src/` and `src/boot/` contain earlier Rust prototypes. They are intentionally not invoked as hardware-repair drivers by the desktop CLI. The legacy USB writers under `scripts/` remain hard-disabled for safety.
 
-1. Never call a successful read a “repair.”
-2. Never write to the scanned source from the desktop path.
-3. Prefer explicit device IDs from a fresh discovery list.
-4. Prefer honest `Unknown` / `Unsupported` over false success.
-5. Publish only claims backed by tests or labeled limitations.
+## License
 
-## Disclaimer
-
-THE SOFTWARE IS PROVIDED “AS IS”. DriveRepair is experimental diagnostic software. Authors are not liable for data loss, drive failure, or misuse. Always keep backups.
-
-Maintained by **commstech**.
+MIT, see [LICENSE](LICENSE). No third-party recovery engine is copied or bundled.
