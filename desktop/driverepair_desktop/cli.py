@@ -1207,8 +1207,15 @@ def run(argv: list[str] | None = None) -> int:
             bus = device.bus
             smart = try_health_snapshot(device)
             if smart is None:
-                print("SMART unavailable on this path — media health stays UNKNOWN until evidence arrives.",
+                print("No SMART/Windows health baseline — media stays UNKNOWN until evidence arrives.",
                       file=sys.stderr)
+            elif smart.get('source') == 'windows_storage_healthstatus':
+                print(
+                    f"Windows HealthStatus baseline: {smart.get('status')} "
+                    "(coarse; not SMART attributes; does not authorize repair). "
+                    "Install smartmontools for stronger media counters.",
+                    file=sys.stderr,
+                )
             else:
                 print(f"SMART baseline: {smart.get('status')} (does not authorize repair).",
                       file=sys.stderr)

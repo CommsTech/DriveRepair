@@ -55,5 +55,26 @@ class HealthTests(unittest.TestCase):
         slow = tracker.observe(latency_ms=200.0, median_ms=10.0, failed=False)
         self.assertEqual(slow['mechanical'], 'WATCH')
 
+    def test_windows_health_fallback_maps_healthy(self):
+        from driverepair_desktop.health import try_health_snapshot, media_from_smart
+        device = Device('windows:PhysicalDrive2', r'\\.\PhysicalDrive2', 'Seagate', 1000, 512, 'usb')
+
+        def runner(cmd, **kw):
+            if cmd and cmd[0] == 'smartctl':
+                raise FileNotFoundError('smartctl')
+            payload = json.dumps({
+                'disk_health': 'Healthy',
+                'disk_operational': 'Online',
+                'physical_health': 'Healthy',
+                'physical_operational': 'OK',
+            }).encode()
+            return subprocess.CompletedProcess(cmd, 0, stdout=payload)
+
+        snap = try_health_snapshot(device, run=runner)
+        self.assertIsNotNone(snap)
+        self.assertEqual(snap['status'], 'windows_health_limited')
+        self.assertEqual(media_from_smart(snap), 'OK')
+        self.assertEqual(snap['source'], 'windows_storage_healthstatus')
+
 if __name__ == '__main__':
     unittest.main()
