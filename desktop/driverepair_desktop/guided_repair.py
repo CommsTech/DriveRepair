@@ -114,6 +114,95 @@ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
             'uninvestigated_original_ranges': max(0, len(ranges) - max_regions)}
 
 
+
+def inspect_failed_boundaries(reader, ranges: list[dict], *, size: int,
+                              sector: int, probe_bytes: int = 64 * 1024,
+                              max_probes: int = 24,
+                              max_elapsed_seconds: float = 15.0,
+                              progress=None) -> dict:
+    """Bounded read-only investigation OUTSIDE both edges of failed requests.
+
+    A failed 16 MiB read identifies an UNKNOWN 16 MiB range, not a bad sector.
+    Probe success identifies the nearest *observed* readable logical range,
+    not a physical NAND page or platter track. Never authorize a write here.
+    Limits are soft: OS/USB firmware can stall an individual synchronous read.
+    """
+    import time
+    from .adaptive_scan import classify_error
+
+    if not 0 < sector <= 1024 * 1024 or size <= 0 or size % sector:
+        raise ValueError('Invalid disk geometry')
+    if max_probes < 2 or max_probes > 256 or max_elapsed_seconds <= 0:
+        raise ValueError('Invalid inspection budget')
+    span = max(sector, probe_bytes // sector * sector)
+    deadline = time.monotonic() + max_elapsed_seconds
+    probes = 0
+    observations = []
+    regions = []
+    for raw in ranges[:8]:
+        off, length = raw.get('offset'), raw.get('length')
+        if (type(off) is not int or type(length) is not int or off < 0 or
+                length < sector or length % sector or off % sector or off + length > size):
+            continue
+        neighbors = {}
+        for side in ('left', 'right'):
+            boundary = off if side == 'left' else off + length
+            found = None
+            for step in range(4):
+                if probes + 2 > max_probes or time.monotonic() >= deadline:
+                    found = {'status': 'budget_exhausted'}
+                    break
+                distance = span * (2 ** step)
+                if side == 'left':
+                    start = max(0, boundary - distance)
+                    end = min(boundary, start + span)
+                else:
+                    start = min(size, boundary + (distance - span))
+                    end = min(size, start + span)
+                start = start // sector * sector
+                end = end // sector * sector
+                length_to_read = end - start
+                if length_to_read < sector:
+                    found = {'status': 'drive_boundary'}
+                    break
+                try:
+                    a = reader.read_at(start, length_to_read)
+                    probes += 1
+                    if len(a) != length_to_read:
+                        raise OSError('short read')
+                    b = reader.read_at(start, length_to_read)
+                    probes += 1
+                    if len(b) != length_to_read or a != b:
+                        observation = 'inconsistent'
+                    else:
+                        observation = 'repeatable_read'
+                except OSError as exc:
+                    probes += 1  # charge the attempted operation
+                    observation = classify_error(exc)
+                    if observation == 'device_or_access_unavailable':
+                        found = {'status': 'device_unavailable'}
+                entry = {'offset': start, 'length': length_to_read,
+                         'side': side, 'observation': observation}
+                observations.append(entry)
+                if progress is not None:
+                    progress({'probes': probes, **entry})
+                if observation == 'repeatable_read':
+                    found = {'status': 'boundary_observed', 'offset': start,
+                             'length': length_to_read}
+                    break
+                if found and found['status'] == 'device_unavailable':
+                    break
+            neighbors[side] = found or {'status': 'not_established'}
+        regions.append({'offset': off, 'length': length, 'neighbors': neighbors})
+        if any(x.get('status') == 'device_unavailable' for x in neighbors.values()):
+            break
+    return {'regions': regions, 'observations': observations, 'read_calls': probes,
+            'budget_exhausted': (probes >= max_probes or time.monotonic() >= deadline or
+                                 any(side.get('status') == 'budget_exhausted'
+                                     for r in regions for side in r['neighbors'].values())),
+            'no_writes': True, 'repair_authorized': False,
+            'note': 'Logical neighbors only; readable boundary is not a good-sector or file-integrity certificate.'}
+
 def plan_targeted_refresh(scan: dict, *, sector: int, chunk: int,
                           max_regions: int = 64, smart: dict | None = None,
                           hardware: bool = False, allow_unknown_health: bool = False,

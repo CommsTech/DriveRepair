@@ -1,3 +1,12 @@
+### 0.3.3b11 — Mounted volume preparation and fault-boundary investigation
+
+- Qt Fix workflows may explicitly authorize temporary Windows exclusive lock/dismount of mounted external volumes after scanning. Busy volumes, unknown mount paths and failed locks stop safely; no forceful dismount or permanent drive-letter removal.
+- Windows raw-drive handle opening occurs only after the relevant filesystem volumes are exclusively locked; all locks are closed on failure or completion.
+- Added read-only, two-sided, bounded neighboring probes around failed requests; reports observations separately from verified repair candidates.
+- Reduced additional suspect rereads on failing devices and preserved unresolved error-state reporting.
+- Qt error panel now explains busy-volume lock failures instead of only showing an exit code.
+- Added synthetic regression tests, retaining native Windows USB hardware, PySide6 clickthrough and crash/power interruption as explicit release blockers.
+
 ### 0.3.3b10 — Full-drive Qt accuracy, contextual help, inspection and reconnect
 
 - Fixed Qt quick-scan percentage and added ETA.

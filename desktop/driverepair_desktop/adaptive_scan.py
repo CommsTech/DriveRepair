@@ -212,10 +212,17 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
         from .guided_repair import investigate_failed_ranges
         investigation = investigate_failed_ranges(
             reader, deferred, sector=sector,
-            max_reads=max_followup_reads, max_regions=min(16, max_deferred))
+            max_reads=min(max_followup_reads, 24), max_regions=min(8, max_deferred))
         if investigation.get('device_unstable'):
             status = 'aborted_device_or_access_error'
 
+    boundary_investigation = None
+    if deferred and status != 'aborted_device_or_access_error':
+        from .guided_repair import inspect_failed_boundaries
+        boundary_investigation = inspect_failed_boundaries(
+            reader, deferred[:8], size=size, sector=sector,
+            probe_bytes=max(sector, min(64 * 1024, min_chunk)),
+            max_probes=16, max_elapsed_seconds=12.0)
     elapsed = max(0.001, time.monotonic() - started)
     # Fast pass never interprets skipped extents as covered or good.
     visited = max(0, position - sum(int(x['length']) for x in skipped))
@@ -226,6 +233,7 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
         'attempted_chunks': read_count,
         'planned_chunks': math.ceil(size / chunk),
         'read_error_chunks': failures, 'read_error_ranges': deferred,
+        'error_boundary_investigation': boundary_investigation,
         'read_error_ranges_truncated': error_count_over_limit,
         'deferred_retry_budget_reached': retries_limited,
         'slow_regions': slow, 'slow_region_count': slow_count,

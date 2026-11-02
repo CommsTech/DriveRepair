@@ -1,3 +1,7 @@
+## DriveRepair 0.3.3b11 Windows experimental repair preparation
+
+When a mounted external volume is selected for *Fix my drive* in Qt, the app requests separate target confirmation and explains temporary lock/dismount. Windows exclusive locking must succeed; open files prevent the operation. Both-side read-error boundary checks are read-only observations, not automatic sector rewrites. See `../docs/WINDOWS_VOLUME_PREPARATION_AND_ERROR_BOUNDARIES.md` for test gates and limits.
+
 ## 0.3.3b8 media-aware scanning and UI
 
 Quick Repair now samples **at least 10% of unique disk addresses**, not 128

@@ -502,7 +502,10 @@ def launch():
                     answer=QMessageBox.question(self,'Experimental physical writes',
                         'DriveRepair can permanently damage data on a failing drive.\n\n'
                         'Only consistently readable regions are eligible. A RAM-only write has no crash recovery.\n\n'
-                        'Would you like to review an explicit device confirmation?',
+                        'For an external drive with a Windows letter, DriveRepair will attempt an exclusive '
+                        'lock and temporary dismount AFTER scanning, only if no files are in use. '
+                        'It will not forcibly close applications or remove the drive letter permanently.\n\n'
+                        'Continue to device confirmation?',
                         QMessageBox.Yes | QMessageBox.No)
                     if answer!=QMessageBox.Yes:return
                     from PySide6.QtWidgets import QInputDialog
@@ -565,7 +568,7 @@ def launch():
                             'This stores offsets and observations, not recovered sector bytes.',
                             QMessageBox.Yes | QMessageBox.No)==QMessageBox.Yes
                     args=['care-external','--device',dev,'--mode','full' if kind=='carefull' else 'quick',
-                          *journal_args,'--confirm-identity',d['identity_hint'],
+                          *journal_args,'--auto-lock-volumes','--confirm-identity',d['identity_hint'],
                           '--ack-risk','--ack-destructive','--ack-no-backup','--ack-data-loss-risk',
                           '--ack-usb-bridge-risk','--ack-unvalidated-hardware','--ack-unknown-health',
                           '--progress-jsonl','--json']
@@ -581,6 +584,7 @@ def launch():
             self._buf={'stdout':'','stderr':''};self._final_stdout='';self._scanned=0
             self._last_progress_at=time.monotonic()
             self._last_phase=None
+            self._last_error=None
             self.proc=QProcess(self);self.proc.setProgram(cli_prefix()[0]);self.proc.setArguments(cli_prefix()[1:]+args)
             self.proc.readyReadStandardError.connect(lambda:self.consume('stderr'))
             self.proc.readyReadStandardOutput.connect(lambda:self.consume('stdout'))
@@ -598,7 +602,11 @@ def launch():
                 line,self._buf[channel]=self._buf[channel].split('\n',1)
                 try:obj=json.loads(line)
                 except (ValueError,TypeError):
-                    if line:self.note_log(line[:1200]);continue
+                    if line:
+                        self.note_log(line[:1200])
+                        if line.startswith('Error:'):
+                            self._last_error=line[6:].strip()[:600]
+                    continue
                 if isinstance(obj,dict) and obj.get('type')=='progress':self.progress_event(obj)
                 else:self._pending=obj
         def progress_event(self,event):
@@ -647,7 +655,15 @@ def launch():
                 self.explain.setText('Reconnect the same drive, refresh the list, and select “Continue interrupted full scan”. Reverification is mandatory; no write restarts automatically.')
             else:
                 self.result.setText(f'Stopped / attention needed  ({exit_code})')
-                self.explain.setText('Open Expert details for the specific error. No health claim is made.')
+                error = getattr(self, '_last_error', None)
+                if error and ('volume is in use' in error.lower() or
+                              'cannot open patient volume' in error.lower()):
+                    self.result.setText('Close files on the selected drive')
+                    self.explain.setText('DriveRepair could not safely lock the volume. Close File Explorer, backup, '
+                                         'antivirus and other programs using the drive, then retry. '
+                                         'No forceful dismount was attempted.')
+                else:
+                    self.explain.setText(error or 'Open Expert details for the specific error. No health claim is made.')
             scan_report=result.get('scan') if isinstance(result.get('scan'),dict) else {}
             scan_checkpoint=result.get('scan_checkpoint') or scan_report.get('scan_checkpoint')
             if scan_checkpoint:

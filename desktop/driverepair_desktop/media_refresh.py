@@ -87,10 +87,53 @@ class ImageReadWriter:
         os.close(self.fd)
 
 
+def _windows_lock_paths(partitions, *, allow_mounted: bool) -> list[str]:
+    """Choose one volume handle per partition; never force unknown mounts.
+
+    Accept a currently assigned letter ONLY when the operator authorized
+    temporary exclusive lock+dismount and Windows confirms it is not in use.
+    This helper does not itself open, lock or dismount a volume.
+    """
+    if isinstance(partitions, dict):
+        partitions = [partitions]
+    if not isinstance(partitions, list):
+        raise RuntimeError('Unexpected Windows partition inventory')
+    volume_paths = []
+    for partition in partitions:
+        if not isinstance(partition, dict) or not isinstance(partition.get('Paths'), list):
+            raise RuntimeError('Unrecognized patient partition access paths')
+        guids, letters = [], []
+        for path in partition['Paths']:
+            if path is None or path == '':
+                continue
+            if not isinstance(path, str):
+                raise RuntimeError('Unrecognized patient volume path')
+            if path.startswith('\\\\?\\Volume{') and path.endswith('}\\'):
+                guids.append(path[:-1])
+            elif len(path) == 3 and path[1:] == ':\\' and path[0].isalpha():
+                if not allow_mounted:
+                    raise RuntimeError('Patient has mounted drive letter ' + path[0].upper() +
+                                       ':; explicitly approve temporary exclusive dismount first')
+                letters.append('\\\\.\\' + path[0].upper() + ':')
+            else:
+                raise RuntimeError('Unsupported patient volume mount path: ' + path)
+        if len(guids) > 1 or len(letters) > 1:
+            raise RuntimeError('Ambiguous patient volume paths')
+        if guids:
+            volume_paths.append(guids[0])
+        elif letters:
+            volume_paths.append(letters[0])
+        elif partition['Paths']:
+            raise RuntimeError('Unrecognized partition without an accessible volume handle')
+    if len(volume_paths) != len(set(volume_paths)):
+        raise RuntimeError('Duplicate volume handles detected')
+    return volume_paths
+
+
 class WindowsReadWriter:
     """Win32 physical-drive RW handle with write-through."""
 
-    def __init__(self, device: Device) -> None:
+    def __init__(self, device: Device, *, defer_raw_open: bool = False) -> None:
         if sys.platform != "win32" or not device.path.startswith("\\\\.\\PhysicalDrive"):
             raise ValueError("Not a Windows physical drive")
         from ctypes import wintypes
@@ -119,23 +162,32 @@ class WindowsReadWriter:
         self.kernel.FlushFileBuffers.restype = wintypes.BOOL
         self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
         self.kernel.CloseHandle.restype = wintypes.BOOL
+        self._device = device
+        self.handle = None
+        self._volume_handles: list[int] = []
+        if not defer_raw_open:
+            self.open_raw()
+
+    def open_raw(self) -> None:
+        """Open the raw disk only AFTER its volumes are locked for normal repair."""
+        if self.handle is not None:
+            raise RuntimeError('Raw patient already open')
         access = 0x80000000 | 0x40000000
         flags = 0x80000000  # FILE_FLAG_WRITE_THROUGH
-        # Exclusive raw disk handle: prevent parallel in-place writers on Windows.
-        self.handle = self.kernel.CreateFileW(device.path, access, 0, None, 3, flags, None)
+        self.handle = self.kernel.CreateFileW(self._device.path, access, 0, None, 3, flags, None)
         if self.handle == ctypes.c_void_p(-1).value or self.handle is None:
             err = ctypes.get_last_error()
+            self.handle = None
             if err == 5:  # ERROR_ACCESS_DENIED
                 raise PermissionError(
-                    "Windows refused GENERIC_WRITE on the physical drive (WinError 5). "
-                    "Re-run DriveRepair from an elevated Administrator terminal for "
-                    "in-place refresh. Read-only physical-drive scans may also require "
-                    "Administrator access; image-file operations do not."
+                    'Windows refused GENERIC_WRITE on the physical drive (WinError 5). '
+                    'Re-run DriveRepair from an elevated Administrator terminal for '
+                    'in-place refresh. Read-only physical-drive scans may also require '
+                    'Administrator access; image-file operations do not.'
                 )
             raise ctypes.WinError(err)
-        self._volume_handles: list[int] = []
 
-    def lock_volumes(self, disk_number: int) -> None:
+    def lock_volumes(self, disk_number: int, *, allow_mounted: bool = False) -> None:
         """Lock every discoverable filesystem volume, including no-letter volumes.
 
         A mounted directory junction or other unhandled access path is a hard
@@ -146,9 +198,11 @@ class WindowsReadWriter:
 
         # SilentlyContinue: wiped RAW disks have zero partitions / access paths.
         script = (
-            f"$parts = @(Get-Partition -DiskNumber {int(disk_number)} -ErrorAction SilentlyContinue); "
-            "if ($parts.Count -eq 0) { '[]' } else { "
-            "$parts | ForEach-Object { $_.AccessPaths } | ConvertTo-Json -Compress }"
+            f"$errs = @(); $parts = @(Get-Partition -DiskNumber {int(disk_number)} "
+            "-ErrorAction SilentlyContinue -ErrorVariable +errs); "
+            "if ($errs.Count -gt 0) { throw 'Unable to establish complete patient partition inventory' }; "
+            "@($parts | ForEach-Object { [pscustomobject]@{ Paths=@($_.AccessPaths) } }) | "
+            "ConvertTo-Json -Compress -Depth 4"
         )
         try:
             completed = subprocess.run(
@@ -164,20 +218,7 @@ class WindowsReadWriter:
             )
         raw = completed.stdout.decode("utf-8-sig").strip()
         parsed = json.loads(raw) if raw and raw != "null" else []
-        paths = [parsed] if isinstance(parsed, str) else list(parsed or [])
-        volume_paths = []
-        for path in paths:
-            if path is None or path == "":
-                continue
-            if not isinstance(path, str):
-                raise RuntimeError("Unrecognized volume path in patient partition inventory")
-            if path.startswith("\\\\?\\Volume{") and path.endswith("}\\"):
-                volume_paths.append(path[:-1])  # Open volume GUID without trailing slash.
-            elif path:
-                raise RuntimeError(
-                    "Patient has a filesystem mount path; unmount all volume access paths before refresh: "
-                    + path
-                )
+        volume_paths = _windows_lock_paths(parsed, allow_mounted=allow_mounted)
         FSCTL_LOCK_VOLUME = 0x00090018
         FSCTL_DISMOUNT_VOLUME = 0x00090020
         self.kernel.DeviceIoControl.argtypes = [
@@ -264,12 +305,16 @@ class UnixReadWriter:
         os.close(self.fd)
 
 
-def open_device_readwrite(device: Device) -> ReadWriter:
+def open_device_readwrite(device: Device, *, auto_lock_volumes: bool = False) -> ReadWriter:
     if sys.platform == "win32":
-        media = WindowsReadWriter(device)
+        media = WindowsReadWriter(device, defer_raw_open=True)
         number = int(device.path.rsplit("PhysicalDrive", 1)[-1])
         try:
-            media.lock_volumes(number)
+            # Acquire exclusive filesystem locks before opening the raw disk.
+            # A mounted letter is not intrinsically busy; open files cause the
+            # lock to fail, in which case all handles are released unchanged.
+            media.lock_volumes(number, allow_mounted=auto_lock_volumes)
+            media.open_raw()
             return media
         except BaseException:
             media.close()
@@ -322,13 +367,18 @@ def assert_stable_identity(expected: Device, observed: Device) -> None:
         raise RuntimeError("Patient capacity or sector size changed")
 
 
-def assert_patient_idle_windows(device: Device) -> None:
+def assert_patient_idle_windows(device: Device, *, allow_locked_volume: bool = False) -> None:
     """Refuse refresh when Windows reports a drive letter on the patient.
 
     A wiped RAW disk with no partitions is idle — Get-Partition failing with
     "no MSFT_Partition" must not block full-surface write verification.
     """
     if sys.platform != "win32":
+        return
+    if allow_locked_volume:
+        # This is NOT a bypass of exclusive access. The actual write-open MUST
+        # successfully lock + dismount every volume before any patient writes.
+        # Only caller-authorized external disks are eligible.
         return
     import subprocess
     number = int(device.path.rsplit("PhysicalDrive", 1)[-1])

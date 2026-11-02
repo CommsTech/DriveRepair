@@ -1,23 +1,27 @@
-**0.3.3b10 ENGINEERING CANDIDATE: PRIVATE TESTS ONLY.** Qt progress/map accuracy, >=10% Quick Check, native Windows read-only inspect, durable journal option. Physical write qualification remains open. See `docs/QT_UI_AND_HARDWARE_RELIABILITY_B10.md`.
+**0.3.3b11 ENGINEERING CANDIDATE: PRIVATE TESTS ONLY.** Explicit Windows volume lock/dismount preparation and bounded two-sided error-boundary probes. Not a public physical-repair release. See `docs/WINDOWS_VOLUME_PREPARATION_AND_ERROR_BOUNDARIES.md`.
 
 # Status — 2026-11-02
 
-PRIVATE TEST — **0.3.3b10** Qt accuracy + recovery continuity; Seagate ST1000LM048 = **SMR**.
+PRIVATE TEST — **0.3.3b11** mounted-volume preparation + SSD error-boundary budgets.
 
 ## Product
 
-- Version `0.3.3b10`: truthful Quick Scan % and byte-accurate surface map cells; Quick Check/Repair plan >=10% unique coverage; recent vs average speed + ETA; Drive Details / `inspect-storage` (Win32 read-only, not write auth); Fix/Recover/Check goal filters; durable journal option + resume modes
-- Read-only firmware_inspect Rust trait (hints only — no vendor command transmitters)
-- Admin Qt debug: `DRIVEREPAIR_GUI_DEBUG=1`
+- Version `0.3.3b11`: Qt Fix / `care-external` `--auto-lock-volumes` (temp lock then dismount; no force without lock; letters not permanently removed)
+- Lock volumes **before** opening raw disk for writes; fail closed on folder mounts / ambiguous inventory
+- Two-sided read-only `error_boundary_investigation`; reduced quick-scan suspect/retry budgets
+- Clearer Qt busy-filesystem messaging; Admin `DRIVEREPAIR_GUI_DEBUG` retained
 
-## Seagate ST1000LM048 1 TB (USB / SMR)
+## Lab evidence (user SSD)
+
+- Quick sample ~94.4% planned work / ~47.61 GiB / 20 I/O fails; stalled on mounted letter **E:** (expected refusal until auto-lock Fix path)
+- Errors unproven (NAND vs USB/host/power)
+
+## Seagate / USB patients
 
 | Step | State |
 |------|--------|
-| Prior ~20% scan + USB disconnect | Identity recheck blocked writes (correct) |
-| Get-Disk hangs | Use Drive Details / native inspect; PowerShell write-path still gated |
-| Resume / durable journal validation | Pending sacrificial hardware |
+| Mounted-letter Fix with `--auto-lock-volumes` | Ready for disposable NTFS/exFAT validation |
 | Public release | **Blocked** |
 
 Lab: `D:\DriveRepairLab\seagate_st1000lm048_wipe_refresh_20261101\`
-Artifacts: `docs/releases/0.3.3b10/`
+Artifacts: `docs/releases/0.3.3b11/`
