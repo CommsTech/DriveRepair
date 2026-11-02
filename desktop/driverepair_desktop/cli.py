@@ -1209,15 +1209,27 @@ def run(argv: list[str] | None = None) -> int:
             scan_started = time.perf_counter()
             last_human = [0.0]
 
-            def report(current: int, total: int) -> None:
+            def report(current: int, total: int, info: dict | None = None) -> None:
                 total = max(1, total)
                 pct = 100.0 * current / total
                 chunk = args.chunk_mib * 1024 * 1024
-                offset = min(size, max(0, (current - 1) * chunk)) if current else 0
+                info = info or {}
+                offset = int(info.get('offset', min(size, max(0, (current - 1) * chunk)) if current else 0))
+                latency_ms = info.get('latency_ms')
+                median_ms = info.get('median_ms')
+                failed = bool(info.get('failed'))
                 elapsed = max(1e-6, time.perf_counter() - scan_started)
                 bytes_done = min(size, current * chunk)
                 speed = bytes_done / elapsed
                 eta = ((size - bytes_done) / speed) if speed > 0 and current < total else 0.0
+                mechanical = "UNKNOWN"
+                if failed:
+                    mechanical = "FAIL"
+                elif (latency_ms is not None and median_ms is not None
+                      and latency_ms >= max(float(median_ms) * 4, 50.0)):
+                    mechanical = "WATCH"
+                elif latency_ms is not None:
+                    mechanical = "OK"
                 scan_emitter.emit({
                     "phase": "SCANNING",
                     "probe_index": current,
@@ -1227,14 +1239,27 @@ def run(argv: list[str] | None = None) -> int:
                     "offset": offset,
                     "size": size,
                     "rewritten_bytes": bytes_done,
-                    "verified_bytes": bytes_done,
-                    "latency_ms": None,
-                    "median_ms": None,
-                    "message": f"Read-only {args.mode} scan {current}/{total}",
-                    "health": {"media": "UNKNOWN", "transport": "UNKNOWN", "mechanical": "UNKNOWN"},
+                    "verified_bytes": 0 if failed else bytes_done,
+                    "latency_ms": latency_ms,
+                    "median_ms": median_ms,
+                    "failed": failed,
+                    "message": (
+                        f"Read-only {args.mode} scan {current}/{total}"
+                        + (f"  lat {latency_ms:.0f} ms" if latency_ms is not None else "")
+                        + (f"  med {median_ms:.0f} ms" if median_ms is not None else "")
+                    ),
+                    "health": {
+                        "media": "FAIL" if failed else "UNKNOWN",
+                        "transport": "UNKNOWN",
+                        "mechanical": mechanical,
+                    },
                     "eta_seconds": eta,
                     "speed_bps": speed,
-                }, force=(current <= 1 or current >= total))
+                }, force=(current <= 1 or current >= total or failed or mechanical == "WATCH"))
+                # When JSONL is on (GUI child), do not also paint a \r TTY bar —
+                # it concatenates onto JSON lines and floods the Advanced log.
+                if scan_emitter.enabled:
+                    return
                 now = time.perf_counter()
                 if (current == total or current == 1 or current % max(1, total // 10) == 0
                         or now - last_human[0] >= 2.0):
