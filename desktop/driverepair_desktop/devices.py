@@ -423,7 +423,7 @@ def verify_windows_patient_still_present(device: Device, *, size_slop_bytes: int
     """WMI-free mid-job recheck via native PhysicalDrive IOCTL (Admin typically required).
 
     After heavy USB patient I/O, CIM/Get-Disk often time out even though the same
-    ``\\.\PhysicalDriveN`` handle still opens. Keep the inventory Device (and its
+    PhysicalDrive handle still opens. Keep the inventory Device (and its
     fingerprint) when the native size agrees within ``size_slop_bytes``.
     """
     if sys.platform != 'win32':
