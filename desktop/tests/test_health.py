@@ -38,5 +38,22 @@ class HealthTests(unittest.TestCase):
         self.assertEqual(result['nvme']['media_errors'], 2)
         self.assertEqual(result['status'], 'smart_passed_limited')
 
+    def test_scan_health_tracker_latency_and_readiness(self):
+        from driverepair_desktop.health import ScanHealthTracker
+        tracker = ScanHealthTracker(bus='usb', smart=None)
+        self.assertEqual(tracker.media, 'UNKNOWN')
+        view = tracker.observe(latency_ms=12.0, median_ms=10.0, failed=False)
+        self.assertEqual(view['mechanical'], 'OK')
+        self.assertIsNone(tracker.repair_readiness()['smart_status'])
+        self.assertIn('media health unknown', ' '.join(tracker.repair_readiness()['blockers']))
+        # Build enough OK samples for mechanical baseline while media still blocks repair.
+        for _ in range(20):
+            tracker.observe(latency_ms=11.0, median_ms=10.0, failed=False)
+        readiness = tracker.repair_readiness()
+        self.assertEqual(readiness['status'], 'blocked')
+        self.assertTrue(any('media health unknown' in b for b in readiness['blockers']))
+        slow = tracker.observe(latency_ms=200.0, median_ms=10.0, failed=False)
+        self.assertEqual(slow['mechanical'], 'WATCH')
+
 if __name__ == '__main__':
     unittest.main()

@@ -494,6 +494,22 @@ def launch() -> None:
                 capacity_var.set('Read-only scan — no destination image')
                 destination_var.set('Destination: not used for scan')
                 legend_var.set('Scan map · . pending   o readable sample   S slow   X unreadable')
+                readiness = event.get('repair_readiness') or {}
+                blockers = readiness.get('blockers') or []
+                if blockers:
+                    warning_var.set('Repair not authorized: ' + '; '.join(blockers[:3]))
+                    warning_label.configure(fg=C['warn'])
+                else:
+                    warning_var.set(
+                        'Metrics present for triage only — not a refresh/repair authorization.'
+                    )
+                    warning_label.configure(fg=C['muted'])
+        if event.get('failed'):
+            errors_var.set('read errors observed')
+        elif phase == "SCANNING" and stats.get('latency_ms') is not None:
+            # Keep unreadable card honest unless failures arrive.
+            if errors_var.get() in {'—', ''}:
+                errors_var.set('none yet')
         metric_var.set(
             f"{pct:5.1f}% done\n"
             f"lat {('—' if lat is None else f'{lat:.0f} ms'):>8}   med {('—' if med is None else f'{med:.0f} ms'):>8}\n"
