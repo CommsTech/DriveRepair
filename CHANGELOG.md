@@ -1,3 +1,13 @@
+### 0.3.3b10 — Full-drive Qt accuracy, contextual help, inspection and reconnect
+
+- Fixed Qt quick-scan percentage and added ETA.
+- Corrected full-drive surface map to show fractional uniquely read coverage and failure markers.
+- Distributed 10% Quick Scan samples across full disk in randomized, seek-bounded groups.
+- Simplified Qt goal menus; added help icons and read-only OS drive details.
+- Added opt-in read-only automatic reconnect/resume using a saved scan checkpoint and identity recheck; no automatic patient writes.
+- Added read-only Windows native storage property diagnostics, Linux sysfs/macOS diskutil inspection, and Rust vendor identification scaffold with no firmware commands.
+- Kept PowerShell `Get-Disk` write authorization and all remaining physical hardware qualification gates.
+
 ## 0.3.3b8 (2026-11-02) — Media-aware guided scanning
 
 - Exact-model SMR classification (Seagate ST1000LM048), conservative unknown profiles, NVMe/SSD distinctions.

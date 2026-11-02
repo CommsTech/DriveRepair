@@ -9,6 +9,8 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
+pub mod firmware_inspect;
+
 pub const VERSION: &str = "DRIVEREPAIR_IMAGE_MAP_V1";
 pub const DEFAULT_CHUNK: usize = 1024 * 1024;
 

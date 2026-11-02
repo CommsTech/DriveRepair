@@ -1,8 +1,9 @@
-# Architecture notes — 0.3.3b9 desktop
+# Architecture notes — 0.3.3b10 desktop
 
-1. **Diagnose / adaptive scan** — grow/shrink reads; unique vs re-probe accounting; WinError 1117 vs 433.
-2. **Scan checkpoint / resume** — `scan_checkpoint.py`: offsets-only local metadata; resume verifies hashed identity/geometry/offset; never stores sector bytes or authorizes writes.
-3. **Rates** — `rates.py` recent-window throughput; average retained separately.
-4. **Media profiles / guided repair** — SMR/CMR/SSD/NVMe-aware (0.3.3b8); Quick ≥10% stratified coverage.
-5. **GUI** — `qtgui.py` (PySide6, optional) preferred by `gui`; Tk remains `gui-legacy`. CLI remains authoritative for identity and writes. `DRIVEREPAIR_GUI_DEBUG` mirrors diagnostics to lab log.
-6. **Maintenance / preferences / dependencies** — as in 0.3.3b6–b7.
+1. **Qt workstation** — progress % is operation completion (not probe-fraction); surface map (`surface_map.py`) paints only verified byte fractions per cell.
+2. **Sampling** — Quick Check/Repair plan >=10% unique LBA coverage with recorded seeds; Full scan adaptive + checkpoint/resume (0.3.3b9).
+3. **Rates / ETA** — recent-window throughput vs job average; repair % from transaction queue.
+4. **Host inspection** — `windows_native.py` / `host_capabilities.py` / `inspect-storage`: read-only descriptors; never authorize writes.
+5. **Media / guided repair** — SMR/CMR/SSD/NVMe profiles (ST1000LM048 = SMR); durable journal option on healthy disk; RAM-only remains non-resumable for writes.
+6. **Firmware** — Rust `firmware_inspect` vendor-hint traits only; no flash/VSC/TTL/NVMe unlock paths.
+7. **Debug** — `DRIVEREPAIR_GUI_DEBUG` mirrors Qt/Tk engine logs to lab files.
