@@ -55,6 +55,10 @@ from .forensics import image_evidence_manifest
 from .filesystems import detect_filesystems, recover_image
 from .sensors import SensorSuite
 from .guided_repair import tuned_scan, plan_targeted_refresh, investigate_failed_ranges
+from .maintenance import (firmware_inventory, windows_volume_facts,
+                          volume_optimization_plan, execute_optimization)
+from .health import media_from_smart
+from .diagnostics import probe_range
 
 
 def parser() -> argparse.ArgumentParser:
@@ -63,6 +67,25 @@ def parser() -> argparse.ArgumentParser:
     sub = cli.add_subparsers(dest="command", required=True)
     listing = sub.add_parser("list", help="List externally attached whole disks")
     listing.add_argument("--json", action="store_true")
+    probe = sub.add_parser('probe-region', help='READ-ONLY: bounded investigation of a previously failed disk range')
+    probe.add_argument('--device', required=True)
+    probe.add_argument('--offset', type=int, required=True, help='Byte offset from an earlier scan report')
+    probe.add_argument('--length', type=int, default=4194304, help='Probe extent, at most 8 MiB')
+    probe.add_argument('--max-reads', type=int, default=32)
+    probe.add_argument('--confirm-identity', required=True)
+    probe.add_argument('--ack-read-stress', action='store_true')
+    probe.add_argument('--json', action='store_true')
+    firmware = sub.add_parser('firmware-info', help='READ-ONLY installed firmware revision; no updates')
+    firmware.add_argument('--device', required=True)
+    firmware.add_argument('--json', action='store_true')
+    optimization = sub.add_parser('optimize-volume', help='Windows OS-native optimization; advisory by default')
+    optimization.add_argument('--device', required=True, help='Disk ID from list')
+    optimization.add_argument('--letter', required=True, help='Mapped volume letter (E, not E:)')
+    optimization.add_argument('--confirm-identity', help='Required for write optimization')
+    optimization.add_argument('--execute', action='store_true', help='Actually defrag HDD / retrim SSD')
+    optimization.add_argument('--ack-optimization-risk', action='store_true',
+                              help='Acknowledge that optimization can harm recovering/deleted data')
+    optimization.add_argument('--json', action='store_true')
     all_disks = sub.add_parser("list-all-linux", help="READ-ONLY: show internal and external Linux whole disks for offline recovery")
     all_disks.add_argument("--json", action="store_true")
     planning = sub.add_parser("plan-system-recovery", help="READ-ONLY: validate offline internal disk and destination before rescue")
@@ -1374,6 +1397,47 @@ def run(argv: list[str] | None = None) -> int:
             from .gui import launch
             launch()
             return 0
+        if args.command == 'probe-region':
+            if not args.ack_read_stress:
+                raise ValueError('Explicit --ack-read-stress is required for problematic media')
+            selected = select_external_device(args.device)
+            if selected.fingerprint[:12] != args.confirm_identity:
+                raise ValueError('Device fingerprint mismatch')
+            assert_stable_identity(selected, select_external_device(args.device))
+            reader = open_device_readonly(selected)
+            try:
+                report = probe_range(reader, offset=args.offset, length=args.length,
+                                     sector=selected.sector_size, size=selected.size_bytes,
+                                     max_reads=args.max_reads)
+            finally:
+                reader.close()
+            print(json.dumps(report, indent=2))
+            return 0 if report['status'] == 'all_requests_readable' else 2
+        if args.command == 'firmware-info':
+            selected = select_external_device(args.device)
+            report = firmware_inventory(selected)
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == 'optimize-volume':
+            if sys.platform != 'win32':
+                raise RuntimeError('Windows Optimize-Volume is available on Windows only')
+            selected = select_external_device(args.device)
+            facts = windows_volume_facts(selected, args.letter)
+            health = try_health_snapshot(selected)
+            smart_state = str((health or {}).get('status') or 'unknown')
+            # Windows HealthStatus alone cannot establish media integrity.
+            if smart_state == 'smart_passed_limited' and media_from_smart(health) != 'OK':
+                smart_state = 'media_warning'
+            plan = volume_optimization_plan(disk=selected, letter=args.letter,
+                                            facts=facts, smart_state=smart_state)
+            if args.execute:
+                if (not args.ack_optimization_risk or
+                        selected.fingerprint[:12] != args.confirm_identity):
+                    raise ValueError('Execution requires explicit risk acknowledgment and current identity fingerprint')
+                assert_stable_identity(selected, select_external_device(args.device))
+                plan = execute_optimization(plan)
+            print(json.dumps(plan, indent=2))
+            return 0 if not args.execute or plan.get('performed') else 2
         if args.command in {'plan-system-recovery'}:
             if not sys.platform.startswith('linux'):
                 raise RuntimeError('Offline-system-drive recovery currently requires Linux')

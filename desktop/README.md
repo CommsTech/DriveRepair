@@ -225,3 +225,8 @@ regions are not declared good.
 
 Run `xvfb-run -a python -m unittest discover -s tests -v` on Linux to include
 Tk GUI telemetry/legend tests; Windows and macOS GUI/hardware checks remain pending.
+
+
+### Drive maintenance additions (0.3.3b6)
+
+Run `firmware-info --device ...` to inspect installed firmware when possible (not update availability); run `probe-region` for bounded, read-only investigation of a known failing offset; run `optimize-volume --device ... --letter E` for advisory Windows volume optimization. Physical optimization requires additional explicit authorization and healthy independent evidence. The GUI now remembers non-sensitive journal/policy selections but always reconfirms write risks. See [Maintenance guide](../docs/MAINTENANCE_AND_FIRMWARE.md).

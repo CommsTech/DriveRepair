@@ -85,6 +85,8 @@ class RealGuiWorkflowTests(unittest.TestCase):
         # Triggering workflows must never enumerate or read physical test-host disks.
         with mock.patch.object(tk, 'Tk', side_effect=patched_tk), \
              mock.patch.object(devices, 'list_external_devices', return_value=[]), \
+             mock.patch.object(gui, 'load_preferences', return_value={'schema': 1, 'repair_storage': 'disk', 'repair_policy': 'balanced', 'dashboard': False}), \
+             mock.patch.object(gui, 'save_preferences', return_value=None), \
              mock.patch.object(messagebox, 'showerror', side_effect=lambda title, text, **kw: errors.append(f'{title}: {text}')):
             gui.launch()
         self.assertFalse(exceptions, f'Unhandled Tk exceptions: {exceptions}')
@@ -164,11 +166,15 @@ class RealGuiWorkflowTests(unittest.TestCase):
             self.assertIn('Quick repair', labels)
             self.assertIn('Full repair', labels)
             self.assertIn('Read-only quick check', labels)
+            for name in ('Firmware info', 'Optimize advice', 'Investigate a failed offset (read-only)'):
+                self.assertIn(name, labels)
             comboboxes = [w for w in all_visible if isinstance(w, ttk.Combobox)]
             match = [w for w in comboboxes if any('Volatile RAM only' in str(opt)
                      for opt in w.cget('values'))]
             self.assertTrue(match, 'RAM-only mode must be offered alongside disk journaling')
             self.assertTrue(match[0].winfo_ismapped(), 'RAM-only storage selector is hidden')
+            self.assertIn('Disk journal', match[0].get())  # Safe first-run default
+            match[0].set('Volatile RAM only (NO saved files)')
             self.assertIn('Volatile RAM only', match[0].get())
             # This test intentionally does not select a real disk or authorize a write.
         self.open_app(scenario)

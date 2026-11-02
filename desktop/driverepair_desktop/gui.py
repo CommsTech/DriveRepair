@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .rescue_display import RescueDisplayState, format_duration
 from .console_ui import fmt_bytes
+from .preferences import load_preferences, save_preferences, DEFAULTS
 
 
 # Industrial dark palette (high-contrast status colors, no purple/glow stack).
@@ -52,6 +53,46 @@ def recovery_command(args: list[str], *, executable: str | None = None,
     return [python, '-m', 'driverepair_desktop', *args]
 
 
+def _gui_debug_enabled() -> bool:
+    return os.environ.get('DRIVEREPAIR_GUI_DEBUG', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def _open_gui_debug_log() -> Path | None:
+    """Mirror UI/engine diagnostics to a durable file when debug tracking is on."""
+    if not _gui_debug_enabled():
+        return None
+    import faulthandler
+    faulthandler.enable(all_threads=True)
+    stamp = time.strftime('%Y%m%dT%H%M%S')
+    candidates = [
+        Path(os.environ['DRIVEREPAIR_GUI_DEBUG_LOG']) if os.environ.get('DRIVEREPAIR_GUI_DEBUG_LOG') else None,
+        Path(r'D:\DriveRepairLab\seagate_st1000lm048_wipe_refresh_20261101') / f'gui_debug_{stamp}.log',
+        Path.home() / 'DriveRepairLab' / f'gui_debug_{stamp}.log',
+        Path(os.environ.get('TEMP', '.')) / f'DriveRepair_gui_debug_{stamp}.log',
+    ]
+    for path in candidates:
+        if path is None:
+            continue
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open('a', encoding='utf-8') as handle:
+                handle.write(
+                    f'# DriveRepair GUI debug start {time.strftime("%Y-%m-%dT%H:%M:%S")}\n'
+                    f'# pid={os.getpid()} python={sys.executable}\n'
+                    f'# argv={sys.argv!r}\n'
+                )
+            latest = path.with_name('gui_debug_latest.log')
+            try:
+                latest.write_text(f'active={path}\n', encoding='utf-8')
+            except OSError:
+                pass
+            print(f'[DriveRepair DEBUG] logging to {path}', flush=True)
+            return path
+        except OSError:
+            continue
+    return None
+
+
 def launch() -> None:
     try:
         import tkinter as tk
@@ -64,7 +105,26 @@ def launch() -> None:
     except tk.TclError as exc:
         raise RuntimeError("No desktop display available. Use the DriveRepair CLI instead") from exc
 
-    root.title("DriveRepair Recovery Workstation")
+    debug_log_path = _open_gui_debug_log()
+    debug_lock = threading.Lock()
+
+    def debug_trace(text: str) -> None:
+        if debug_log_path is None:
+            return
+        line = text if text.endswith('\n') else text + '\n'
+        try:
+            with debug_lock:
+                with debug_log_path.open('a', encoding='utf-8') as handle:
+                    handle.write(line)
+            print(line, end='', flush=True)
+        except OSError:
+            pass
+
+    window_title = "DriveRepair Recovery Workstation"
+    if debug_log_path is not None:
+        window_title += " [DEBUG]"
+        debug_trace(f'debug_log={debug_log_path}\n')
+    root.title(window_title)
     root.geometry("1180x820")
     root.minsize(960, 700)
     root.configure(bg=C["bg"])
@@ -92,6 +152,7 @@ def launch() -> None:
     style.configure("Treeview.Heading", background=C["panel"], foreground=C["muted"])
     style.configure("Horizontal.TProgressbar", troughcolor=C["panel2"], background=C["accent"])
 
+    prefs = load_preferences()
     q: queue.Queue[tuple[str, object]] = queue.Queue()
     process: subprocess.Popen[str] | None = None
     busy = False
@@ -154,7 +215,7 @@ def launch() -> None:
     # Do not pack overview initially — packing then immediately forgetting races
     # idle-layout tests and flashes empty telemetry on slow Windows Tk updates.
     overview = ttk.Frame(shell)
-    dashboard_visible = tk.BooleanVar(value=False)
+    dashboard_visible = tk.BooleanVar(value=bool(prefs["dashboard"]))
 
     # Live ops strip
     ops = tk.Frame(overview, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
@@ -349,8 +410,8 @@ def launch() -> None:
             overview.pack_forget()
 
     def on_dashboard_toggle() -> None:
-        # Read the Checkbutton variable after Tk applies the toggle.
         set_dashboard_visible(bool(dashboard_visible.get()))
+        save_repair_preferences()
 
     ttk.Checkbutton(header, text='Show recovery dashboard', variable=dashboard_visible,
                     command=on_dashboard_toggle).pack(
@@ -383,6 +444,7 @@ def launch() -> None:
         if advanced_open.get():
             log.see("end")
         log.configure(state="disabled")
+        debug_trace(text)
 
     def require(var: tk.StringVar, name: str) -> str:
         value = var.get().strip()
@@ -739,8 +801,25 @@ def launch() -> None:
         return value
 
     # The main recovery page must offer the no-image / no-output choice.
-    quick_repair_storage = tk.StringVar(value='Volatile RAM only (NO saved files)')
-    guided_repair_policy = tk.StringVar(value='Balanced: bounded error recovery + weak regions')
+    quick_repair_storage = tk.StringVar(value=(
+        'Volatile RAM only (NO saved files)' if prefs['repair_storage'] == 'memory'
+        else 'Disk journal (crash recoverable)'))
+    guided_repair_policy = tk.StringVar(value=(
+        'Balanced: bounded error recovery + weak regions' if prefs['repair_policy'] == 'balanced'
+        else 'Preserve data: no read error retries'))
+
+    def save_repair_preferences(*_unused: object) -> None:
+        try:
+            save_preferences({'schema': 1,
+                'repair_storage': ('memory' if quick_repair_storage.get().startswith('Volatile RAM') else 'disk'),
+                'repair_policy': ('balanced' if guided_repair_policy.get().startswith('Balanced') else 'preserve'),
+                'dashboard': bool(dashboard_visible.get())})
+        except OSError:
+            # Optional preferences must not interfere with recovery controls.
+            status.set('Could not save UI preferences; operation choices remain usable')
+
+    quick_repair_storage.trace_add('write', save_repair_preferences)
+    guided_repair_policy.trace_add('write', save_repair_preferences)
     ack_media_warn = tk.BooleanVar(value=False)
 
     def device_action(kind: str) -> None:
@@ -853,6 +932,64 @@ def launch() -> None:
                command=lambda: device_action("diagnose")).pack(side="left", padx=(0, 8))
     ttk.Button(secondary, text="Benchmark (read-only)",
                command=lambda: device_action("benchmark")).pack(side="left", padx=(0, 8))
+    # Firmware checking is read-only; optimization uses OS-native volume tools.
+    def firmware_action() -> None:
+        try:
+            start(['firmware-info', '--device', chosen_device(), '--json'],
+                  'Firmware inventory (read-only)')
+        except ValueError as exc:
+            messagebox.showerror('Device selection', str(exc))
+
+    def optimize_action() -> None:
+        try:
+            dev = chosen_device()
+            if sys.platform != 'win32':
+                raise ValueError('This optimizer uses Windows Optimize-Volume; other OS tools are not yet integrated.')
+            letter = simpledialog.askstring('Optimize a healthy volume',
+                'Which drive letter is mounted on the selected disk? (e.g. E)')
+            if letter is None:
+                return
+            if not (len(letter) == 1 and letter.isalpha() and letter.isascii()):
+                raise ValueError('Enter one drive letter (e.g. E), without a colon')
+            start(['optimize-volume', '--device', dev, '--letter', letter.upper(), '--json'],
+                  'Drive-aware optimization plan (read-only)')
+        except ValueError as exc:
+            messagebox.showerror('Optimize volume', str(exc))
+
+    def investigate_error_region() -> None:
+        try:
+            dev = chosen_device()
+            if dev not in inventory:
+                raise ValueError('Refresh inventory before investigating a physical disk')
+            at = simpledialog.askinteger('Investigate failed region',
+                'Enter the BYTE OFFSET from the earlier Full Scan report.\n'
+                'The probe reads at most 8 MiB and does not write to the drive.',
+                minvalue=0)
+            if at is None:
+                return
+            sector = inventory[dev].sector_size
+            if at % sector:
+                raise ValueError(f'Offset must be aligned to {sector}-byte logical sectors')
+            if not messagebox.askyesno('Read stress on a possibly failing drive',
+                'This performs up to 32 read-only requests around the failing offset. '
+                'A severely failing drive may deteriorate further. Continue?'):
+                return
+            start(['probe-region', '--device', dev, '--offset', str(at),
+                   '--length', '4194304', '--max-reads', '32',
+                   '--confirm-identity', inventory[dev].fingerprint[:12],
+                   '--ack-read-stress', '--json'],
+                  'Read-only failed-region investigation', risky=True)
+        except ValueError as exc:
+            messagebox.showerror('Investigate read failure', str(exc))
+
+    tools_row = ttk.Frame(tab_drive)
+    tools_row.pack(fill='x', pady=(0, 5))
+    ttk.Button(tools_row, text='Firmware info', command=firmware_action).pack(side='left', padx=(0, 6))
+    ttk.Button(tools_row, text='Optimize advice', command=optimize_action).pack(side='left', padx=(0, 6))
+    ttk.Button(tools_row, text='Investigate a failed offset (read-only)',
+               command=investigate_error_region).pack(side='left')
+    ttk.Label(tools_row, text='Use a byte offset reported by a stopped Full Scan.',
+              style='Muted.TLabel').pack(side='left', padx=8)
     unknown_health_override = tk.BooleanVar(value=False)
     ttk.Checkbutton(secondary, text="Permit manual risk override if SMART is unavailable",
                     variable=unknown_health_override).pack(side="left", padx=(4, 0))
@@ -1662,6 +1799,9 @@ def launch() -> None:
         import traceback
         details = ''.join(traceback.format_exception(error_type, error_value, error_tb))
         write('Unexpected interface error:\n' + details + '\n')
+        if debug_log_path is not None:
+            advanced_open.set(True)
+            show_advanced()
         status.set('Interface error — see Advanced details / engine log')
         try:
             messagebox.showerror('DriveRepair interface error',
@@ -1670,9 +1810,14 @@ def launch() -> None:
             pass
 
     root.report_callback_exception = report_ui_error
+    if debug_log_path is not None:
+        advanced_open.set(True)
+        show_advanced()
+        write(f'Debug tracking ON — mirroring engine/UI output to:\n  {debug_log_path}\n')
+        status.set(f'Debug tracking ON → {debug_log_path}')
     # The recovery dashboard is available on demand but initially hidden so
     # the goal buttons and drive controls fit on normal laptop displays.
-    set_dashboard_visible(False)
+    set_dashboard_visible(bool(prefs["dashboard"]) if debug_log_path is None else True)
     root.protocol("WM_DELETE_WINDOW", on_close)
     canvas.bind("<Configure>", lambda e: redraw_map(force=True))
     poll()
