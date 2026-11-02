@@ -25,6 +25,14 @@ class WindowsUnmappedPartitionTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, r'Partition 3 \(RAW\)'):
             _windows_lock_paths([{'PartitionNumber': 3, 'Type': 'RAW', 'Paths': []}], allow_mounted=True)
 
+    def test_gpt_msr_reserved_partition_does_not_block_lockable_ntfs(self):
+        paths = _windows_lock_paths([
+            {'PartitionNumber': 1, 'Type': 'Reserved', 'GptType': '{e3c9e316-0b5c-4db8-817d-f92df00215ae}',
+             'Paths': []},
+            {'PartitionNumber': 2, 'Type': 'Basic', 'Paths': ['E:\\']},
+        ], allow_mounted=True)
+        self.assertEqual(paths, ['\\\\.\\E:'])
+
 
 class _StopAfterOneRead:
     def __init__(self, *_args, **_kwargs):
