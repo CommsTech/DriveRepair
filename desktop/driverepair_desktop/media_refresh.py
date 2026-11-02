@@ -87,12 +87,26 @@ class ImageReadWriter:
         os.close(self.fd)
 
 
+# GPT Microsoft Reserved (MSR) never exposes a filesystem volume handle.
+# Requiring a lock for MSR would refuse every normal GPT external disk.
+_WINDOWS_MSR_GPT_TYPE = '{e3c9e316-0b5c-4db8-817d-f92df00215ae}'
+
+
+def _windows_partition_skips_volume_lock(partition: dict) -> bool:
+    kind = str(partition.get('Type') or '').strip().casefold()
+    gpt = str(partition.get('GptType') or '').strip().casefold()
+    return kind == 'reserved' or gpt == _WINDOWS_MSR_GPT_TYPE.casefold()
+
+
 def _windows_lock_paths(partitions, *, allow_mounted: bool) -> list[str]:
     """Choose one volume handle per partition; never force unknown mounts.
 
     Accept a currently assigned letter ONLY when the operator authorized
     temporary exclusive lock+dismount and Windows confirms it is not in use.
     This helper does not itself open, lock or dismount a volume.
+
+    GPT Microsoft Reserved partitions are skipped: they are not mountable and
+    never provide AccessPaths. RAW/Unknown/Recovery without a handle still fail closed.
     """
     if isinstance(partitions, dict):
         partitions = [partitions]
@@ -102,6 +116,15 @@ def _windows_lock_paths(partitions, *, allow_mounted: bool) -> list[str]:
     for partition in partitions:
         if not isinstance(partition, dict) or not isinstance(partition.get('Paths'), list):
             raise RuntimeError('Cannot verify patient partition access paths; no physical writes permitted')
+        if _windows_partition_skips_volume_lock(partition):
+            # MSR must not carry mount paths; if Windows reports one, fail closed.
+            if any(p not in (None, '') for p in partition['Paths']):
+                number = partition.get('PartitionNumber', '?')
+                raise RuntimeError(
+                    f'Partition {number} (Reserved/MSR) unexpectedly exposes AccessPaths; '
+                    'refusing raw writes'
+                )
+            continue
         guids, letters = [], []
         for path in partition['Paths']:
             if path is None or path == '':
@@ -125,9 +148,9 @@ def _windows_lock_paths(partitions, *, allow_mounted: bool) -> list[str]:
             volume_paths.append(letters[0])
         else:
             # A partition with no mount letter/GUID is NOT equivalent to a
-            # partition-free disk.  It may be RAW, encrypted, reserved, or
-            # simply invisible through this USB bridge.  Without a volume
-            # handle we cannot prove exclusive access.  Fail closed.
+            # partition-free disk.  It may be RAW, encrypted, or simply
+            # invisible through this USB bridge.  Without a volume handle we
+            # cannot prove exclusive access.  Fail closed.
             number = partition.get('PartitionNumber', '?')
             kind = str(partition.get('Type') or 'unknown')[:80]
             raise RuntimeError(
@@ -212,7 +235,7 @@ class WindowsReadWriter:
             "-ErrorAction SilentlyContinue -ErrorVariable +errs); "
             "if ($errs.Count -gt 0) { throw 'Unable to establish complete patient partition inventory' }; "
             "@($parts | ForEach-Object { [pscustomobject]@{ PartitionNumber=$_.PartitionNumber; "
-            "Type=[string]$_.Type; Paths=@($_.AccessPaths) } }) | "
+            "Type=[string]$_.Type; GptType=[string]$_.GptType; Paths=@($_.AccessPaths) } }) | "
             "ConvertTo-Json -Compress -Depth 4"
         )
         try:
