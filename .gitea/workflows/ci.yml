@@ -88,7 +88,7 @@ jobs:
       - name: Portable GUI to recovery engine image test
         working-directory: desktop
         env:
-          DRIVEREPAIR_SMOKE_PYZ: ../dist/DriveRepair-0.3.3b6.pyz
+          DRIVEREPAIR_SMOKE_PYZ: ../dist/DriveRepair-0.3.3b7.pyz
         run: xvfb-run -a python -m unittest discover -s tests -p test_gui_workflows.py -v
 
   native-recovery-core:
@@ -121,6 +121,6 @@ jobs:
       - name: Verify CLI offline rescue commands are packaged
         run: |
           python scripts/build_desktop.py --no-wheel
-          python dist/DriveRepair-0.3.3b3.pyz list-all-linux --help
-          python dist/DriveRepair-0.3.3b3.pyz plan-system-recovery --help
-          python dist/DriveRepair-0.3.3b3.pyz rescue-system --help
+          python dist/DriveRepair-0.3.3b7.pyz list-all-linux --help
+          python dist/DriveRepair-0.3.3b7.pyz plan-system-recovery --help
+          python dist/DriveRepair-0.3.3b7.pyz rescue-system --help

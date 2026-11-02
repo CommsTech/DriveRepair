@@ -74,10 +74,10 @@ class GuidedPlanningTests(unittest.TestCase):
                                   hardware=True, smart=snap, allow_unknown_health=True)
         self.assertEqual(x['status'], 'blocked')
 
-    def test_over_budget_refuses_partial_silent_repair(self):
+    def test_over_budget_creates_explicit_incremental_batch(self):
         s = scan(slow_regions=[{'offset': i * 512, 'latency_ms': 100} for i in range(5)])
         self.assertEqual(plan_targeted_refresh(s, sector=512, chunk=512,
-                         max_regions=2)['status'], 'blocked')
+                         max_regions=2)['status'], 'partial_candidates_with_unresolved_data')
 
 
 class TargetedJournalTests(unittest.TestCase):

@@ -230,3 +230,7 @@ Tk GUI telemetry/legend tests; Windows and macOS GUI/hardware checks remain pend
 ### Drive maintenance additions (0.3.3b6)
 
 Run `firmware-info --device ...` to inspect installed firmware when possible (not update availability); run `probe-region` for bounded, read-only investigation of a known failing offset; run `optimize-volume --device ... --letter E` for advisory Windows volume optimization. Physical optimization requires additional explicit authorization and healthy independent evidence. The GUI now remembers non-sensitive journal/policy selections but always reconfirms write risks. See [Maintenance guide](../docs/MAINTENANCE_AND_FIRMWARE.md).
+
+### Adaptive full-surface scans and explicit Start (0.3.3b7)
+
+On the desktop app, choose a workflow and review its options, then click the **Start job** button at the bottom. It changes to **Stop job** while working. Full scans use adaptive I/O and defer hard regions; triage scans are sampled and do not certify the whole disk. The optional **Remember bad/slow disk locations** checkbox saves only local offset metadata and is unavailable in no-file RAM-only operations. On launch, a local tool check identifies whether `smartctl` is available; Windows users may choose the consent-based WinGet installation button. For limitations and exact CLI examples, see `../docs/ADAPTIVE_SCANNING_AND_SETUP.md`.

@@ -169,14 +169,32 @@ def scan_offsets(size: int, chunk: int, mode: str, samples: int):
 
 def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
                 samples: int = 128, chunk: int = 1024 * 1024, max_errors: int = 16,
-                compare_suspects: bool = False,
+                compare_suspects: bool = False, adaptive_io: bool = False,
+                history_hints: list[dict] | None = None,
                 progress: Callable[..., None] | None = None) -> dict:
     if (not 0 < sector <= 1024 * 1024 or size <= 0 or size % sector or
             chunk < sector or chunk % sector or not 1 <= max_errors <= 10000 or
             not 1 <= samples <= 100000):
         raise ValueError("Invalid size, alignment, sample count or error limit")
+    if adaptive_io and mode == 'full':
+        from .adaptive_scan import adaptive_full_scan
+        return adaptive_full_scan(reader, size=size, sector=sector, chunk=chunk,
+                                  max_errors=max_errors, progress=progress)
     blocks = (size + chunk - 1) // chunk
     baseline = list(scan_offsets(size, chunk, mode, samples)) if mode != 'full' else None
+    if mode == 'triage' and history_hints:
+        # Anomaly history is only a HINT. Every bookmarked location is re-read;
+        # never reuse historical success as evidence for a current rewrite.
+        known = {off for off, _ in baseline}
+        for item in history_hints[:64]:
+            off = item.get('offset')
+            if type(off) is not int or not 0 <= off < size:
+                continue
+            off = off // chunk * chunk
+            if off not in known:
+                baseline.append((off, min(chunk, size - off)))
+                known.add(off)
+        baseline.sort()
     planned = blocks if mode == 'full' else len(baseline)
     checked = readable = failures = 0
     failed_ranges: list[dict] = []
@@ -206,6 +224,7 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
         if mode == 'triage':
             examined.add(offset // chunk)
         error = None
+        error_class = None
         disconnect = False
         t0 = time.monotonic()
         try:
@@ -218,19 +237,18 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
             winerror = getattr(exc, 'winerror', None)
             error = (f'read failed ({type(exc).__name__}, errno={exc.errno}'
                      + (f', winerror={winerror}' if winerror is not None else '') + ')')
-            if exc.errno in {errno.ENODEV, errno.EBADF, errno.EACCES,
-                             errno.EPERM, errno.EINVAL, errno.ENOENT}:
+            from .adaptive_scan import classify_error
+            error_class = classify_error(exc)
+            if error_class in {'device_or_access_unavailable', 'invalid_read_request'}:
                 status = 'aborted_device_or_access_error'
-                disconnect = exc.errno in {errno.ENODEV, errno.ENOENT, errno.EBADF}
+                disconnect = error_class == 'device_or_access_unavailable'
         latency_ms = (time.monotonic() - t0) * 1000
         if error:
             failures += 1
             anomalous_indices.append(offset // chunk)
             if len(failed_ranges) < 1000:
                 failed_ranges.append({'offset': offset, 'length': length, 'error': error,
-                                      'interpretation': ('request_or_access_error_not_proven_media'
-                                          if 'errno=22' in error or 'winerror=87' in error
-                                          else 'read_failure_needs_investigation')})
+                                      'interpretation': error_class or 'read_failure_needs_investigation'})
         else:
             # All modes track latency so GUI/CLI can surface slow spots live.
             latency_window.append(latency_ms)
@@ -260,6 +278,7 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
             'latency_ms': round(latency_ms, 3),
             'median_ms': None if med is None else round(med, 3),
             'failed': error is not None,
+            'error_class': error_class,
             'disconnect': disconnect,
             'attempted_bytes': checked,
             'readable_bytes': readable,
@@ -353,6 +372,7 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
         'read_error_chunks': failures,
         'read_error_ranges': failed_ranges,
         'slow_regions': slow_regions,
+        'historical_hints_used': len(history_hints or []),
         'slow_region_count': max(slow_region_count, len(slow_regions)),
         'slow_regions_truncated': slow_region_count > 1000,
         'inconsistent_reads': inconsistent_reads,

@@ -20,6 +20,7 @@ import zipfile
 from .devices import (list_external_devices, select_external_device,
                       linux_all_devices, select_linux_any_disk)
 from .scanner import ImageReader, open_device_readonly, scan_reader
+from .scan_history import load_hints, save_hints
 from .benchmark import read_benchmark, compare_benchmarks
 from .carving import carve_image
 from .archive_recovery import salvage_zip
@@ -103,8 +104,12 @@ def parser() -> argparse.ArgumentParser:
                          help="Evenly spaced chunks in sample mode (default: 128)")
         cmd.add_argument("--chunk-mib", type=int, default=1, choices=[1, 2, 4, 8],
                          help="Read size in MiB (default: 1)")
+        cmd.add_argument("--remember-anomalies", action="store_true",
+                         help="Opt-in local anomaly history (offsets only, no data; hardware only)")
         cmd.add_argument("--compare-suspects", action="store_true",
                          help="Extra repeated reads of suspicious triage regions; does NOT identify correct bytes")
+        cmd.add_argument("--adaptive-io", action=argparse.BooleanOptionalAction, default=True,
+                         help="Adaptive sequential read sizes and bounded deferred retries (full scans)")
         cmd.add_argument("--max-errors", type=int, default=16,
                          help="Stop after this many failing reads (default: 16)")
         cmd.add_argument("--ack-risk", action="store_true",
@@ -121,6 +126,9 @@ def parser() -> argparse.ArgumentParser:
         cmd = sub.add_parser(name, help='Guided quick/full scan and bounded, explicitly approved targeted refresh')
         cmd.add_argument('--image' if name == 'care-image' else '--device', required=True)
         cmd.add_argument('--mode', choices=['quick', 'full'], default='quick')
+        cmd.add_argument('--adaptive-io', action=argparse.BooleanOptionalAction, default=True)
+        cmd.add_argument('--remember-anomalies', action='store_true',
+                         help='Store small, private offset hints for future triage (disk journal only)')
         cmd.add_argument('--journal', help='Required for disk/ramdisk journal only; not used in volatile RAM mode')
         cmd.add_argument('--journal-backend', choices=['disk', 'memory'], default='disk',
                          help='disk=crash-recoverable; memory=no files, NO crash recovery (high risk)')
@@ -1201,6 +1209,8 @@ def _run_care(args) -> int:
     """
     is_hardware = args.command == 'care-external'
     ram_only = args.journal_backend == 'memory'
+    if ram_only and getattr(args, 'remember_anomalies', False):
+        raise ValueError('RAM-only no-file mode cannot persist anomaly history')
     if ram_only and args.resume:
         raise ValueError('RAM-only operations cannot resume after an application crash')
     if ram_only and not args.ack_volatile_journal:
@@ -1254,6 +1264,8 @@ def _run_care(args) -> int:
             settings = tuned_scan(size=size, sector=sector, mode=args.mode,
                                   bus=selected.bus if is_hardware else '')
             chunk = settings['chunk']
+            hints = (load_hints(selected.fingerprint, size, sector)
+                     if is_hardware and args.remember_anomalies else [])
             reader = open_device_readonly(selected) if is_hardware else ImageReader(args.image)
             try:
                 def scan_progress(index, total, info=None):
@@ -1284,9 +1296,10 @@ def _run_care(args) -> int:
                                    mode=settings['mode'], samples=settings['samples'],
                                    chunk=chunk, max_errors=settings['max_errors'],
                                    compare_suspects=(args.mode == 'quick'),
-                                   progress=scan_progress)
+                                   adaptive_io=bool(args.adaptive_io),
+                                   history_hints=hints, progress=scan_progress)
                 if (args.repair_policy == 'balanced' and
-                        scan.get('read_error_ranges') and
+                        scan.get('read_error_ranges') and not scan.get('error_investigation') and
                         scan.get('status') in {'completed_with_read_errors', 'aborted_error_limit'}):
                     def investigation_progress(info):
                         emitter.emit({'phase': 'INVESTIGATING', 'size': size,
@@ -1304,6 +1317,12 @@ def _run_care(args) -> int:
             if is_hardware:
                 latest = select_external_device(args.device)
                 assert_stable_identity(selected, latest)
+                if args.remember_anomalies:
+                    try:
+                        scan['anomaly_history'] = save_hints(selected.fingerprint, size, sector, scan)
+                    except OSError as exc:
+                        scan['anomaly_history'] = {'saved_hints': 0,
+                                                   'warning': f'Optional history not saved: {type(exc).__name__}'}
             plan = plan_targeted_refresh(
                 scan, sector=sector, chunk=chunk, max_regions=args.max_regions,
                 smart=snapshot, hardware=is_hardware,
@@ -1615,7 +1634,11 @@ def run(argv: list[str] | None = None) -> int:
                                  mode=args.mode, samples=args.samples,
                                  chunk=args.chunk_mib * 1024 * 1024,
                                  max_errors=args.max_errors,
-                                 compare_suspects=args.compare_suspects, progress=report)
+                                 compare_suspects=args.compare_suspects,
+                                 adaptive_io=args.adaptive_io,
+                                 history_hints=(load_hints(device.fingerprint, size, sector)
+                                                if args.command == 'scan' and args.remember_anomalies else []),
+                                 progress=report)
             print(file=sys.stderr)
         finally:
             reader.close()
@@ -1637,6 +1660,14 @@ def run(argv: list[str] | None = None) -> int:
             except (RuntimeError, ValueError):
                 result["status"] = "aborted_device_not_present_after_scan"
         result.update(context)
+        if args.command == 'scan' and args.remember_anomalies:
+            if result['status'] not in {'aborted_device_identity_changed',
+                                        'aborted_device_not_present_after_scan'}:
+                try:
+                    result['anomaly_history'] = save_hints(device.fingerprint, size, sector, result)
+                except OSError as exc:
+                    result['anomaly_history'] = {'saved_hints': 0,
+                                                 'warning': f'Optional history not saved: {type(exc).__name__}'}
         # Human summary on stderr; machine JSON on stdout when requested.
         err_n = int(result.get("read_error_chunks") or 0)
         print(

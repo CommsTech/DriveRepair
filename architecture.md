@@ -1,24 +1,18 @@
-# Architecture notes — 0.3.3b6 desktop
+# Architecture notes — 0.3.3b7 desktop
 
 Desktop workflows in `desktop/driverepair_desktop`:
 
-1. **Diagnose** — `list` / `scan` / `health` / `monitor-external` / benchmarks / **`probe-region`** (bounded read-only subdivision; zero patient writes). Scans never rewrite media.
-2. **Recover** — `rescue-image`, `carve-image`, `recover-image`, ZIP salvage, FAT32/NTFS/exFAT undelete, TSK optional, `verify-images`.
-3. **Integrity (image-only)** — `integrity-baseline` / `integrity-audit` / `integrity-restore-copy`.
-4. **Detect** — `detect-filesystems`; unsupported FS → RAW carve path.
-5. **Repair clone** — `check-ext-image` / `repair-ext-image` on clones only.
-6. **Direct / guided repair** — `guided_repair.py` + `care-external` / `care-image`; RAM or disk journal; error-budget partial outcomes (0.3.3b5).
-7. **Maintenance (0.3.3b6)** — `maintenance.py`: read-only `firmware-info`; Windows `optimize-volume` advisory with gated expert `--execute`. No vendor firmware flash from DriveRepair.
-8. **In-Place Media Refresh** — Adaptive/Full rolling journal; optional `journal=memory`.
-9. **Preferences** — `preferences.py` remembers non-sensitive UI choices only; destructive acks never persisted.
-10. **Linux offline system recovery** / **Rescue display** — unchanged roles.
+1. **Diagnose** — `list` / `scan` / `health` / `monitor-external` / benchmarks / `probe-region`. Adaptive full scan (`adaptive_scan.py`) varies read size, defers failed extents as UNKNOWN, and never writes during scan.
+2. **Recover** — image rescue / carve / undelete / verify paths unchanged.
+3. **Integrity (image-only)** — baseline / audit / restore-copy.
+4. **Detect / repair clone** — filesystem detect; ext repair on clones only.
+5. **Direct / guided repair** — targeted rewrite with RAM or disk journal; bounded batches when candidates exceed budget (0.3.3b7).
+6. **Maintenance** — firmware-info (read-only); optimize-volume advisory with gated execute.
+7. **Anomaly history** — `scan_history.py` stores only offset/classification metadata under opt-in; never grants writes.
+8. **Dependencies** — `dependencies.py` detects optional tools; WinGet smartctl only with explicit approval.
+9. **GUI** — staged job selection + **Start job** / **Stop job**; preferences; debug log mirror via `DRIVEREPAIR_GUI_DEBUG`.
 
 ## Soft mechanical indicators
 
-- Latency maps + SMART/NVMe; Windows HealthStatus fallback; scan errors expose native `winerror` when present.
-- Read errors / errno=22 alone are not proven media failure or mechanical FAIL.
-
-## Presentation vs recovery
-
-- Engine owns patient I/O; GUI launches CLI only.
-- `DRIVEREPAIR_GUI_DEBUG` mirrors UI/engine text to a lab log file and enables faulthandler.
+- Latency maps + SMART/NVMe; Windows HealthStatus fallback; WinError 1117 classified as I/O device error (cause unproven).
+- Read errors alone do not confirm platter failure.

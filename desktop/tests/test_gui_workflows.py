@@ -240,6 +240,10 @@ class RealGuiWorkflowTests(unittest.TestCase):
                         scan = next(w for w in all_widgets(tab) if isinstance(w, ttk.Button)
                                     and w.cget('text') == 'Scan')
                         scan.invoke()
+                        start_button = next(w for w in all_widgets(root)
+                                            if isinstance(w, ttk.Button) and w.cget('text') == 'Start job')
+                        self.assertEqual(str(start_button.cget('state')), 'normal')
+                        start_button.invoke()
                     except Exception as exc:
                         errors.append(f'begin: {exc}')
                         close_window(root)
@@ -307,6 +311,11 @@ class RealGuiWorkflowTests(unittest.TestCase):
                         entries[1].insert(0,str(dst))
                         action = next(w for w in all_widgets(container) if isinstance(w,ttk.Button) and w.cget('text') == 'Rescue')
                         action.invoke()
+                        start_button = next(w for w in all_widgets(root)
+                                            if isinstance(w, ttk.Button) and w.cget('text') == 'Start job')
+                        self.assertEqual(str(start_button.cget('state')), 'normal')
+                        self.assertFalse(dst.exists(), 'Choosing Rescue must not start disk I/O')
+                        start_button.invoke()
                     except Exception as exc:
                         errors.append(str(exc))
                         close_window(root)
@@ -345,6 +354,7 @@ class RealGuiWorkflowTests(unittest.TestCase):
             with override, \
                  mock.patch.object(tk, 'Tk', side_effect=patched_tk), \
                  mock.patch.object(devices, 'list_external_devices', return_value=[]), \
+                 mock.patch.object(messagebox, 'askyesno', return_value=True), \
                  mock.patch.object(messagebox,'showerror',side_effect=lambda a,b,**kw: errors.append(f'{a}: {b}')):
                 gui.launch()
             self.assertFalse(errors, errors)

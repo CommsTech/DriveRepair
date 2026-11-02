@@ -47,3 +47,7 @@ Please open a **private security report** on the project forge (or email the mai
 Do **not** attach disk images that contain personal data.
 
 We aim to acknowledge reports within 7 days and to publish fixes or mitigations for confirmed issues affecting the desktop read-only path.
+
+### 0.3.3b7 opt-in local history and dependency setup
+
+The optional anomaly map contains aligned byte offsets and classifications, not sectors, files or raw serials. It is stored with restricted local permissions in a profile data directory and never on the patient disk. It can only guide future **reads**, not write authorization. Volatile RAM-only jobs cannot save history. Smartmontools installation requires explicit user approval and calls the OS package manager by fixed package ID; no unreviewed download URL or automatic firmware update is used.

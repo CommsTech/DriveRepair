@@ -1,3 +1,13 @@
+## 0.3.3b7 — Adaptive I/O, error continuation, staged UI and dependency readiness
+
+- Full scans adapt read sizes (bounded to 8 MiB); Windows native I/O error 1117 is differentiated from invalid requests.
+- Read-only first pass preserves good progress after isolated failures; difficult regions receive limited deferred, smaller reads. Unscanned/skipped areas remain UNKNOWN.
+- Guided repair can select a bounded PARTIAL group of safe candidates when more exist, never silently completing the whole disk.
+- Optional local-only anomaly history (offsets, no bytes or raw serials) helps future quick scans recheck previously weak ranges. No history in RAM-only no-file mode.
+- GUI workflow buttons stage jobs; bottom Start job/Stop job executes and cancels explicitly.
+- Startup prerequisites and user-approved WinGet install for smartmontools, improved scrollbars, power-mode disclosure and health display.
+- See docs/ADAPTIVE_SCANNING_AND_SETUP.md; synthetic verification only, hardware certification pending.
+
 ## 0.3.3b6 — Targeted I/O investigation, firmware inventory, conservative optimization and preferences
 
 - Added read-only bounded `probe-region` for previously failed offsets; tracks `errno`/`winerror`, subdivides rejected large requests and never writes. Error 22 is a request/access classification, not automatically a defective LBA.
