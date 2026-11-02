@@ -879,6 +879,7 @@ def refresh_media(
     progress: Callable[[dict], None] | None = None,
     identity_check: Callable[[], None] | None = None,
     pre_write_check: Callable[[], None] | None = None,
+    stop_requested: Callable[[], bool] | None = None,
 ) -> dict:
     if mode not in {"adaptive", "full", "targeted"}:
         raise ValueError("mode must be adaptive, full or targeted")
@@ -1007,6 +1008,11 @@ def refresh_media(
 
     try:
         while status == "completed":
+            # Only stop between committed transactions. Never abandon a SAVED
+            # or WRITING region (especially with a volatile RAM journal).
+            if stop_requested is not None and stop_requested() and not meta.get("transaction"):
+                status = "stopped_at_safe_boundary"
+                break
             if identity_check:
                 identity_check()
             tx = meta.get("transaction")

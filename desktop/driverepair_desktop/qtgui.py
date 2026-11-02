@@ -61,6 +61,28 @@ def progress_percent(event: dict, disk_size: int = 0) -> float:
     return max(0.0, min(100.0, 100.0 * cursor / size))
 
 
+
+
+def estimated_job_percent(event: dict, *, guided: bool) -> float:
+    """CONSERVATIVE phase-weighted estimate, not certified work completion.
+
+    The number of repair candidates is unknown until scanning finishes; phase
+    weights are only a presentation estimate. Never label it as verified coverage.
+    """
+    phase = str(event.get('phase') or '').upper()
+    pct = progress_percent(event, int(event.get('size') or 0))
+    if not guided:
+        return pct
+    if phase in {'SCANNING', 'TRIAGE'}:
+        return pct * 0.60
+    if phase == 'INVESTIGATING':
+        reads = max(0, int(event.get('investigation_reads') or 0))
+        total = max(1, int(event.get('investigation_total') or 1))
+        return 60.0 + min(1, reads / total) * 15.0
+    if phase == 'REFRESH':
+        return 75.0 + pct * 0.25
+    return 0.0
+
 def _qt_debug_log_path() -> Path | None:
     """Optional durable mirror for Qt workstation diagnostics (Admin debug sessions)."""
     flag = os.environ.get('DRIVEREPAIR_GUI_DEBUG', '').strip().lower()
@@ -250,6 +272,10 @@ def launch():
             self._resume_poll_count=0
             self._last_progress_at=None
             self._last_phase=None
+            self._last_debug_event_at=0.0
+            self._last_io_offset=0
+            self._last_io_length=0
+            self._stop_requested=False
             self._heartbeat=QTimer(self)
             self._heartbeat.setInterval(1000)
             self._heartbeat.timeout.connect(self.check_stall)
@@ -298,6 +324,24 @@ def launch():
             self.progress=QProgressBar()
             self.progress.setRange(0,1000)
             self.progress.setValue(0)
+            phase_row=QHBoxLayout()
+            hero.addLayout(phase_row)
+            self.phase_caption=QLabel('Current phase · no job')
+            self.phase_caption.setObjectName('muted')
+            phase_row.addWidget(self.phase_caption)
+            phase_row.addStretch()
+            self.phase_progress=QProgressBar()
+            self.phase_progress.setRange(0,1000)
+            self.phase_progress.setValue(0)
+            hero.addWidget(self.phase_progress)
+            total_row=QHBoxLayout()
+            hero.addLayout(total_row)
+            self.total_caption=QLabel('Estimated whole-job progress · staged estimate, not disk coverage')
+            self.total_caption.setObjectName('muted')
+            total_row.addWidget(self.total_caption)
+            total_row.addStretch()
+            self.overall_label=QLabel('—')
+            total_row.addWidget(self.overall_label)
             hero.addWidget(self.progress)
             metrics=QHBoxLayout()
             hero.addLayout(metrics)
@@ -346,6 +390,11 @@ def launch():
             self.device_note.setWordWrap(True)
             self.device_note.setObjectName('muted')
             l.addWidget(self.device_note)
+            self.profile_note=QLabel('Drive strategy: awaiting device identification')
+            self.profile_note.setWordWrap(True)
+            self.profile_note.setObjectName('muted')
+            l.addWidget(self.profile_note)
+            self.device_box.currentIndexChanged.connect(self.update_drive_profile)
             workflow=card(left)
             title=QLabel('02  Choose a goal')
             title.setStyleSheet('font-weight:700;font-size:15px')
@@ -442,6 +491,23 @@ def launch():
                 self.setWindowTitle(self.windowTitle() + ' [DEBUG]')
             self.select_goal('scanquick')
             QTimer.singleShot(100,self.refresh_devices)
+        def update_drive_profile(self, _index=None):
+            d=self.selected()
+            if not d:
+                self.profile_note.setText('Drive strategy: waiting for a selected device')
+                return
+            from .media_profiles import identify_profile
+            try:
+                profile=identify_profile(model=str(d.get('model') or ''),
+                    bus=str(d.get('bus') or ''), sector=int(d.get('sector_size') or 512))
+                self.profile_note.setText(
+                    f'Drive strategy: {profile.kind.upper()} · {profile.evidence}. '
+                    f'{profile.maintenance_note}')
+                self.profile_note.setToolTip('Advisory profile only. USB bridges may obscure physical media. '
+                    'No profile authorizes write or certifies health.')
+            except (ValueError,TypeError):
+                self.profile_note.setText('Drive strategy: unverified geometry — read-only until resolved')
+
         def select_goal(self, goal):
             family = ('fix' if goal.startswith('care') else
                       'recover' if goal == 'rescue' else 'check')
@@ -460,7 +526,14 @@ def launch():
                     and self._last_progress_at is not None
                     and time.monotonic()-self._last_progress_at>8):
                 self.metric_labels['rate'].setText('Waiting on drive')
-                self.help.setText('No progress event recently. The drive or OS may be retrying I/O; Stop is not instant.')
+                elapsed=int(time.monotonic()-self._last_progress_at)
+                self.help.setText(f'Waiting {elapsed}s for the storage driver or USB device. '
+                    'No new I/O result; the operation is NOT necessarily progressing. '
+                    'Stop waits for a safe boundary and may not interrupt a blocked kernel request.')
+                self.result.setText('Drive I/O stalled — investigation may be blocked inside Windows')
+                self.explain.setText(f'Last request: byte offset {self._last_io_offset:,} · '
+                    f'length {self._last_io_length:,} bytes · {elapsed}s without a result. '
+                    'Check Expert details for the most recent observations.')
         def show_details(self, yes): self.log.setVisible(yes)
         def note_log(self, text: str) -> None:
             self.log.appendPlainText(text)
@@ -684,7 +757,7 @@ def launch():
                             'Save a small, private read-only scan checkpoint locally? '
                             'This stores offsets and observations, not recovered sector bytes.',
                             QMessageBox.Yes | QMessageBox.No)==QMessageBox.Yes
-                    args=['care-external','--device',dev,'--mode','full' if kind=='carefull' else 'quick',
+                    args=['care-external','--cooperative-stop-stdin','--device',dev,'--mode','full' if kind=='carefull' else 'quick',
                           *journal_args,'--auto-lock-volumes','--confirm-identity',d['identity_hint'],
                           '--ack-risk','--ack-destructive','--ack-no-backup','--ack-data-loss-risk',
                           '--ack-usb-bridge-risk','--ack-unvalidated-hardware','--ack-unknown-health',
@@ -697,6 +770,9 @@ def launch():
             self.run_command(args)
         def run_command(self,args):
             self.progress.setValue(0)
+            self.phase_progress.setValue(0)
+            self.overall_label.setText('0% estimated')
+            self._stop_requested=False
             self.map.reset(int((self.selected() or {}).get('size_bytes') or 0))
             self.result.setText('Running — monitoring the device')
             self.explain.setText('Unknown regions remain unknown until observed.')
@@ -707,6 +783,9 @@ def launch():
             self._scanned=0
             self._last_progress_at=time.monotonic()
             self._last_phase=None
+            self._last_debug_event_at=0.0
+            self._last_io_offset=0
+            self._last_io_length=0
             self._last_error=None
             self.proc=QProcess(self)
             self.proc.setProgram(cli_prefix()[0])
@@ -742,6 +821,19 @@ def launch():
                     self._pending=obj
         def progress_event(self,event):
             self._last_progress_at=time.monotonic()
+            self._last_io_offset=int(event.get('offset') or 0)
+            self._last_io_length=int(event.get('read_length') or 0)
+            # Trace actionable telemetry, not just final errors. Throttle logs
+            # independently of the 10Hz GUI updates to avoid filling disks.
+            if debug_log_path and (self._last_progress_at-self._last_debug_event_at>=4 or
+                                   str(event.get('phase'))!=self._last_phase):
+                fields={k:event.get(k) for k in
+                    ('phase','offset','read_length','investigation_state',
+                     'investigation_reads','investigation_total','read_error_chunks',
+                     'attempted_bytes','rewritten_bytes','verified_bytes',
+                     'speed_bps','eta_seconds') if event.get(k) is not None}
+                debug_trace('IO_TELEMETRY '+json.dumps(fields,sort_keys=True)+'\n')
+                self._last_debug_event_at=self._last_progress_at
             self.status.setText(str(event.get('phase') or 'WORKING').replace('_',' ').title())
             phase=str(event.get('phase') or 'WORKING').upper()
             if phase != self._last_phase:
@@ -749,9 +841,23 @@ def launch():
                 self.metric_labels['rate'].setText('Measuring…')
                 self.metric_labels['avg'].setText('Measuring…')
             self.metric_headers['read'].setText('DATA REWRITTEN' if phase=='REFRESH' else 'DATA READ')
+            phase_number={'SCANNING':1, 'INVESTIGATING':2, 'REFRESH':3}.get(phase)
+            self.phase_caption.setText(
+                f'Phase {phase_number} of up to 3 · {phase.title()}' if phase_number and
+                self._last_job_kind.startswith('care') else f'Current phase · {phase.title()}')
             size=int(event.get('size') or self.map.total or 0)
             pct=progress_percent(event,size)
-            self.progress.setValue(max(0,min(1000,round(10*pct))))
+            if phase=='INVESTIGATING':
+                reads=int(event.get('investigation_reads') or 0)
+                limit=max(1,int(event.get('investigation_total') or 1))
+                pct=min(100.0,100*reads/limit)
+                self.help.setText(f'Bounded investigation · {reads} of {limit} maximum read attempts. '
+                    'A single Windows I/O may still block longer than the soft time limit.')
+            self.phase_progress.setValue(max(0,min(1000,round(10*pct))))
+            overall=estimated_job_percent(event,guided=self._last_job_kind.startswith('care'))
+            self.progress.setValue(max(0,min(1000,round(10*overall))))
+            self.overall_label.setText(f'{overall:.1f}% estimated' if self._last_job_kind.startswith('care')
+                                      else f'{overall:.1f}% of current job')
             self.metric_labels['done'].setText(f'{pct:.1f}%')
             self.metric_labels['eta'].setText(format_eta(event.get('eta_seconds')))
             if event.get('attempted_bytes') is not None:
@@ -764,7 +870,8 @@ def launch():
                 self.metric_labels['rate'].setText(display_size(event['speed_bps'])+'/s')
             if event.get('average_speed_bps') is not None:
                 self.metric_labels['avg'].setText(display_size(event['average_speed_bps'])+'/s')
-            self.help.setText(str(event.get('message') or 'Checking device…'))
+            if phase!='INVESTIGATING':
+                self.help.setText(str(event.get('message') or 'Checking device…'))
             self.map.ingest(event)
             self.advice.setText(f'Full-drive map: {self.map.coverage.coverage_pct:.2f}% read successfully. '
                                 'Colored stripes mark observations, not full-region certification.')
@@ -775,6 +882,11 @@ def launch():
             self.stop.setEnabled(False)
             self.metric_labels['eta'].setText('—')
             self.proc=None
+            self._stop_requested=False
+            if exit_code==0:
+                self.progress.setValue(1000)
+                self.phase_progress.setValue(1000)
+                self.overall_label.setText('100% of planned job · review findings')
             try:
                 result=json.loads(self._final_stdout)
             except (ValueError,TypeError):
@@ -840,6 +952,11 @@ def launch():
                 if answer!=QMessageBox.Yes:
                     event.ignore()
                     return
+                if self._last_job_kind in ('carefull','carequick','careresume'):
+                    self.proc.write(b'STOP\n')
+                    event.ignore()
+                    self.result.setText('Stop requested — waiting for safe transaction boundary')
+                    return
                 self.proc.terminate()
                 if not self.proc.waitForFinished(2500):
                     self.proc.kill()
@@ -856,13 +973,26 @@ def launch():
                 return
             if not self.proc or self.proc.state()==QProcess.NotRunning:
                 return
-            if self._last_job_kind in ('carefull','carequick','careresume'):
-                QMessageBox.warning(self,'Do not interrupt a write',
-                    'Stopping a physical write mid-transaction can destroy data. The engine has no verified cooperative stop protocol yet. '
-                    'This interface will not forcibly terminate the active write. Disconnect only if necessary to protect hardware.')
+            if self._stop_requested:
                 return
-            self.proc.terminate()
-            self.result.setText('Stopping — waiting for process exit')
+            self._stop_requested=True
+            if self._last_job_kind in ('carefull','carequick','careresume'):
+                self.proc.write(b'STOP\n')
+                self.result.setText('Stop requested — waiting for safe transaction boundary')
+                self.explain.setText('No write is interrupted mid-transaction. A blocked Windows read '
+                    'cannot be forced to finish; do not disconnect while a rewrite is active.')
+            else:
+                self.proc.terminate()
+                QTimer.singleShot(5000,self._finish_read_only_stop)
+                self.result.setText('Stopping read-only operation…')
+            self.stop.setEnabled(False)
+
+        def _finish_read_only_stop(self):
+            if (self._stop_requested and self.proc and
+                    self.proc.state()!=QProcess.NotRunning and
+                    self._last_job_kind not in ('carefull','carequick','careresume')):
+                self.note_log('Read-only process ignored terminate; forcing child exit after 5 s.')
+                self.proc.kill()
     app=QApplication.instance() or QApplication(sys.argv)
     app.setFont(QFont('Segoe UI', 10))
     win=Workstation()

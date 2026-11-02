@@ -14,7 +14,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 DESKTOP = REPO / 'desktop'
-VERSION = '0.3.3b10'
+VERSION = '0.3.3b12'
 
 
 def command(args: list[str], cwd: Path = DESKTOP) -> None:

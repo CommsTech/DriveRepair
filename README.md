@@ -2,10 +2,14 @@
 
 **Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
 
-**Current build: 0.3.3b11 / engineering beta candidate — NOT approved for public hardware-repair use.**
+**Current build: 0.3.3b12 / engineering beta candidate — NOT approved for public hardware-repair use.**
 The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
 
 **If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
+
+## Reliability and safe cancellation (0.3.3b12)
+
+The Qt interface now separates current phase from estimated whole-job progress. Follow-up read errors consume actual retry attempts (including failures) and expose the currently investigated offset. Stop is cooperative during guided repair, never a mid-write abort. SMR and flash media use smaller bounded logical rewrite transactions; these are conservative, **not** factory-media rejuvenation. Full details and Windows testing instructions: [Bounded I/O and safe Stop](docs/BOUNDED_IO_AND_SAFE_STOP_0.3.3b12.md).
 
 ## Windows mounted-volume preparation and read-error boundaries (0.3.3b11)
 

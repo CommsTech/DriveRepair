@@ -1,3 +1,35 @@
+## 0.3.3b12 — Bounded investigation, safe Stop and truthful workflow progress
+
+This is a **private engineering build**, not a production write-safety certificate.
+
+- Fix the retry-budget defect: every attempted read, including each failed or
+  timed-out request, now consumes the bounded follow-up budget **before** I/O.
+  Failed subregions cannot trigger an effectively unbounded recursive probe tree.
+  A wall-clock time budget is best-effort only: Windows/USB drivers may block a
+  synchronous read beyond it; software cannot reliably cancel that kernel I/O.
+- Emit structured investigation telemetry with LBA byte offset, request length,
+  attempted-read count, read state, error count, and duration. Qt debug mode saves
+  throttled `IO_TELEMETRY` lines to distinguish a blocked read from GUI lag.
+- Guided Fix jobs accept a private `STOP` command on stdin. Scans stop at a
+  read boundary, and rolling-journal writes stop **between** committed
+  transactions. No in-flight rewrite is intentionally interrupted by Stop.
+  Read-only jobs can be terminated, with forced exit after a short grace period.
+- Qt shows separate **current-phase progress** and **estimated whole-job
+  progress**; the latter is explicitly approximate until the repair plan exists.
+  Investigation includes a read-attempt budget. The stalled-I/O status displays
+  last offset, request size, and seconds without a result.
+- Present advisory media-profile identification in the drive card. SMR rewrite
+  transactions are capped at 256 KiB and at most 16 regions per guided batch;
+  reported SSD/NVMe profiles cap individual transactions at 128 KiB and batches
+  at 16. These are logical sizes, not HDD physical-zone or SSD NAND geometry.
+  Adjacent rewrite authorization remains restricted to verified CMR.
+
+**Known limitations:** Selected-disk `Get-Disk` timeouts on the Windows USB
+bridge remain a write blocker. The native Windows Qt interface, actual USB
+faults and physical writes have not been hardware-qualified here. No arbitrary
+firmware writes, true physical-sector resurfacing, or AI-generated data repair.
+See `docs/BOUNDED_IO_AND_SAFE_STOP_0.3.3b12.md` for operational notes.
+
 ### 0.3.3b11 — Mounted volume preparation and fault-boundary investigation
 
 - Qt Fix workflows may explicitly authorize temporary Windows exclusive lock/dismount of mounted external volumes after scanning. Busy volumes, unknown mount paths and failed locks stop safely; no forceful dismount or permanent drive-letter removal.

@@ -1,27 +1,27 @@
-**0.3.3b11 ENGINEERING CANDIDATE: PRIVATE TESTS ONLY.** Explicit Windows volume lock/dismount preparation and bounded two-sided error-boundary probes. Not a public physical-repair release. See `docs/WINDOWS_VOLUME_PREPARATION_AND_ERROR_BOUNDARIES.md`.
+**0.3.3b12 ENGINEERING CANDIDATE: PRIVATE TESTS ONLY.** Bounded I/O investigation budgets, cooperative STOP, phase vs overall progress, Qt IO telemetry. Not a public physical-repair release. See `docs/BOUNDED_IO_AND_SAFE_STOP_0.3.3b12.md`.
 
 # Status — 2026-11-02
 
-PRIVATE TEST — **0.3.3b11** mounted-volume preparation + SSD error-boundary budgets.
+PRIVATE TEST — **0.3.3b12** bounded I/O + cooperative stop + Qt upgrade.
 
 ## Product
 
-- Version `0.3.3b11`: Qt Fix / `care-external` `--auto-lock-volumes` (temp lock then dismount; no force without lock; letters not permanently removed)
-- Lock volumes **before** opening raw disk for writes; fail closed on folder mounts / ambiguous inventory
-- Two-sided read-only `error_boundary_investigation`; reduced quick-scan suspect/retry budgets
-- Clearer Qt busy-filesystem messaging; Admin `DRIVEREPAIR_GUI_DEBUG` retained
+- Version `0.3.3b12`: investigate_failed_ranges budget increments before read; cooperative STOP at safe boundaries; phase progress vs overall; media rewrite caps; Qt IO_TELEMETRY + Admin `DRIVEREPAIR_GUI_DEBUG` retained
+- New `stop_control` module; `--cooperative-stop-stdin` private UI channel
+- Prior 0.3.3b11 volume lock/dismount + error-boundary probes retained
 
-## Lab evidence (user SSD)
+## Lab evidence
 
-- Quick sample ~94.4% planned work / ~47.61 GiB / 20 I/O fails; stalled on mounted letter **E:** (expected refusal until auto-lock Fix path)
-- Errors unproven (NAND vs USB/host/power)
+- Unit: `test_b12_reliability` 5/5 passed
+- Sacrificial Seagate ST1000LM048 write+verify still required before public release
 
 ## Seagate / USB patients
 
 | Step | State |
 |------|--------|
+| Bounded I/O + cooperative STOP private validation | Ready |
 | Mounted-letter Fix with `--auto-lock-volumes` | Ready for disposable NTFS/exFAT validation |
 | Public release | **Blocked** |
 
 Lab: `D:\DriveRepairLab\seagate_st1000lm048_wipe_refresh_20261101\`
-Artifacts: `docs/releases/0.3.3b11/`
+Artifacts: `docs/releases/0.3.3b12/`

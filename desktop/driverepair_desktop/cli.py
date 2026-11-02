@@ -43,6 +43,7 @@ from .media_refresh import (
 from .power_guard import VolatilePowerGuard, PowerGuardError
 from .refresh_display import RefreshDashboard
 from .progress_events import ProgressEmitter
+from .stop_control import StopControl, StopRequested
 from .rates import RateWindow
 from .scan_checkpoint import ScanCheckpoint, default_path as default_scan_checkpoint, load as load_scan_checkpoint
 import hashlib
@@ -173,6 +174,8 @@ def parser() -> argparse.ArgumentParser:
                          help='Allow missing SMART evidence (still no repair on observed errors)')
         cmd.add_argument('--confirm-identity', help='12-character fingerprint from list --json (physical writes only)')
         cmd.add_argument('--progress-jsonl', action='store_true')
+        cmd.add_argument('--cooperative-stop-stdin', action='store_true',
+                         help='Private UI control channel: STOP line on child stdin, honored at safe boundaries')
         cmd.add_argument('--no-live-dashboard', action='store_true')
         cmd.add_argument('--json', action='store_true')
     rescue_status = sub.add_parser(
@@ -1236,6 +1239,7 @@ def _run_care(args) -> int:
     rolling-journal engine owns every write. No error-bearing source is rewritten.
     """
     is_hardware = args.command == 'care-external'
+    control = StopControl(bool(getattr(args, 'cooperative_stop_stdin', False)))
     ram_only = args.journal_backend == 'memory'
     # An explicitly opted-in, small offsets-only history file is independent
     # of a RAM-only REGION journal. No sector bytes or recovery image are saved.
@@ -1299,12 +1303,23 @@ def _run_care(args) -> int:
             chunk = settings['chunk']
             # Large read requests identify weak areas; rewrite only a small,
             # separately verified and journaled subregion (SMR write amplification).
-            repair_chunk = min(1024 * 1024, chunk)
+            # Constrain logical rewrite transaction size by medium. This is a
+            # performance/safety limit, never a claim to know physical SMR zones
+            # or SSD flash-page geometry through a USB bridge.
+            profile_kind = settings.get('profile', 'unknown')
+            repair_limit = (256 * 1024 if profile_kind == 'smr' else
+                            128 * 1024 if profile_kind in ('ssd','nvme') else
+                            1024 * 1024)
+            repair_chunk = max(sector, (min(repair_limit, chunk) // sector) * sector)
+            effective_max_regions = min(args.max_regions,
+                                        16 if profile_kind == 'smr' else
+                                        16 if profile_kind in ('ssd','nvme') else args.max_regions)
             hints = (load_hints(selected.fingerprint, size, sector)
                      if is_hardware and args.remember_anomalies else [])
             reader = open_device_readonly(selected) if is_hardware else ImageReader(args.image)
             try:
                 def scan_progress(index, total, info=None):
+                    control.check_read_boundary()
                     info = info or {}
                     elapsed = max(0.001, time.monotonic() - scan_started)
                     attempted = int(info.get('attempted_bytes') or 0)
@@ -1373,18 +1388,28 @@ def _run_care(args) -> int:
                         scan.get('read_error_ranges') and not scan.get('error_investigation') and
                         scan.get('status') in {'completed_with_read_errors', 'aborted_error_limit'}):
                     def investigation_progress(info):
+                        control.check_read_boundary()
                         emitter.emit({'phase': 'INVESTIGATING', 'size': size,
+                                      'read_length': info.get('length', 0),
+                                      'investigation_reads': info.get('read_calls', 0),
+                                      'investigation_total': info.get('max_reads', 24),
+                                      'investigation_state': info.get('state'),
+                                      'investigation_elapsed_seconds': info.get('elapsed_seconds', 0),
                                       'offset': info.get('offset', 0),
                                       'attempted_bytes': int(scan.get('attempted_bytes') or 0),
                                       'readable_bytes': int(scan.get('readable_bytes') or 0),
                                       'read_error_chunks': scan.get('read_error_chunks', 0),
-                                      'message': ('Read-only bounded retries of error regions: '
-                                                  f"{info['read_calls']} read operations")}, force=True)
+                                      'message': ('Read-only bounded investigation · '
+                                                  f"attempt {info['read_calls']}/{info.get('max_reads',24)} · "
+                                                  f"offset {info.get('offset',0)} · "
+                                                  f"state {info.get('state','unknown')}")}, force=True)
                     scan['error_investigation'] = investigate_failed_ranges(
                         reader, scan['read_error_ranges'], sector=sector,
-                        max_reads=24, max_regions=8, progress=investigation_progress)
+                        max_reads=24, max_regions=8, max_elapsed_seconds=20.0,
+                        progress=investigation_progress)
             finally:
                 reader.close()
+            control.check_read_boundary()
             if is_hardware:
                 # Keep read-only scan findings even when the USB bridge freezes
                 # during the *post-scan* identity query. Such a query must still
@@ -1409,8 +1434,12 @@ def _run_care(args) -> int:
                     return 2
             scan['media_profile'] = {k: settings[k] for k in
                 ('profile', 'profile_evidence', 'media_note', 'requested_coverage_pct') if k in settings}
+            scan['media_profile']['bounded_rewrite_region_bytes'] = repair_chunk
+            scan['media_profile']['max_rewrite_transactions'] = effective_max_regions
+            scan['media_profile']['notes'] = ('Logical transfer limits, not physical track or NAND layout. '
+                'Unknown media remains unqualified; no inferred sector-level correctness.')
             plan = plan_targeted_refresh(
-                scan, sector=sector, chunk=repair_chunk, max_regions=args.max_regions,
+                scan, sector=sector, chunk=repair_chunk, max_regions=effective_max_regions,
                 smart=snapshot, hardware=is_hardware,
                 allow_unknown_health=args.ack_unknown_health,
                 allow_media_warning=args.ack_media_warning,
@@ -1509,6 +1538,7 @@ def _run_care(args) -> int:
                 journal_backend=args.journal_backend, consistency_reads=2, verify=True,
                 resume=args.resume, max_errors=16, progress=progress,
                 identity_check=identity_check, pre_write_check=identity_check,
+                stop_requested=control.requested,
             )
         finally:
             writer.close()
@@ -1517,6 +1547,7 @@ def _run_care(args) -> int:
         result = {'status': ('partial_repair_unresolved_data' if repair['status'] == 'completed'
                              and plan and plan.get('unresolved_data') else
                              'completed_targeted_refresh' if repair['status'] == 'completed'
+                             else 'repair_stopped_safely' if repair['status'] == 'stopped_at_safe_boundary'
                              else 'repair_incomplete'), 'scan': scan,
                   'repair_plan': plan, 'repair': repair,
                   'volatile_ram_only': ram_only,
@@ -1633,7 +1664,13 @@ def run(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2))
             return 0 if free >= selected.size_bytes else 2
         if args.command in {'care-image', 'care-external'}:
-            return _run_care(args)
+            try:
+                return _run_care(args)
+            except StopRequested:
+                print(json.dumps({'status': 'stopped_by_user', 'phase': 'read_only',
+                                  'writes_performed': False,
+                                  'message': 'Stop honored before subsequent patient I/O. No repair was started.'}), flush=True)
+                return 3
         if args.command in {'rescue-status', 'rescue-image', 'rescue-external', 'rescue-system', 'benchmark-image',
                             'benchmark-external', 'carve-image', 'salvage-zip',
                             'undelete-fat32', 'list-deleted-fat32',
