@@ -41,7 +41,14 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(disks[0].sector_size, 4096)
 
     def test_windows_filters_boot_and_bus(self):
-        payload = [
+        # Inventory now prefers CIM/WMIC (Get-Disk often hangs after dock reseat).
+        cim_payload = [
+            {"Index": 0, "InterfaceType": "SCSI", "Model": "Internal", "Size": 1048576,
+             "SerialNumber": "INT", "BytesPerSector": 512},
+            {"Index": 2, "InterfaceType": "USB", "Model": "USB flash", "Size": 1048576,
+             "SerialNumber": "USB1", "BytesPerSector": 512},
+        ]
+        get_disk_payload = [
             {"Number": 0, "BusType": "SATA", "IsBoot": True, "IsSystem": True, "IsOffline": False,
              "Size": 1048576, "LogicalSectorSize": 512},
             {"Number": 2, "BusType": "USB", "IsBoot": False, "IsSystem": False, "IsOffline": False,
@@ -49,9 +56,22 @@ class DiscoveryTests(unittest.TestCase):
             {"Number": 3, "BusType": "USB", "IsBoot": None, "IsSystem": False, "IsOffline": False,
              "Size": 1048576, "LogicalSectorSize": 512},
         ]
-        disks = windows_devices(lambda _: json.dumps(payload).encode())
+
+        def run(cmd, timeout=None):
+            joined = " ".join(cmd).lower()
+            if "get-ciminstance" in joined or "win32_diskdrive" in joined:
+                return json.dumps(cim_payload).encode()
+            if cmd and str(cmd[0]).lower().startswith("wmic"):
+                return (
+                    "Node,BytesPerSector,Index,InterfaceType,Model,SerialNumber,Size\n"
+                    "BOX,512,2,USB,USB flash,USB1,1048576\n"
+                ).encode()
+            return json.dumps(get_disk_payload).encode()
+
+        disks = windows_devices(run)
         self.assertEqual([disk.id for disk in disks], ["windows:PhysicalDrive2"])
         self.assertEqual(disks[0].path, r"\\.\PhysicalDrive2")
+        self.assertEqual(disks[0].provenance, "legacy-inventory")
 
     def test_select_requires_exact_external_identifier(self):
         d = Device("linux:/dev/sdb", "/dev/sdb", "Demo", 1048576, 512, "usb")

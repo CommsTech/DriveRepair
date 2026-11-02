@@ -9,6 +9,7 @@
 - Multi-partition / GUID-only / BitLocker / dock disconnect: safe rejection
 - ST1000LM048 SMR full elevated verify still blocks public release
 - Private lab: confirm cooperative STOP does not leave exclusive volume locks held
+- Get-Disk Storage hang after dock reseat: inventory now CIM/WMIC-first; write path still requires Get-Disk identity
 
 ## Findings
 - Details: `docs/FINDINGS_REMEDIATION_20261102.md`
