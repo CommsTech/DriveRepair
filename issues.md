@@ -1,6 +1,7 @@
 # Issues — 2026-11-02
 
 ## Forge triage
+- Applied engineering package **0.3.3b13** (Windows volume lock fail-closed + cooperative scan Stop).
 - Closed Repository Detective MEDIUM ruff cluster **#107–#152** (43 issues) via [PR #154](https://git.commsnet.org/commstech/DriveRepair/pulls/154) (`f5a30f4`).
 - Applied engineering package **0.3.3b12** (bounded I/O + cooperative STOP + Qt) on `feature/0.3.3b12-bounded-io-qt`.
 

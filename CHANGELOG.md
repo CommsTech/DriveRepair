@@ -1,3 +1,10 @@
+## 0.3.3b13 — Windows inaccessible partitions and cooperative read-only Stop
+
+- Preserve structured scan evidence when repair cannot exclusively lock Windows partition volumes.
+- Refuse Windows writes when any enumerated partition lacks a lockable volume handle.
+- Support cooperative STOP for read-only Qt scans; give truthful forced-stop reporting.
+- Add synthetic regression tests and Windows operator documentation.
+
 ## 0.3.3b12 — Bounded investigation, safe Stop and truthful workflow progress
 
 This is a **private engineering build**, not a production write-safety certificate.

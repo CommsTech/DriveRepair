@@ -130,6 +130,8 @@ def parser() -> argparse.ArgumentParser:
                          help="Stop after this many failing reads (default: 16)")
         cmd.add_argument("--ack-risk", action="store_true",
                          help="Required for full hardware scans; reading failing disks can worsen damage")
+        cmd.add_argument("--cooperative-stop-stdin", action="store_true",
+                         help="UI STOP line; read-only scan stops after the next completed read")
         cmd.add_argument("--progress-jsonl", action="store_true",
                          help="Emit throttled JSON progress lines on stderr for GUI consumers")
         cmd.add_argument("--no-live-dashboard", action="store_true",
@@ -1501,8 +1503,30 @@ def _run_care(args) -> int:
 
         # Select the patient again immediately before RW; fail closed if renumbered.
         if is_hardware:
-            assert_stable_identity(selected, select_external_device(args.device))
-            writer = open_device_readwrite(selected, **({'auto_lock_volumes': True} if getattr(args, 'auto_lock_volumes', False) else {}))
+            try:
+                assert_stable_identity(selected, select_external_device(args.device))
+                writer = open_device_readwrite(
+                    selected, **({'auto_lock_volumes': True}
+                                 if getattr(args, 'auto_lock_volumes', False) else {}))
+            except (OSError, RuntimeError, ValueError) as exc:
+                # Do not discard useful read-only evidence because Windows has
+                # an unmountable RAW/recovery partition or a hung storage stack.
+                # No media transaction has started at this point.
+                detail = str(exc)[:1200]
+                result = {
+                    'status': 'repair_blocked_prewrite_access',
+                    'scan': scan,
+                    'repair_plan': plan,
+                    'writes_performed': False,
+                    'error': detail,
+                    'next_step': ('A Windows partition could not be exclusively locked or '
+                                  'device identity could not be verified. Close applications '
+                                  'using the disk; if a partition has no lockable volume '
+                                  'handle, use validated offline rescue. Never bypass a '
+                                  'missing lock by forcing a raw write.'),
+                }
+                print(json.dumps(result, indent=2) if args.json else result, flush=True)
+                return 2
         else:
             if _refresh_image_token(args.image) != (token, size):
                 raise RuntimeError('Image identity changed between scan and refresh')
@@ -1764,6 +1788,9 @@ def run(argv: list[str] | None = None) -> int:
             st = os.stat(image)
             scan_token = f'file:{os.path.realpath(image)}:{st.st_dev}:{st.st_ino}:{st.st_mtime_ns}:{size}'
         checkpoint_writer, prior_scan = _scan_checkpoint_for(args, scan_token, size, sector)
+        scan_control = StopControl(bool(getattr(args, 'cooperative_stop_stdin', False)))
+        last_read = {'attempted_bytes': 0, 'readable_bytes': 0,
+                     'read_error_chunks': 0, 'probe_index': 0, 'probe_total': 0}
         try:
             print("READ-ONLY scan. This DOES NOT repair disks or verify data integrity.",
                   file=sys.stderr)
@@ -1774,6 +1801,14 @@ def run(argv: list[str] | None = None) -> int:
             last_human = [0.0]
 
             def report(current: int, total: int, info: dict | None = None) -> None:
+                # A STOP never interrupts an in-flight kernel read.  The next
+                # completed request becomes a cooperative cancellation point.
+                info = info or {}
+                last_read.update({'probe_index': current, 'probe_total': total,
+                                  'attempted_bytes': int(info.get('attempted_bytes') or 0),
+                                  'readable_bytes': int(info.get('readable_bytes') or 0),
+                                  'read_error_chunks': int(info.get('read_error_chunks') or 0)})
+                scan_control.check_read_boundary()
                 total = max(1, total)
                 pct = 100.0 * current / total
                 chunk = args.chunk_mib * 1024 * 1024
@@ -1837,6 +1872,8 @@ def run(argv: list[str] | None = None) -> int:
                     bar = cui.progress_bar(current, total, 20)
                     print(f"\rSCAN  {current}/{total} {pct:5.1f}% {bar}   ", end="",
                           file=sys.stderr, flush=True)
+            # Honor a STOP received before the next read, too.
+            scan_control.check_read_boundary()
             result = scan_reader(reader, size=size, sector=sector,
                                  mode=args.mode, samples=args.samples,
                                  chunk=args.chunk_mib * 1024 * 1024,
@@ -1850,6 +1887,18 @@ def run(argv: list[str] | None = None) -> int:
                                  progress=report, resume_state=prior_scan,
                                  checkpoint=checkpoint_writer.save if checkpoint_writer else None)
             print(file=sys.stderr)
+        except StopRequested:
+            # A sampled scan does not claim complete coverage on cancellation.
+            # A full-scan checkpoint, if enabled, is still retained by its writer.
+            report = {'status': 'stopped_by_user', 'phase': 'read_only',
+                      'writes_performed': False, 'scan_incomplete': True,
+                      'device_size_bytes': size, 'scan_mode': args.mode,
+                      **last_read,
+                      'message': 'Stopped after the last completed read. Untested bytes remain unknown.'}
+            if checkpoint_writer is not None:
+                report['scan_checkpoint'] = str(checkpoint_writer.path)
+            print(json.dumps(report, indent=2), flush=True)
+            return 3
         finally:
             reader.close()
 

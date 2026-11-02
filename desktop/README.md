@@ -1,3 +1,7 @@
+## DriveRepair 0.3.3b13 — Windows inaccessible partitions and scan Stop
+
+See `../docs/WINDOWS_VOLUME_ACCESS_AND_STOP_0.3.3b13.md`.
+
 ## DriveRepair 0.3.3b12 — bounded fault diagnosis and phase-aware Qt
 
 The Qt GUI now has independent phase progress and explicitly estimated whole-job progress. It streams investigation offsets and retry counts to the GUI debug log, supports cooperative Stop for guided Fix operations, and caps repeated failed reads. The Windows native USB-driver may still block a single I/O request, and a RAM-only transaction cannot resume after a crash. See `../docs/BOUNDED_IO_AND_SAFE_STOP_0.3.3b12.md`.

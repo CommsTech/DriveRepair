@@ -2,10 +2,14 @@
 
 **Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
 
-**Current build: 0.3.3b12 / engineering beta candidate — NOT approved for public hardware-repair use.**
+**Current build: 0.3.3b13 / engineering beta candidate — NOT approved for public hardware-repair use.**
 The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
 
 **If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
+
+## Windows access and read-only Stop (0.3.3b13)
+
+A partition without an accessible Windows volume handle blocks physical writes; an unpartitioned disk is not equivalent to an inaccessible partition. Guided scans retain findings on a pre-write lock failure. Read-only Qt scans now request cooperative cancellation, escalating only if the OS call remains unresponsive. See [Windows volume access and Stop](docs/WINDOWS_VOLUME_ACCESS_AND_STOP_0.3.3b13.md).
 
 ## Reliability and safe cancellation (0.3.3b12)
 
