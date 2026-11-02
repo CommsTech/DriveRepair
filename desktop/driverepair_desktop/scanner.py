@@ -215,7 +215,9 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
             else:
                 readable += length
         except OSError as exc:
-            error = f'read failed ({type(exc).__name__}, errno={exc.errno})'
+            winerror = getattr(exc, 'winerror', None)
+            error = (f'read failed ({type(exc).__name__}, errno={exc.errno}'
+                     + (f', winerror={winerror}' if winerror is not None else '') + ')')
             if exc.errno in {errno.ENODEV, errno.EBADF, errno.EACCES,
                              errno.EPERM, errno.EINVAL, errno.ENOENT}:
                 status = 'aborted_device_or_access_error'
@@ -225,7 +227,10 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
             failures += 1
             anomalous_indices.append(offset // chunk)
             if len(failed_ranges) < 1000:
-                failed_ranges.append({'offset': offset, 'length': length, 'error': error})
+                failed_ranges.append({'offset': offset, 'length': length, 'error': error,
+                                      'interpretation': ('request_or_access_error_not_proven_media'
+                                          if 'errno=22' in error or 'winerror=87' in error
+                                          else 'read_failure_needs_investigation')})
         else:
             # All modes track latency so GUI/CLI can surface slow spots live.
             latency_window.append(latency_ms)

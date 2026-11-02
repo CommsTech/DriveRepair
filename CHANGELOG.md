@@ -1,3 +1,12 @@
+## 0.3.3b6 — Targeted I/O investigation, firmware inventory, conservative optimization and preferences
+
+- Added read-only bounded `probe-region` for previously failed offsets; tracks `errno`/`winerror`, subdivides rejected large requests and never writes. Error 22 is a request/access classification, not automatically a defective LBA.
+- Added `firmware-info` inventory of installed revision when available, without implying the revision is current or attempting firmware flashes.
+- Added Windows `optimize-volume` advisory mode. A separately authorized native HDD defrag/SSD retrim requires independently acceptable SMART evidence, exact volume mapping and current disk fingerprint. Unknown/degraded patient media are blocked.
+- GUI offers firmware info, optimization advice, and failed-offset investigation without extra scripts.
+- User preferences remember non-sensitive journal choice, repair policy, and dashboard visibility; new installs default to durable disk journal. Authorization/identity is not persisted.
+- Updated portable-package smoke job version and new guidance. No claims of physical platter smoothing, native firmware repair or certified live-drive writes.
+
 ## 0.3.3b5 — Bounded error investigation, scan metrics and clear color legend (engineering candidate)
 
 - **Error-limit continuation:** A Quick/Full guided repair that encounters the default 16 read-error safety limit can investigate the known failed offsets and may still refresh independent, consistently readable candidates. The remainder of the disk is explicitly *unscanned/unknown*. Read-only diagnostic scans still stop at their error budget; they do not write.

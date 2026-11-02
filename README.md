@@ -2,7 +2,7 @@
 
 **Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
 
-**Current build: 0.3.3b5 / engineering beta candidate — NOT approved for public hardware-repair use.**
+**Current build: 0.3.3b6 / engineering beta candidate — NOT approved for public hardware-repair use.**
 The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
 
 **If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
@@ -254,3 +254,8 @@ The `clean_rescue_complete` field is authoritative for *completed OS reads*, not
   outside the scope of this GUI-only fix and are not release-certified.
 
 For reproducing and verifying the Windows workflow-button fix, see [GUI acceptance tests](docs/GUI_QA.md).
+
+
+### Drive maintenance, firmware inventory, and remembered preferences (0.3.3b6)
+
+The Diagnose page now offers read-only **Firmware info**, **Optimize advice** and a bounded **Investigate a failed offset** workflow, avoiding another lengthy full scan to examine a known problem. User journal and repair policy choices are remembered locally, but destructive risk acknowledgments never are. Drive optimization uses Windows native tools only on qualified healthy volumes. Firmware reporting is inventory-only: **NO firmware downloads or flashing.** See [Maintenance and Firmware](docs/MAINTENANCE_AND_FIRMWARE.md) for exact commands and test limitations.
