@@ -281,14 +281,27 @@ def _parse_usb_disk_records(records: list[dict]) -> list[Device]:
     return devices
 
 
-def _windows_devices_from_cim(run: Callable[..., bytes]) -> list[Device]:
-    """Fallback when Get-Disk hangs after USB dock reseat (common on Windows)."""
-    script = (
-        "Get-CimInstance Win32_DiskDrive | "
-        "Select-Object Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector | "
-        "ConvertTo-Json -Compress -Depth 3"
-    )
-    data = _invoke(run, ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], 20)
+def _windows_devices_from_cim(run: Callable[..., bytes], number: int | None = None) -> list[Device]:
+    """Fallback when Get-Disk hangs after USB dock reseat (common on Windows).
+
+    Prefer ``-Filter Index=N`` for mid-job reselect after heavy patient I/O —
+    a full Win32_DiskDrive walk can time out while a single-index query still works.
+    """
+    if number is not None:
+        script = (
+            f"Get-CimInstance Win32_DiskDrive -Filter \"Index={int(number)}\" | "
+            "Select-Object Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector | "
+            "ConvertTo-Json -Compress -Depth 3"
+        )
+        timeout = 8
+    else:
+        script = (
+            "Get-CimInstance Win32_DiskDrive | "
+            "Select-Object Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector | "
+            "ConvertTo-Json -Compress -Depth 3"
+        )
+        timeout = 20
+    data = _invoke(run, ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], timeout)
     records = json.loads(data.decode("utf-8-sig"))
     if isinstance(records, dict):
         records = [records]
@@ -357,11 +370,48 @@ def select_external_device(identifier: str,
     # USB bridges often report a different Size via Get-Disk than Win32_DiskDrive,
     # which previously made every scan/Fix fail with a fingerprint mismatch after
     # CIM-first inventory. Physical writes add assert_windows_external_write_gate().
+    #
+    # Targeted CIM-by-Index first: after a long patient scan the full inventory
+    # walk often times out even though the selected PhysicalDrive is still present.
+    if sys.platform == 'win32' and discover is list_external_devices:
+        match = re.fullmatch(r'windows:PhysicalDrive(\d+)', identifier)
+        if match:
+            try:
+                direct = _windows_devices_from_cim(_run, number=int(match.group(1)))
+                direct = [d for d in direct if d.id == identifier]
+                if len(direct) == 1:
+                    return direct[0]
+            except (RuntimeError, json.JSONDecodeError, ValueError, TypeError, OSError):
+                pass
     matches = [device for device in discover() if device.id == identifier]
     if len(matches) != 1:
         raise ValueError("Drive not found in current external-whole-disk inventory. "
                          "Run 'list' again. Internal drives and partitions are excluded.")
     return matches[0]
+
+
+def verify_windows_patient_still_present(device: Device, *, size_slop_bytes: int = 16 * 1024 * 1024) -> Device:
+    """WMI-free mid-job recheck via native PhysicalDrive IOCTL (Admin typically required).
+
+    After heavy USB patient I/O, CIM/Get-Disk often time out even though the same
+    ``\\.\PhysicalDriveN`` handle still opens. Keep the inventory Device (and its
+    fingerprint) when the native size agrees within ``size_slop_bytes``.
+    """
+    if sys.platform != 'win32':
+        raise RuntimeError('Windows patient handle recheck is Windows-only')
+    match = re.fullmatch(r'windows:PhysicalDrive(\d+)', device.id)
+    if not match:
+        raise RuntimeError('Windows patient handle recheck requires windows:PhysicalDriveN')
+    from .windows_native import probe_physicaldrive
+    info = probe_physicaldrive(int(match.group(1)))
+    size = _positive_int(info.get('size_bytes'))
+    if not size:
+        raise RuntimeError('Native PhysicalDrive size unavailable during identity recheck')
+    if abs(size - device.size_bytes) > size_slop_bytes:
+        raise RuntimeError(
+            f'Native PhysicalDrive size {size} disagrees with inventory {device.size_bytes}'
+        )
+    return device
 
 
 def assert_windows_external_write_gate(device: Device,

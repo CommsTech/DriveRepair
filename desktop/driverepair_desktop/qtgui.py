@@ -747,7 +747,7 @@ def launch():
                                 QMessageBox.Yes | QMessageBox.No)
                             if confirm!=QMessageBox.Yes:
                                 return
-                            journal_args=['--journal-backend','memory','--ack-volatile-journal']
+                            journal_args=['--journal-backend','memory','--ack-volatile-journal','--ack-dock-power-backed']
                         else:
                             return
                     save_scan_map=False
