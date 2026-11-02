@@ -19,6 +19,7 @@ import zipfile
 
 from .devices import (list_external_devices, select_external_device,
                       assert_windows_external_write_gate,
+                      verify_windows_patient_still_present,
                       linux_all_devices, select_linux_any_disk)
 from .scanner import ImageReader, open_device_readonly, scan_reader
 from .scan_history import load_hints, save_hints
@@ -155,6 +156,8 @@ def parser() -> argparse.ArgumentParser:
         if name == 'care-external':
             cmd.add_argument('--auto-lock-volumes', action='store_true',
                              help='Opt in to locking/dismounting mounted external volumes exclusively for writes; fails if in use')
+            cmd.add_argument('--ack-dock-power-backed', action='store_true',
+                             help='Required with RAM journal on USB/Thunderbolt: dock/port power loss can destroy the active region')
         cmd.add_argument('--ack-volatile-journal', action='store_true',
                          help='I accept loss of active region data on crash/power failure')
         cmd.add_argument('--resume', action='store_true', help='Resume the targeted refresh journal without rescanning')
@@ -1257,6 +1260,9 @@ def _run_care(args) -> int:
     selected = select_external_device(args.device) if is_hardware else None
     if is_hardware:
         assert_windows_external_write_gate(selected)
+        if ram_only and selected.bus.lower() in {'usb', 'firewire', 'thunderbolt'}:
+            if not getattr(args, 'ack_dock_power_backed', False):
+                raise ValueError('Volatile RAM mode on a USB dock requires --ack-dock-power-backed')
     require_destructive_acknowledgements(
         ack_risk=args.ack_risk, ack_destructive=args.ack_destructive,
         ack_no_backup=args.ack_no_backup, ack_data_loss_risk=args.ack_data_loss_risk,
@@ -1430,14 +1436,23 @@ def _run_care(args) -> int:
                     latest = select_external_device(args.device)
                     assert_stable_identity(selected, latest)
                 except (RuntimeError, ValueError) as exc:
-                    result = {'status': 'repair_blocked_identity_recheck', 'scan': scan,
-                              'writes_performed': False,
-                              'reason': 'Device identity unavailable after scan',
-                              'next_step': 'Reconnect/verify USB dock and rerun selected-disk identity preflight; '
-                                           'previous scan findings remain read-only hints, never write permission.',
-                              'detail': str(exc)[:1000]}
-                    print(json.dumps(result, indent=2) if args.json else result, flush=True)
-                    return 2
+                    # USB stacks often wedge WMI/Get-Disk after a long scan while the
+                    # same PhysicalDrive handle remains valid. Prefer a native IOCTL
+                    # recheck that preserves inventory fingerprints over discarding
+                    # the scan. Cached identity still never authorizes writes alone —
+                    # open_device_readwrite / write-gate run again before any rewrite.
+                    try:
+                        latest = verify_windows_patient_still_present(selected)
+                        assert_stable_identity(selected, latest)
+                    except (RuntimeError, ValueError, OSError) as native_exc:
+                        result = {'status': 'repair_blocked_identity_recheck', 'scan': scan,
+                                  'writes_performed': False,
+                                  'reason': 'Device identity unavailable after scan',
+                                  'next_step': 'Reconnect/verify USB dock and rerun selected-disk identity preflight; '
+                                               'previous scan findings remain read-only hints, never write permission.',
+                                  'detail': (str(exc) + ' | native: ' + str(native_exc))[:1500]}
+                        print(json.dumps(result, indent=2) if args.json else result, flush=True)
+                        return 2
             scan['media_profile'] = {k: settings[k] for k in
                 ('profile', 'profile_evidence', 'media_note', 'requested_coverage_pct') if k in settings}
             scan['media_profile']['bounded_rewrite_region_bytes'] = repair_chunk
@@ -1504,7 +1519,10 @@ def _run_care(args) -> int:
         # Select the patient again immediately before RW; fail closed if renumbered.
         if is_hardware:
             try:
-                assert_stable_identity(selected, select_external_device(args.device))
+                try:
+                    assert_stable_identity(selected, select_external_device(args.device))
+                except (RuntimeError, ValueError):
+                    assert_stable_identity(selected, verify_windows_patient_still_present(selected))
                 writer = open_device_readwrite(
                     selected, **({'auto_lock_volumes': True}
                                  if getattr(args, 'auto_lock_volumes', False) else {}))

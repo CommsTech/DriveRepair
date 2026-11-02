@@ -97,6 +97,29 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(selected.fingerprint[:12], listed[0].fingerprint[:12])
         assert_windows_external_write_gate(selected, run)
 
+    def test_select_uses_cim_index_filter_for_windows_physicaldrive(self):
+        calls = []
+
+        def run(cmd, timeout=None):
+            joined = " ".join(cmd)
+            calls.append(joined)
+            if "Index=2" in joined:
+                return json.dumps([{
+                    "Index": 2, "InterfaceType": "USB", "Model": "USB flash",
+                    "Size": 1048576, "SerialNumber": "USB1", "BytesPerSector": 512,
+                }]).encode()
+            raise RuntimeError("full inventory should not be required")
+
+        from driverepair_desktop import devices as devices_mod
+        original = devices_mod._run
+        devices_mod._run = run
+        try:
+            selected = devices_mod.select_external_device("windows:PhysicalDrive2")
+        finally:
+            devices_mod._run = original
+        self.assertEqual(selected.id, "windows:PhysicalDrive2")
+        self.assertTrue(any("Index=2" in c for c in calls))
+
     def test_select_requires_exact_external_identifier(self):
         d = Device("linux:/dev/sdb", "/dev/sdb", "Demo", 1048576, 512, "usb")
         self.assertEqual(select_external_device(d.id, lambda: [d]), d)
