@@ -1,8 +1,8 @@
-# Architecture notes — 0.3.3b8 desktop
+# Architecture notes — 0.3.3b9 desktop
 
-1. **Diagnose** — list/scan/health/probe; adaptive scan grows/shrinks reads; unique sampled addresses tracked separately from re-probes.
-2. **Media profiles** — `media_profiles.py` maps exact known SMR models (e.g. ST1000LM048), confirmed CMR, SSD/HDD/NVMe, or unknown. USB is a bus, not a recording technology.
-3. **Guided repair** — Quick: stratified random sample >=10% unique LBA coverage (seed recorded). Full: read-only transfer calibration then adaptive surface pass. Repair writes use <=1 MiB extents; optional CMR left/right neighbor rewrite only under explicit advanced flags (blocked for SMR/SSD/NVMe/unknown).
-4. **Identity** — Windows re-ID prefers bounded single-disk `Get-Disk -Number N`; GUI inventory never authorizes writes.
-5. **Maintenance / preferences / anomaly history / dependencies** — as in 0.3.3b6–b7.
-6. **GUI** — simplified workflow, medium/profile display, staged Start/Stop job; `DRIVEREPAIR_GUI_DEBUG` log mirror.
+1. **Diagnose / adaptive scan** — grow/shrink reads; unique vs re-probe accounting; WinError 1117 vs 433.
+2. **Scan checkpoint / resume** — `scan_checkpoint.py`: offsets-only local metadata; resume verifies hashed identity/geometry/offset; never stores sector bytes or authorizes writes.
+3. **Rates** — `rates.py` recent-window throughput; average retained separately.
+4. **Media profiles / guided repair** — SMR/CMR/SSD/NVMe-aware (0.3.3b8); Quick ≥10% stratified coverage.
+5. **GUI** — `qtgui.py` (PySide6, optional) preferred by `gui`; Tk remains `gui-legacy`. CLI remains authoritative for identity and writes. `DRIVEREPAIR_GUI_DEBUG` mirrors diagnostics to lab log.
+6. **Maintenance / preferences / dependencies** — as in 0.3.3b6–b7.

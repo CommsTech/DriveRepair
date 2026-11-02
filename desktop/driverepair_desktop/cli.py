@@ -43,6 +43,9 @@ from .media_refresh import (
 from .power_guard import VolatilePowerGuard, PowerGuardError
 from .refresh_display import RefreshDashboard
 from .progress_events import ProgressEmitter
+from .rates import RateWindow
+from .scan_checkpoint import ScanCheckpoint, default_path as default_scan_checkpoint, load as load_scan_checkpoint
+import hashlib
 from .rescue_display import RescueTerminal, rescue_event, destination_free_space
 from .encryption import (
     encryption_guidance,
@@ -111,6 +114,8 @@ def parser() -> argparse.ArgumentParser:
                          help="Extra repeated reads of suspicious triage regions; does NOT identify correct bytes")
         cmd.add_argument("--adaptive-io", action=argparse.BooleanOptionalAction, default=True,
                          help="Adaptive sequential read sizes and bounded deferred retries (full scans)")
+        cmd.add_argument('--scan-checkpoint', help='Local metadata path (no sector data) for full read-only scans')
+        cmd.add_argument('--resume-scan', action='store_true', help='Resume after reconnect with freshly verified identity')
         cmd.add_argument("--max-errors", type=int, default=16,
                          help="Stop after this many failing reads (default: 16)")
         cmd.add_argument("--ack-risk", action="store_true",
@@ -128,6 +133,8 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument('--image' if name == 'care-image' else '--device', required=True)
         cmd.add_argument('--mode', choices=['quick', 'full'], default='quick')
         cmd.add_argument('--adaptive-io', action=argparse.BooleanOptionalAction, default=True)
+        cmd.add_argument('--scan-checkpoint', help='Full-scan read-only checkpoint path; auto for private local metadata')
+        cmd.add_argument('--resume-scan', action='store_true', help='Resume full scan after reconnection; does not authorize writes')
         cmd.add_argument('--remember-anomalies', action='store_true',
                          help='Opt-in tiny local offset history (NO sector bytes; independent of RAM/disk journal)')
         cmd.add_argument('--journal', help='Required for disk/ramdisk journal only; not used in volatile RAM mode')
@@ -395,7 +402,9 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument('--power-source', required=True, help='nut:UPSNAME or battery')
     cmd.add_argument('--chunk-mib', type=int, choices=[1, 2, 4, 8, 16, 32, 64], default=8)
     cmd.add_argument('--json', action='store_true')
-    sub.add_parser('gui', help='Launch the desktop graphical interface')
+    sub.add_parser('gui', help='Launch Qt workstation when installed; otherwise legacy Tk')
+    sub.add_parser('qt-gui', help='Launch new Qt workstation (requires optional PySide6)')
+    sub.add_parser('gui-legacy', help='Launch the full legacy Tk utility interface')
     return cli
 
 
@@ -1265,6 +1274,8 @@ def _run_care(args) -> int:
         targets = None
         chunk = 1024 * 1024
         scan_started = time.monotonic()
+        scan_rate = RateWindow(5)
+        refresh_rate = RateWindow(5)
         if not args.resume:
             settings = tuned_scan(size=size, sector=sector, mode=args.mode,
                                   bus=selected.bus if is_hardware else '',
@@ -1286,7 +1297,8 @@ def _run_care(args) -> int:
                     readable = int(info.get('readable_bytes') or 0)
                     # ETA is based on operations in the current scan, NOT an
                     # invented whole-disk ETA for quick/stratified sampling.
-                    speed = attempted / elapsed
+                    average_speed = attempted / elapsed
+                    speed = scan_rate.update(attempted)
                     eta = (total - index) * elapsed / index if index and index < total else 0.0
                     emitter.emit({'phase': 'SCANNING', 'probe_index': index,
                                   'probe_total': total, 'refresh_index': index,
@@ -1297,7 +1309,8 @@ def _run_care(args) -> int:
                                   'attempted_bytes': attempted,
                                   'readable_bytes': readable,
                                   'read_error_chunks': info.get('read_error_chunks', 0),
-                                  'speed_bps': speed, 'eta_seconds': eta,
+                                  'speed_bps': speed, 'average_speed_bps': average_speed,
+                                  'eta_seconds': eta,
                                   'failed': info.get('failed', False),
                                   'latency_ms': info.get('latency_ms'),
                                   'median_ms': info.get('median_ms'),
@@ -1317,6 +1330,14 @@ def _run_care(args) -> int:
                         # Tiny cached reads can measure artificially fast; do not
                         # demote a healthy multi-TB scan below its media profile.
                         chunk = max(chunk, calibration['chosen_chunk'])
+                # RAM-only means NO persistent artifacts unless the user
+                # explicitly requests a separate offsets-only scan checkpoint.
+                allow_checkpoint = (not ram_only or bool(args.scan_checkpoint))
+                checkpoint_writer, prior_scan = (_scan_checkpoint_for(
+                    args, (selected.scan_resume_identity or token) if is_hardware else token, size, sector)
+                    if args.mode == 'full' and allow_checkpoint else (None, None))
+                if args.resume_scan and prior_scan is None:
+                    raise ValueError('RAM-only scan resume requires an explicit prior --scan-checkpoint file')
                 import secrets
                 sampling_seed = secrets.randbits(64) if is_hardware and args.mode == 'quick' else None
                 scan = scan_reader(reader, size=size, sector=sector,
@@ -1327,7 +1348,8 @@ def _run_care(args) -> int:
                                    adaptive_min_chunk=settings.get('min_chunk'),
                                    adaptive_max_chunk=settings.get('max_chunk'),
                                    history_hints=hints, sample_seed=sampling_seed,
-                                   progress=scan_progress)
+                                   progress=scan_progress, resume_state=prior_scan,
+                                   checkpoint=checkpoint_writer.save if checkpoint_writer else None)
                 if calibration is not None:
                     scan['initial_io_calibration'] = calibration
                 if (args.repair_policy == 'balanced' and
@@ -1449,13 +1471,15 @@ def _run_care(args) -> int:
                 total = event.get('refresh_total', len(targets or []))
                 rewritten = int(event.get('rewritten_bytes') or 0)
                 elapsed = max(0.001, time.monotonic() - refresh_started)
-                speed = rewritten / elapsed if rewritten else 0.0
+                average_speed = rewritten / elapsed if rewritten else 0.0
+                speed = refresh_rate.update(rewritten)
                 remaining = (max(0, total_refresh_bytes - rewritten)
                              if total_refresh_bytes is not None else None)
-                eta = (remaining / speed if speed > 0 and remaining is not None else None)
+                eta = (remaining / average_speed if average_speed > 0 and remaining is not None else None)
                 emitter.emit({'phase': 'REFRESH', 'refresh_index': idx,
                               'refresh_total': total, 'size': size,
-                              'speed_bps': speed, 'eta_seconds': eta,
+                              'speed_bps': speed, 'average_speed_bps': average_speed,
+                              'eta_seconds': eta,
                               'read_error_chunks': (scan or {}).get('read_error_chunks', 0),
                               'offset': event.get('offset', 0),
                               'rewritten_bytes': event.get('rewritten_bytes', 0),
@@ -1484,12 +1508,44 @@ def _run_care(args) -> int:
         return 0 if result['status'] == 'completed_targeted_refresh' else 2
 
 
+def _scan_checkpoint_for(args, source_token: str, size: int, sector: int):
+    """Return a private full-scan checkpoint and validated prior state.
+
+    The token is hashed before storage. A read-only checkpoint never confers
+    physical-write authorization; the caller must reselect/verify the disk.
+    """
+    if getattr(args, 'mode', '') not in ('full',) or not getattr(args, 'adaptive_io', True):
+        if getattr(args, 'resume_scan', False):
+            raise ValueError('--resume-scan requires an adaptive full scan')
+        return None, None
+    token = hashlib.sha256(source_token.encode('utf-8')).hexdigest()
+    configured = getattr(args, 'scan_checkpoint', None)
+    path = str(default_scan_checkpoint(token)) if configured in (None, 'auto') else configured
+    state = (load_scan_checkpoint(path, source_token=token, size=size, sector=sector)
+             if getattr(args, 'resume_scan', False) else None)
+    writer = ScanCheckpoint(path, source_token=token, size=size, sector=sector)
+    return writer, state
+
+
 def run(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
-        if args.command == 'gui':
-            from .gui import launch
-            launch()
+        if args.command in {'gui', 'qt-gui', 'gui-legacy'}:
+            if args.command == 'gui-legacy':
+                from .gui import launch
+                launch()
+            else:
+                try:
+                    import PySide6
+                except ImportError:
+                    if args.command == 'qt-gui':
+                        raise RuntimeError('PySide6 not installed: python -m pip install PySide6')
+                    print('PySide6 not installed; launching legacy Tk. For the new UI: python -m pip install PySide6', file=sys.stderr)
+                    from .gui import launch
+                    launch()
+                else:
+                    from .qtgui import launch
+                    launch()
             return 0
         if args.command == 'probe-region':
             if not args.ack_read_stress:
@@ -1634,12 +1690,21 @@ def run(argv: list[str] | None = None) -> int:
                 print(f"SMART baseline: {smart.get('status')} (does not authorize repair).",
                       file=sys.stderr)
         health = ScanHealthTracker(bus=bus, smart=smart)
+        if args.command == 'scan':
+            if args.resume_scan and not device.scan_resume_identity:
+                raise ValueError('USB bridge exposes no stable media serial; refusing cross-connection resume')
+            scan_token = device.scan_resume_identity or identity
+        else:
+            st = os.stat(image)
+            scan_token = f'file:{os.path.realpath(image)}:{st.st_dev}:{st.st_ino}:{st.st_mtime_ns}:{size}'
+        checkpoint_writer, prior_scan = _scan_checkpoint_for(args, scan_token, size, sector)
         try:
             print("READ-ONLY scan. This DOES NOT repair disks or verify data integrity.",
                   file=sys.stderr)
             scan_emitter = ProgressEmitter(enabled=bool(getattr(args, "progress_jsonl", False)),
                                            min_interval_s=0.2)
             scan_started = time.perf_counter()
+            rate_window = RateWindow(5)
             last_human = [0.0]
 
             def report(current: int, total: int, info: dict | None = None) -> None:
@@ -1655,7 +1720,8 @@ def run(argv: list[str] | None = None) -> int:
                 elapsed = max(1e-6, time.perf_counter() - scan_started)
                 bytes_done = int(info.get('attempted_bytes', min(size, current * chunk)))
                 readable = int(info.get('readable_bytes', bytes_done if not failed else 0))
-                speed = bytes_done / elapsed
+                average_speed = bytes_done / elapsed
+                speed = rate_window.update(bytes_done)
                 # Sample/triage ETA reflects remaining planned samples, not the
                 # entire surface. Full scan ETA reflects all planned blocks.
                 eta = (max(0, total - current) * elapsed / current if current else None)
@@ -1688,7 +1754,7 @@ def run(argv: list[str] | None = None) -> int:
                     ),
                     "health": health_view,
                     "eta_seconds": eta,
-                    "speed_bps": speed,
+                    "speed_bps": speed, "average_speed_bps": average_speed,
                     "repair_readiness": health.repair_readiness(),
                 }, force=(current <= 1 or current >= total or failed
                           or health_view["mechanical"] in {"WATCH", "FAIL"}
@@ -1713,11 +1779,15 @@ def run(argv: list[str] | None = None) -> int:
                                  adaptive_io=args.adaptive_io,
                                  history_hints=(load_hints(device.fingerprint, size, sector)
                                                 if args.command == 'scan' and args.remember_anomalies else []),
-                                 progress=report)
+                                 progress=report, resume_state=prior_scan,
+                                 checkpoint=checkpoint_writer.save if checkpoint_writer else None)
             print(file=sys.stderr)
         finally:
             reader.close()
 
+        if checkpoint_writer is not None:
+            result['scan_checkpoint'] = str(checkpoint_writer.path)
+            result['resume_requires_fresh_identity'] = True
         result["health"] = health.public()
         result["repair_readiness"] = health.repair_readiness()
         if smart is not None:

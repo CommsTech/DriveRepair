@@ -255,3 +255,12 @@ On the desktop app, choose a workflow and review its options, then click the **S
 **RAM-only versus history:** RAM-only keeps sector data and transaction state in process RAM and never saves a recovery image or sector journal. An independently selected “Remember bad/slow locations” option may save a small, local, offsets-only diagnostic history on the host computer. It stores no sector bytes, file contents, or write authorization. Disable it when absolutely no diagnostic files are desired.
 
 **Repeat Quick Repair:** Each physical-drive session uses a new recorded random sampling seed. The selected locations are stratified across the disk and processed in address order; a repeat run can inspect different areas. Saved anomaly locations (when enabled) are rechecked separately. A new seed does not establish full-disk integrity. Synthetic image tests retain deterministic sampling.
+
+## Optional modern Qt workstation (0.3.3b9)
+
+```sh
+python -m pip install -e '.[qt]'
+python -m driverepair_desktop qt-gui
+```
+
+Use `gui` to prefer PySide6 and fall back with a warning to Tk when Qt is not installed; `gui-legacy` always runs the full legacy toolbox. PySide6 is **not** bundled inside the portable `.pyz`; install it in the launching Python environment. The Qt workstation is a staged user-facing front end and **does not yet replace all Tk advanced functions**. See `../docs/QT_WORKSTATION_AND_SCAN_RESUME.md` for USB-disconnect checkpoints, RAM-only privacy behavior, speed semantics, release gates and why firmware/neural recovery experimental proposals are not enabled.

@@ -1,0 +1,1227 @@
+diff --git a/.gitea/workflows/ci.yml b/.gitea/workflows/ci.yml
+index ea665f0..f73f042 100644
+--- a/.gitea/workflows/ci.yml
++++ b/.gitea/workflows/ci.yml
+@@ -88,7 +88,7 @@ jobs:
+       - name: Portable GUI to recovery engine image test
+         working-directory: desktop
+         env:
+-          DRIVEREPAIR_SMOKE_PYZ: ../dist/DriveRepair-0.3.3b8.pyz
++          DRIVEREPAIR_SMOKE_PYZ: ../dist/DriveRepair-0.3.3b9.pyz
+         run: xvfb-run -a python -m unittest discover -s tests -p test_gui_workflows.py -v
+ 
+   native-recovery-core:
+@@ -121,6 +121,6 @@ jobs:
+       - name: Verify CLI offline rescue commands are packaged
+         run: |
+           python scripts/build_desktop.py --no-wheel
+-          python dist/DriveRepair-0.3.3b8.pyz list-all-linux --help
+-          python dist/DriveRepair-0.3.3b8.pyz plan-system-recovery --help
+-          python dist/DriveRepair-0.3.3b8.pyz rescue-system --help
++          python dist/DriveRepair-0.3.3b9.pyz list-all-linux --help
++          python dist/DriveRepair-0.3.3b9.pyz plan-system-recovery --help
++          python dist/DriveRepair-0.3.3b9.pyz rescue-system --help
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index c399358..e87cd77 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -286,3 +286,10 @@
+   with an internal SATA disk; USB bridges still require the separate acknowledgment.
+ - Added synthetic CLI safety-path tests. No physical device testing or
+   manufacturer firmware remapping validation has been performed.
++
++### 0.3.3b9 — Qt workstation migration and resumable read-only scans
++- Optional PySide6 workstation with staged Start, drive choices, interactive sampled activity map, advanced log, and clear high-risk write confirmation. Existing Tk specialist tools remain.
++- Five-second recent throughput and separate job average; fixed misleading “current speed” label.
++- Private, identity-bound full-scan checkpoints permit explicit read-only resumption after unplug/reconnect; 433/no-device classified as access failure.
++- RAM-only guided writes keep their no-file default; scan checkpoint is a separate explicit opt-in.
++- This does **not** add raw firmware vendor commands, AI-invented evidence, or automatic physical-write resumption.
+diff --git a/desktop/README.md b/desktop/README.md
+index 5a25f42..e9896bb 100644
+--- a/desktop/README.md
++++ b/desktop/README.md
+@@ -255,3 +255,12 @@ On the desktop app, choose a workflow and review its options, then click the **S
+ **RAM-only versus history:** RAM-only keeps sector data and transaction state in process RAM and never saves a recovery image or sector journal. An independently selected “Remember bad/slow locations” option may save a small, local, offsets-only diagnostic history on the host computer. It stores no sector bytes, file contents, or write authorization. Disable it when absolutely no diagnostic files are desired.
+ 
+ **Repeat Quick Repair:** Each physical-drive session uses a new recorded random sampling seed. The selected locations are stratified across the disk and processed in address order; a repeat run can inspect different areas. Saved anomaly locations (when enabled) are rechecked separately. A new seed does not establish full-disk integrity. Synthetic image tests retain deterministic sampling.
++
++## Optional modern Qt workstation (0.3.3b9)
++
++```sh
++python -m pip install -e '.[qt]'
++python -m driverepair_desktop qt-gui
++```
++
++Use `gui` to prefer PySide6 and fall back with a warning to Tk when Qt is not installed; `gui-legacy` always runs the full legacy toolbox. PySide6 is **not** bundled inside the portable `.pyz`; install it in the launching Python environment. The Qt workstation is a staged user-facing front end and **does not yet replace all Tk advanced functions**. See `../docs/QT_WORKSTATION_AND_SCAN_RESUME.md` for USB-disconnect checkpoints, RAM-only privacy behavior, speed semantics, release gates and why firmware/neural recovery experimental proposals are not enabled.
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index eb14f37..0535275 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b8"
++__version__ = "0.3.3b9"
+diff --git a/desktop/driverepair_desktop/adaptive_scan.py b/desktop/driverepair_desktop/adaptive_scan.py
+index 95b5496..ae1f0c2 100644
+--- a/desktop/driverepair_desktop/adaptive_scan.py
++++ b/desktop/driverepair_desktop/adaptive_scan.py
+@@ -17,7 +17,7 @@ from typing import Callable
+ # Win32 ERROR_IO_DEVICE (1117) can surface as Python errno EINVAL (22).
+ # ERRNO 22 is only fatal without the more specific native error code.
+ DEVICE_IO_ERRORS = {1117, 23, 1110}
+-FATAL_WINERRORS = {5, 6, 21, 1167}
++FATAL_WINERRORS = {5, 6, 21, 433, 1167}
+ FATAL_ERRNOS = {errno.ENODEV, errno.ENXIO, errno.EBADF, errno.EACCES,
+                 errno.EPERM, errno.ENOENT}
+ 
+@@ -39,7 +39,8 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
+                        max_errors: int = 16, progress: Callable | None = None,
+                        max_deferred: int = 256, max_followup_reads: int = 96,
+                        min_chunk: int | None = None, max_chunk: int | None = None,
+-                       known_suspects: list[dict] | None = None) -> dict:
++                       known_suspects: list[dict] | None = None,
++                       resume_state: dict | None = None, checkpoint=None) -> dict:
+     """One full-surface pass, skipping isolated failures then bounded refinement.
+ 
+     The returned `read_error_ranges` are original failed I/O requests, even if
+@@ -57,25 +58,42 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
+     chunk = min(max_chunk, max(min_chunk, chunk))
+     started = time.monotonic()
+     checked = readable = read_count = failures = 0
+-    position = 0
+-    deferred: list[dict] = []
++    prior = resume_state or {}
++    position = int(prior.get('position', 0))
++    if position < 0 or position > size or position % sector:
++        raise ValueError('Invalid resume position')
++    checked = int(prior.get('checked', 0))
++    readable = int(prior.get('readable', 0))
++    read_count = int(prior.get('read_count', 0))
++    failures = int(prior.get('failures', 0))
++    deferred: list[dict] = [dict(x) for x in prior.get('deferred', [])]
+     suspect = [dict(x) for x in (known_suspects or [])[:128]
+                if type(x) is dict and type(x.get('offset')) is int and
+                0 <= x['offset'] < size]
+-    slow: list[dict] = []
+-    slow_count = 0
++    slow: list[dict] = [dict(x) for x in prior.get('slow', [])]
++    slow_count = int(prior.get('slow_count', len(slow)))
+     read_sizes = set()
+     adjustments = 0
+-    size_now = chunk
++    size_now = int(prior.get('size_now', chunk))
++    if not min_chunk <= size_now <= max_chunk or size_now % sector:
++        size_now = chunk
+     recent_rate = deque(maxlen=32)
+     consecutive_errors = 0
+     healthy_streak = 0
+-    skipped: list[dict] = []
++    skipped: list[dict] = [dict(x) for x in prior.get('skipped', [])]
+     status = 'completed'
+     error_count_over_limit = False
+     retries_limited = False
+     latency_window = deque(maxlen=256)
+ 
++    def write_checkpoint(*, force=False):
++        if checkpoint is not None:
++            checkpoint({'position': position, 'checked': checked,
++                        'readable': readable, 'read_count': read_count,
++                        'failures': failures, 'deferred': deferred[:256],
++                        'slow': slow[:1024], 'slow_count': slow_count,
++                        'skipped': skipped[:256], 'size_now': size_now}, force=force)
++
+     def report(off, length, elapsed_ms, error=None, category=None):
+         if progress is None:
+             return
+@@ -127,6 +145,7 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
+             if category in {'device_or_access_unavailable', 'invalid_read_request'}:
+                 status = 'aborted_device_or_access_error'
+                 report(position, length, elapsed_ms, issue, category)
++                write_checkpoint(force=True)
+                 break
+             if failures >= max_errors:
+                 retries_limited = True  # affects deferred probe budget, not whole-disk progress
+@@ -137,6 +156,7 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
+                 adjustments += 1
+             report(position, length, elapsed_ms, issue, category)
+             position += length
++            write_checkpoint()
+             # A large cluster of failed reads is bypassed, not repeatedly hit.
+             # The skipped space is UNTESTED, never classified as healthy.
+             if consecutive_errors >= 6 and position < size:
+@@ -145,6 +165,7 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
+                 if skip:
+                     skipped.append({'offset': position, 'length': skip, 'reason': 'repeated_io_failures'})
+                     position += skip
++                    write_checkpoint(force=True)
+                     consecutive_errors = 0
+                     report(position - skip, skip, 0.0, 'skipped untested after repeated I/O errors',
+                            'skipped_untested')
+@@ -178,7 +199,9 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
+             healthy_streak = 0
+         report(position, length, elapsed_ms)
+         position += length
++        write_checkpoint()
+ 
++    write_checkpoint(force=True)
+     if status == 'completed' and (deferred or skipped or error_count_over_limit):
+         status = 'completed_with_read_errors'
+     elif status == 'completed' and slow:
+@@ -212,6 +235,8 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
+         'follow_up_chunks': 0,
+         'surface_coverage_pct': round(100 * min(size, visited) / size, 6),
+         'elapsed_seconds': round(elapsed, 3),
++        'resume_position_bytes': position,
++        'resumed_from_bytes': int(prior.get('position', 0)),
+         'read_sizes_bytes': sorted(read_sizes),
+         'read_size_adjustments': adjustments,
+         'skipped_untested_ranges': skipped,
+diff --git a/desktop/driverepair_desktop/cli.py b/desktop/driverepair_desktop/cli.py
+index f611642..54922aa 100644
+--- a/desktop/driverepair_desktop/cli.py
++++ b/desktop/driverepair_desktop/cli.py
+@@ -43,6 +43,9 @@ from .media_refresh import (
+ from .power_guard import VolatilePowerGuard, PowerGuardError
+ from .refresh_display import RefreshDashboard
+ from .progress_events import ProgressEmitter
++from .rates import RateWindow
++from .scan_checkpoint import ScanCheckpoint, default_path as default_scan_checkpoint, load as load_scan_checkpoint
++import hashlib
+ from .rescue_display import RescueTerminal, rescue_event, destination_free_space
+ from .encryption import (
+     encryption_guidance,
+@@ -111,6 +114,8 @@ def parser() -> argparse.ArgumentParser:
+                          help="Extra repeated reads of suspicious triage regions; does NOT identify correct bytes")
+         cmd.add_argument("--adaptive-io", action=argparse.BooleanOptionalAction, default=True,
+                          help="Adaptive sequential read sizes and bounded deferred retries (full scans)")
++        cmd.add_argument('--scan-checkpoint', help='Local metadata path (no sector data) for full read-only scans')
++        cmd.add_argument('--resume-scan', action='store_true', help='Resume after reconnect with freshly verified identity')
+         cmd.add_argument("--max-errors", type=int, default=16,
+                          help="Stop after this many failing reads (default: 16)")
+         cmd.add_argument("--ack-risk", action="store_true",
+@@ -128,6 +133,8 @@ def parser() -> argparse.ArgumentParser:
+         cmd.add_argument('--image' if name == 'care-image' else '--device', required=True)
+         cmd.add_argument('--mode', choices=['quick', 'full'], default='quick')
+         cmd.add_argument('--adaptive-io', action=argparse.BooleanOptionalAction, default=True)
++        cmd.add_argument('--scan-checkpoint', help='Full-scan read-only checkpoint path; auto for private local metadata')
++        cmd.add_argument('--resume-scan', action='store_true', help='Resume full scan after reconnection; does not authorize writes')
+         cmd.add_argument('--remember-anomalies', action='store_true',
+                          help='Opt-in tiny local offset history (NO sector bytes; independent of RAM/disk journal)')
+         cmd.add_argument('--journal', help='Required for disk/ramdisk journal only; not used in volatile RAM mode')
+@@ -395,7 +402,9 @@ def parser() -> argparse.ArgumentParser:
+     cmd.add_argument('--power-source', required=True, help='nut:UPSNAME or battery')
+     cmd.add_argument('--chunk-mib', type=int, choices=[1, 2, 4, 8, 16, 32, 64], default=8)
+     cmd.add_argument('--json', action='store_true')
+-    sub.add_parser('gui', help='Launch the desktop graphical interface')
++    sub.add_parser('gui', help='Launch Qt workstation when installed; otherwise legacy Tk')
++    sub.add_parser('qt-gui', help='Launch new Qt workstation (requires optional PySide6)')
++    sub.add_parser('gui-legacy', help='Launch the full legacy Tk utility interface')
+     return cli
+ 
+ 
+@@ -1265,6 +1274,8 @@ def _run_care(args) -> int:
+         targets = None
+         chunk = 1024 * 1024
+         scan_started = time.monotonic()
++        scan_rate = RateWindow(5)
++        refresh_rate = RateWindow(5)
+         if not args.resume:
+             settings = tuned_scan(size=size, sector=sector, mode=args.mode,
+                                   bus=selected.bus if is_hardware else '',
+@@ -1286,7 +1297,8 @@ def _run_care(args) -> int:
+                     readable = int(info.get('readable_bytes') or 0)
+                     # ETA is based on operations in the current scan, NOT an
+                     # invented whole-disk ETA for quick/stratified sampling.
+-                    speed = attempted / elapsed
++                    average_speed = attempted / elapsed
++                    speed = scan_rate.update(attempted)
+                     eta = (total - index) * elapsed / index if index and index < total else 0.0
+                     emitter.emit({'phase': 'SCANNING', 'probe_index': index,
+                                   'probe_total': total, 'refresh_index': index,
+@@ -1297,7 +1309,8 @@ def _run_care(args) -> int:
+                                   'attempted_bytes': attempted,
+                                   'readable_bytes': readable,
+                                   'read_error_chunks': info.get('read_error_chunks', 0),
+-                                  'speed_bps': speed, 'eta_seconds': eta,
++                                  'speed_bps': speed, 'average_speed_bps': average_speed,
++                                  'eta_seconds': eta,
+                                   'failed': info.get('failed', False),
+                                   'latency_ms': info.get('latency_ms'),
+                                   'median_ms': info.get('median_ms'),
+@@ -1317,6 +1330,14 @@ def _run_care(args) -> int:
+                         # Tiny cached reads can measure artificially fast; do not
+                         # demote a healthy multi-TB scan below its media profile.
+                         chunk = max(chunk, calibration['chosen_chunk'])
++                # RAM-only means NO persistent artifacts unless the user
++                # explicitly requests a separate offsets-only scan checkpoint.
++                allow_checkpoint = (not ram_only or bool(args.scan_checkpoint))
++                checkpoint_writer, prior_scan = (_scan_checkpoint_for(
++                    args, (selected.scan_resume_identity or token) if is_hardware else token, size, sector)
++                    if args.mode == 'full' and allow_checkpoint else (None, None))
++                if args.resume_scan and prior_scan is None:
++                    raise ValueError('RAM-only scan resume requires an explicit prior --scan-checkpoint file')
+                 import secrets
+                 sampling_seed = secrets.randbits(64) if is_hardware and args.mode == 'quick' else None
+                 scan = scan_reader(reader, size=size, sector=sector,
+@@ -1327,7 +1348,8 @@ def _run_care(args) -> int:
+                                    adaptive_min_chunk=settings.get('min_chunk'),
+                                    adaptive_max_chunk=settings.get('max_chunk'),
+                                    history_hints=hints, sample_seed=sampling_seed,
+-                                   progress=scan_progress)
++                                   progress=scan_progress, resume_state=prior_scan,
++                                   checkpoint=checkpoint_writer.save if checkpoint_writer else None)
+                 if calibration is not None:
+                     scan['initial_io_calibration'] = calibration
+                 if (args.repair_policy == 'balanced' and
+@@ -1449,13 +1471,15 @@ def _run_care(args) -> int:
+                 total = event.get('refresh_total', len(targets or []))
+                 rewritten = int(event.get('rewritten_bytes') or 0)
+                 elapsed = max(0.001, time.monotonic() - refresh_started)
+-                speed = rewritten / elapsed if rewritten else 0.0
++                average_speed = rewritten / elapsed if rewritten else 0.0
++                speed = refresh_rate.update(rewritten)
+                 remaining = (max(0, total_refresh_bytes - rewritten)
+                              if total_refresh_bytes is not None else None)
+-                eta = (remaining / speed if speed > 0 and remaining is not None else None)
++                eta = (remaining / average_speed if average_speed > 0 and remaining is not None else None)
+                 emitter.emit({'phase': 'REFRESH', 'refresh_index': idx,
+                               'refresh_total': total, 'size': size,
+-                              'speed_bps': speed, 'eta_seconds': eta,
++                              'speed_bps': speed, 'average_speed_bps': average_speed,
++                              'eta_seconds': eta,
+                               'read_error_chunks': (scan or {}).get('read_error_chunks', 0),
+                               'offset': event.get('offset', 0),
+                               'rewritten_bytes': event.get('rewritten_bytes', 0),
+@@ -1484,12 +1508,44 @@ def _run_care(args) -> int:
+         return 0 if result['status'] == 'completed_targeted_refresh' else 2
+ 
+ 
++def _scan_checkpoint_for(args, source_token: str, size: int, sector: int):
++    """Return a private full-scan checkpoint and validated prior state.
++
++    The token is hashed before storage. A read-only checkpoint never confers
++    physical-write authorization; the caller must reselect/verify the disk.
++    """
++    if getattr(args, 'mode', '') not in ('full',) or not getattr(args, 'adaptive_io', True):
++        if getattr(args, 'resume_scan', False):
++            raise ValueError('--resume-scan requires an adaptive full scan')
++        return None, None
++    token = hashlib.sha256(source_token.encode('utf-8')).hexdigest()
++    configured = getattr(args, 'scan_checkpoint', None)
++    path = str(default_scan_checkpoint(token)) if configured in (None, 'auto') else configured
++    state = (load_scan_checkpoint(path, source_token=token, size=size, sector=sector)
++             if getattr(args, 'resume_scan', False) else None)
++    writer = ScanCheckpoint(path, source_token=token, size=size, sector=sector)
++    return writer, state
++
++
+ def run(argv: list[str] | None = None) -> int:
+     args = parser().parse_args(argv)
+     try:
+-        if args.command == 'gui':
+-            from .gui import launch
+-            launch()
++        if args.command in {'gui', 'qt-gui', 'gui-legacy'}:
++            if args.command == 'gui-legacy':
++                from .gui import launch
++                launch()
++            else:
++                try:
++                    import PySide6
++                except ImportError:
++                    if args.command == 'qt-gui':
++                        raise RuntimeError('PySide6 not installed: python -m pip install PySide6')
++                    print('PySide6 not installed; launching legacy Tk. For the new UI: python -m pip install PySide6', file=sys.stderr)
++                    from .gui import launch
++                    launch()
++                else:
++                    from .qtgui import launch
++                    launch()
+             return 0
+         if args.command == 'probe-region':
+             if not args.ack_read_stress:
+@@ -1634,12 +1690,21 @@ def run(argv: list[str] | None = None) -> int:
+                 print(f"SMART baseline: {smart.get('status')} (does not authorize repair).",
+                       file=sys.stderr)
+         health = ScanHealthTracker(bus=bus, smart=smart)
++        if args.command == 'scan':
++            if args.resume_scan and not device.scan_resume_identity:
++                raise ValueError('USB bridge exposes no stable media serial; refusing cross-connection resume')
++            scan_token = device.scan_resume_identity or identity
++        else:
++            st = os.stat(image)
++            scan_token = f'file:{os.path.realpath(image)}:{st.st_dev}:{st.st_ino}:{st.st_mtime_ns}:{size}'
++        checkpoint_writer, prior_scan = _scan_checkpoint_for(args, scan_token, size, sector)
+         try:
+             print("READ-ONLY scan. This DOES NOT repair disks or verify data integrity.",
+                   file=sys.stderr)
+             scan_emitter = ProgressEmitter(enabled=bool(getattr(args, "progress_jsonl", False)),
+                                            min_interval_s=0.2)
+             scan_started = time.perf_counter()
++            rate_window = RateWindow(5)
+             last_human = [0.0]
+ 
+             def report(current: int, total: int, info: dict | None = None) -> None:
+@@ -1655,7 +1720,8 @@ def run(argv: list[str] | None = None) -> int:
+                 elapsed = max(1e-6, time.perf_counter() - scan_started)
+                 bytes_done = int(info.get('attempted_bytes', min(size, current * chunk)))
+                 readable = int(info.get('readable_bytes', bytes_done if not failed else 0))
+-                speed = bytes_done / elapsed
++                average_speed = bytes_done / elapsed
++                speed = rate_window.update(bytes_done)
+                 # Sample/triage ETA reflects remaining planned samples, not the
+                 # entire surface. Full scan ETA reflects all planned blocks.
+                 eta = (max(0, total - current) * elapsed / current if current else None)
+@@ -1688,7 +1754,7 @@ def run(argv: list[str] | None = None) -> int:
+                     ),
+                     "health": health_view,
+                     "eta_seconds": eta,
+-                    "speed_bps": speed,
++                    "speed_bps": speed, "average_speed_bps": average_speed,
+                     "repair_readiness": health.repair_readiness(),
+                 }, force=(current <= 1 or current >= total or failed
+                           or health_view["mechanical"] in {"WATCH", "FAIL"}
+@@ -1713,11 +1779,15 @@ def run(argv: list[str] | None = None) -> int:
+                                  adaptive_io=args.adaptive_io,
+                                  history_hints=(load_hints(device.fingerprint, size, sector)
+                                                 if args.command == 'scan' and args.remember_anomalies else []),
+-                                 progress=report)
++                                 progress=report, resume_state=prior_scan,
++                                 checkpoint=checkpoint_writer.save if checkpoint_writer else None)
+             print(file=sys.stderr)
+         finally:
+             reader.close()
+ 
++        if checkpoint_writer is not None:
++            result['scan_checkpoint'] = str(checkpoint_writer.path)
++            result['resume_requires_fresh_identity'] = True
+         result["health"] = health.public()
+         result["repair_readiness"] = health.repair_readiness()
+         if smart is not None:
+diff --git a/desktop/driverepair_desktop/devices.py b/desktop/driverepair_desktop/devices.py
+index 89dfb44..70ac509 100644
+--- a/desktop/driverepair_desktop/devices.py
++++ b/desktop/driverepair_desktop/devices.py
+@@ -37,6 +37,20 @@ class Device:
+                 str(self.sector_size), self.bus, self.serial)
+         return hashlib.sha256("\0".join(data).encode("utf-8")).hexdigest()
+ 
++    @property
++    def scan_resume_identity(self) -> str | None:
++        """Stable READ-ONLY scan identity across USB port / PhysicalDrive renumbering.
++
++        Not a physical-write authority. A USB bridge might hide or reuse serials;
++        only use for scan metadata and require a meaningful serial on resume.
++        """
++        serial = self.serial.strip()
++        if len(serial) < 4 or serial.lower() in {'unknown', 'none', 'null', 'n/a', 'unavailable'}:
++            return None
++        parts = (self.model.strip().casefold(), serial.casefold(),
++                 str(self.size_bytes), str(self.sector_size), self.bus.strip().casefold())
++        return hashlib.sha256("\0".join(parts).encode('utf-8')).hexdigest()
++
+     def public(self) -> dict:
+         """Do not include full hardware serial numbers in routine output."""
+         return {
+diff --git a/desktop/driverepair_desktop/gui.py b/desktop/driverepair_desktop/gui.py
+index 2868c3b..fa7b739 100644
+--- a/desktop/driverepair_desktop/gui.py
++++ b/desktop/driverepair_desktop/gui.py
+@@ -611,7 +611,7 @@ def launch() -> None:
+         # engine. Do NOT use bytes-written counters for a read-only scan.
+         if phase in {'SCANNING', 'INVESTIGATING'}:
+             for label, text in zip(summary_labels, ('BYTES READ', 'READ ERRORS',
+-                                                    'CURRENT SPEED', 'TIME REMAINING')):
++                                                    'RECENT SPEED', 'TIME REMAINING')):
+                 label.configure(text=text)
+             attempted = int(event.get('attempted_bytes', 0))
+             readable = int(event.get('readable_bytes', 0))
+@@ -625,9 +625,8 @@ def launch() -> None:
+                 speed_var.set(f'{fmt_bytes(int(speed_bps))}/s')
+             elif phase == 'INVESTIGATING':
+                 speed_var.set('Targeted retries')
+-            elif stats.get('started') and attempted:
+-                elapsed = max(0.01, time.monotonic() - stats['started'])
+-                speed_var.set(f'{fmt_bytes(int(attempted / elapsed))}/s')
++            elif speed_bps is None:
++                speed_var.set('Measuring…')
+             eta_s = event.get('eta_seconds')
+             if phase == 'INVESTIGATING':
+                 eta_var.set('Bounded retries')
+@@ -641,7 +640,7 @@ def launch() -> None:
+         elif phase == 'REFRESH':
+             for label, text in zip(summary_labels, ('BYTES REWRITTEN / VERIFIED',
+                                                     'UNREADABLE / UNKNOWN',
+-                                                    'CURRENT SPEED', 'TIME REMAINING')):
++                                                    'RECENT SPEED', 'TIME REMAINING')):
+                 label.configure(text=text)
+             recovered_var.set(f"{fmt_bytes(stats['rewritten'])} / {fmt_bytes(stats['verified'])}")
+             remaining_errors = int(event.get('read_error_chunks') or 0)
+@@ -775,7 +774,7 @@ def launch() -> None:
+         warning_var.set('Recovery may stress failing hardware. This display is not a drive-health verdict.')
+         warning_label.configure(fg=C['muted'])
+         for label, text in zip(summary_labels, ('DATA SAVED TO IMAGE', 'UNREADABLE / UNKNOWN',
+-                                                'CURRENT SPEED', 'TIME REMAINING')):
++                                                'RECENT SPEED', 'TIME REMAINING')):
+             label.configure(text=text)
+         if in_place:
+             summary_labels[0].configure(text='BYTES REWRITTEN / VERIFIED')
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+new file mode 100644
+index 0000000..0bc4a5b
+--- /dev/null
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -0,0 +1,396 @@
++"""DriveRepair Workstation (PySide6, optional).
++
++The Qt process never opens patient media. All I/O is done by the existing
++isolated CLI, whose safety checks are authoritative. This is a deliberately
++small front-end, not an alternate disk-repair engine.
++"""
++from __future__ import annotations
++
++import json
++import os
++from pathlib import Path
++import sys
++import time
++
++
++def cli_prefix() -> list[str]:
++    if sys.argv and str(sys.argv[0]).lower().endswith('.pyz'):
++        return [sys.executable, os.path.abspath(sys.argv[0])]
++    return [sys.executable, '-m', 'driverepair_desktop']
++
++
++def display_size(value: int | float) -> str:
++    value = float(value)
++    for unit in ('B', 'KiB', 'MiB', 'GiB', 'TiB'):
++        if abs(value) < 1024 or unit == 'TiB':
++            return f'{value:,.2f} {unit}' if unit != 'B' else f'{value:,.0f} B'
++        value /= 1024
++    return '—'
++
++
++def launch():
++    try:
++        from PySide6.QtCore import Qt, QProcess, QTimer, QRectF
++        from PySide6.QtGui import QColor, QFont, QPainter
++        from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
++            QLabel, QPushButton, QFrame, QProgressBar, QComboBox, QLineEdit, QFileDialog,
++            QPlainTextEdit, QMessageBox, QCheckBox, QScrollArea)
++    except ImportError as exc:
++        raise RuntimeError('Qt workstation requires the optional PySide6 package: python -m pip install PySide6') from exc
++
++    C = {'bg':'#0a111e','panel':'#111c2d','panel2':'#17263b','line':'#283a54',
++         'text':'#eef4ff','muted':'#9ab0c8','accent':'#4d9fff','green':'#32ba9e',
++         'orange':'#f7a749','red':'#f46e7c','yellow':'#e9ca60'}
++    css = f'''QWidget {{ background:{C['bg']};color:{C['text']}; font-family:'Segoe UI','Inter',sans-serif; font-size:13px; }}
++        QFrame#card {{ background:{C['panel']}; border:1px solid {C['line']}; border-radius:15px; }}
++        QLabel#muted {{ color:{C['muted']}; }}
++        QLabel#heading {{ font-size:23px; font-weight:750; }}
++        QLabel#metric {{ font-size:23px; font-weight:700; }}
++        QLabel#eyebrow {{ color:{C['muted']}; font-size:11px; font-weight:700; }}
++        QPushButton {{ background:{C['panel2']}; border:1px solid {C['line']}; padding:12px 17px; border-radius:9px; font-weight:650; }}
++        QPushButton:hover {{border:1px solid {C['accent']}; background:#203450;}}
++        QPushButton:disabled {{color:#708399;}}
++        QPushButton#primary {{background:#2e7be6; color:white; border:0;}}
++        QPushButton#primary:hover {{background:#4295ff;}}
++        QPushButton#danger {{background:#743742;border:1px solid #a95f67;}}
++        QComboBox,QLineEdit {{background:{C['panel2']};border:1px solid {C['line']}; padding:11px;border-radius:8px;}}
++        QComboBox QAbstractItemView {{background:{C['panel']}; color:{C['text']};}}
++        QProgressBar {{height:9px; background:{C['panel2']};border:0;border-radius:4px;}}
++        QProgressBar::chunk {{background:{C['accent']};border-radius:4px;}}
++        QPlainTextEdit {{background:#0d1727;border:1px solid {C['line']};border-radius:8px; color:#adbed8;}}
++    '''
++
++    def card(parent_layout, *, gap=8):
++        pane = QFrame(); pane.setObjectName('card')
++        lay = QVBoxLayout(pane); lay.setContentsMargins(18,16,18,16);lay.setSpacing(gap)
++        parent_layout.addWidget(pane)
++        return lay
++
++    class ScanMap(QWidget):
++        def __init__(self):
++            super().__init__(); self.setMinimumHeight(130)
++            self.bins = ['unknown'] * 384
++            self.total = 0
++        def reset(self, size):
++            self.total = int(size or 0); self.bins = ['unknown'] * 384; self.update()
++        def ingest(self, event):
++            size = int(event.get('size') or self.total or 0)
++            if size < 1: return
++            self.total = size
++            offset = int(event.get('offset') or 0)
++            length = int(event.get('read_length') or event.get('length') or 0)
++            if length < 1: return
++            first = max(0, min(len(self.bins)-1, offset * len(self.bins)//size))
++            last = max(first, min(len(self.bins)-1, (offset+length-1)*len(self.bins)//size))
++            state = 'error' if event.get('failed') else 'slow' if (event.get('latency_ms') or 0) > max(500, (event.get('median_ms') or 0)*4) else 'good'
++            for i in range(first, last+1):
++                # Preserve error evidence; later successful reads are not proof of no damage.
++                if self.bins[i] != 'error' or state == 'error': self.bins[i] = state
++            self.update()
++        def paintEvent(self, _):
++            p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
++            colors = {'unknown':'#253951','good':'#36b794','slow':'#eeaa52','error':'#ed6472'}
++            cols=48; rows=8; gap=3
++            w=max(3,(self.width()-gap*(cols-1))/cols); h=max(5,(self.height()-gap*(rows-1))/rows)
++            p.setPen(Qt.NoPen)
++            for i, val in enumerate(self.bins):
++                x=(i%cols)*(w+gap); y=(i//cols)*(h+gap)
++                p.setBrush(QColor(colors[val])); p.drawRoundedRect(QRectF(x,y,w,h),2.5,2.5)
++            p.end()
++
++    class Workstation(QMainWindow):
++        def __init__(self):
++            super().__init__();self.setWindowTitle('DriveRepair | Recovery Workstation')
++            self.resize(1210,850); self.setMinimumSize(850,640)
++            self._pending = None; self._mode = None; self._buf = {'stdout':'','stderr':''};self._final_stdout = ''
++            self._devices=[]; self._job_args=[]; self._last_job_kind='';self._last_good_device=None
++            self._scanned=0
++            self._last_progress_at=None
++            self._heartbeat=QTimer(self);self._heartbeat.setInterval(1000)
++            self._heartbeat.timeout.connect(self.check_stall);self._heartbeat.start()
++            self.proc = None; self.inventory_proc = None
++            self.setStyleSheet(css)
++            central=QWidget();self.setCentralWidget(central)
++            root=QVBoxLayout(central);root.setContentsMargins(22,18,22,16);root.setSpacing(14)
++            header=QHBoxLayout(); root.addLayout(header)
++            brand=QVBoxLayout();label=QLabel('DriveRepair');label.setObjectName('heading');brand.addWidget(label)
++            sub=QLabel('RECOVERY WORKSTATION  •  PRIVATE BY DESIGN');sub.setObjectName('eyebrow');brand.addWidget(sub)
++            header.addLayout(brand);header.addStretch()
++            self.details_button=QPushButton('Expert details');self.details_button.setCheckable(True)
++            self.details_button.toggled.connect(self.show_details);header.addWidget(self.details_button)
++            self.legacy=QPushButton('Legacy tools');self.legacy.clicked.connect(self.open_legacy);header.addWidget(self.legacy)
++            hero = card(root)
++            self.status=QLabel('Ready to help');self.status.setObjectName('heading');hero.addWidget(self.status)
++            self.help=QLabel('Choose a drive and what you need to do. Nothing starts until you press Start.')
++            self.help.setWordWrap(True);self.help.setObjectName('muted');hero.addWidget(self.help)
++            self.progress=QProgressBar();self.progress.setRange(0,1000);self.progress.setValue(0);hero.addWidget(self.progress)
++            metrics=QHBoxLayout();hero.addLayout(metrics)
++            self.metric_labels={}
++            for key,title in [('done','PROGRESS'),('read','DATA READ'),('rate','RECENT SPEED'),('avg','JOB AVERAGE'),('errors','READ ERRORS')]:
++                area=QVBoxLayout();m=QLabel(title);m.setObjectName('eyebrow');area.addWidget(m)
++                v=QLabel('—');v.setObjectName('metric');area.addWidget(v);metrics.addLayout(area,1)
++                self.metric_labels[key]=v
++            body=QHBoxLayout();root.addLayout(body,1)
++            left=QVBoxLayout();body.addLayout(left,2)
++            l=card(left)
++            pick=QHBoxLayout();l.addLayout(pick)
++            ttl=QLabel('01  Select a drive');ttl.setStyleSheet('font-weight:700;font-size:15px');pick.addWidget(ttl)
++            pick.addStretch();btn=QPushButton('Refresh drives');btn.clicked.connect(self.refresh_devices);pick.addWidget(btn)
++            self.device_box=QComboBox();l.addWidget(self.device_box)
++            self.device_note=QLabel('The selected disk will be identified again before physical writes.')
++            self.device_note.setWordWrap(True);self.device_note.setObjectName('muted');l.addWidget(self.device_note)
++            workflow=card(left)
++            title=QLabel('02  Choose a goal');title.setStyleSheet('font-weight:700;font-size:15px');workflow.addWidget(title)
++            goals=QHBoxLayout();workflow.addLayout(goals)
++            for title,goal in [('Fix my drive','carequick'),('Recover files','rescue'),('Check drive','scanquick')]:
++                b=QPushButton(title)
++                b.clicked.connect(lambda _,g=goal:self.select_goal(g))
++                goals.addWidget(b)
++            advanced=QLabel('Or choose a specific operation:');advanced.setObjectName('muted');workflow.addWidget(advanced)
++            self.job_box=QComboBox()
++            for caption,kind in [('Check disk health (read-only)','health'),('Quick surface check (read-only)','scanquick'),
++                                 ('Full surface scan (read-only)','scanfull'),('Quick targeted repair (experimental)','carequick'),
++                                 ('Full scan + targeted repair (experimental)','carefull'),
++                                 ('Rescue image / recover files','rescue'),('Continue interrupted full scan','resume')]:
++                self.job_box.addItem(caption,kind)
++            self.job_box.currentIndexChanged.connect(self.choice_changed);workflow.addWidget(self.job_box)
++            self.dest=QLineEdit(); self.dest.setPlaceholderText('Choose an existing source image…')
++            self.browse=QPushButton('Choose image…');self.browse.clicked.connect(self.pick_image)
++            pathrow=QHBoxLayout();pathrow.addWidget(self.dest,1);pathrow.addWidget(self.browse);workflow.addLayout(pathrow)
++            self.opts=QLabel('Automatic settings  •  Read-only by default  •  No uploads')
++            self.opts.setObjectName('muted');workflow.addWidget(self.opts)
++            act=QHBoxLayout();workflow.addLayout(act)
++            self.start=QPushButton('Start selected job');self.start.setObjectName('primary');self.start.clicked.connect(self.start_job);act.addWidget(self.start,1)
++            self.stop=QPushButton('Stop');self.stop.setObjectName('danger');self.stop.setEnabled(False)
++            self.stop.clicked.connect(self.stop_job);act.addWidget(self.stop)
++            right=QVBoxLayout();body.addLayout(right,3)
++            map_card=card(right)
++            map_title=QLabel('Surface activity');map_title.setStyleSheet('font-weight:700;font-size:15px');map_card.addWidget(map_title)
++            self.map=ScanMap();map_card.addWidget(self.map)
++            legend=QLabel('<span style="color:#36b794">■</span> Readable     '
++                          '<span style="color:#eeaa52">■</span> Slow     '
++                          '<span style="color:#ed6472">■</span> Read error     '
++                          '<span style="color:#253951">■</span> Untested')
++            legend.setTextFormat(Qt.RichText);map_card.addWidget(legend)
++            self.advice=QLabel('A green block means data could be read. It does not prove file integrity or long-term drive health.')
++            self.advice.setWordWrap(True);self.advice.setObjectName('muted');map_card.addWidget(self.advice)
++            result_card=card(right)
++            self.result=QLabel('No job running');self.result.setStyleSheet('font-size:16px;font-weight:700');result_card.addWidget(self.result)
++            self.explain=QLabel('Recovery reports will show what is verified, unresolved, and untested.')
++            self.explain.setWordWrap(True);self.explain.setObjectName('muted');result_card.addWidget(self.explain)
++            self.log=QPlainTextEdit();self.log.setReadOnly(True);self.log.setMaximumBlockCount(4000)
++            self.log.setVisible(False);root.addWidget(self.log)
++            self.select_goal('scanquick')
++            QTimer.singleShot(100,self.refresh_devices)
++        def select_goal(self, goal):
++            for i in range(self.job_box.count()):
++                if self.job_box.itemData(i)==goal:
++                    self.job_box.setCurrentIndex(i);break
++            self.choice_changed()
++        def check_stall(self):
++            if (self.proc and self.proc.state()!=QProcess.NotRunning
++                    and self._last_progress_at is not None
++                    and time.monotonic()-self._last_progress_at>8):
++                self.metric_labels['rate'].setText('Waiting on drive')
++                self.help.setText('No progress event recently. The drive or OS may be retrying I/O; Stop is not instant.')
++        def show_details(self, yes): self.log.setVisible(yes)
++        def open_legacy(self):
++            QMessageBox.information(self,'Legacy toolkit','For advanced file-system, forensic, firmware-information and refresh tools, run:  python -m driverepair_desktop gui-legacy  (the existing Tk interface).')
++        def pick_image(self):
++            path,_=QFileDialog.getOpenFileName(self,'Select source disk image','','Disk images (*.img *.dd *.raw);;All files (*)')
++            if path:self.dest.setText(path)
++        def choice_changed(self):
++            kind=self.job_box.currentData();is_image=kind=='rescue'
++            self.dest.setVisible(is_image);self.browse.setVisible(is_image)
++            hints={'health':'Reads SMART attributes where available; no physical writes.',
++                   'scanquick':'Samples the disk to locate suspicious areas without writes.',
++                   'scanfull':'Reads the full address space, saving a resumable local checkpoint.',
++                   'carequick':'Investigates slow regions; may rewrite only consistently readable targets after consent.',
++                   'carefull':'Full scan and bounded repair. Writes require separate explicit approval.',
++                   'rescue':'Rescue data from an existing image to a new file, leaving the original unchanged.',
++                   'resume':'Rechecks identity before continuing the saved read-only scan position.'}
++            self.opts.setText(hints.get(kind,''))
++        def refresh_devices(self):
++            if self.inventory_proc and self.inventory_proc.state()!=QProcess.NotRunning:return
++            self.device_note.setText('Looking for external drives…')
++            self.inventory_proc=QProcess(self)
++            self.inventory_proc.setProgram(cli_prefix()[0]);self.inventory_proc.setArguments(cli_prefix()[1:]+['list','--json'])
++            self.inventory_proc.finished.connect(self.inventory_done);self.inventory_proc.start()
++        def inventory_done(self,code,_status):
++            stdout=bytes(self.inventory_proc.readAllStandardOutput()).decode('utf-8','replace')
++            stderr=bytes(self.inventory_proc.readAllStandardError()).decode('utf-8','replace')
++            if code!=0:
++                self.device_note.setText('Device discovery failed. Reconnect the USB dock and retry; never bypass identity checks.')
++                self.log.appendPlainText(stderr[:3000]);return
++            try: data=json.loads(stdout)
++            except (ValueError,TypeError):
++                self.device_note.setText('Could not interpret drive inventory');return
++            prev=self.device_box.currentData()
++            self.device_box.clear();self._devices=data
++            for d in data:
++                self.device_box.addItem(f"{d['model']}    •    {display_size(d['size_bytes'])}    •    {d['bus']}    •    {d.get('serial_suffix','')}",d)
++            if prev:
++                for i,d in enumerate(data):
++                    if d.get('id')==prev.get('id') and d.get('identity_hint')==prev.get('identity_hint'):
++                        self.device_box.setCurrentIndex(i);break
++            self.device_note.setText(f'{len(data)} external drive(s) available. Exact identity rechecked before writes.')
++        def selected(self):return self.device_box.currentData()
++        def start_job(self):
++            if self.proc and self.proc.state()!=QProcess.NotRunning:return
++            kind=self.job_box.currentData(); d=self.selected()
++            if kind=='rescue':
++                src=self.dest.text().strip()
++                if not Path(src).is_file():QMessageBox.warning(self,'Source required','Select a readable source image.');return
++                out,_=QFileDialog.getSaveFileName(self,'New recovery image (must not exist)','recovered.img','Disk image (*.img);;All files (*)')
++                if not out:return
++                if os.path.exists(out):QMessageBox.warning(self,'Destination exists','Choose a new file; no existing image will be overwritten.');return
++                args=['rescue-image','--image',src,'--output',out,'--multi-pass','--progress-jsonl','--no-live-dashboard','--json']
++            else:
++                if not d:QMessageBox.warning(self,'Choose a drive','Connect a drive and select it first.');return
++                dev=d['id']
++                if kind=='health':args=['health','--device',dev,'--json']
++                elif kind in {'scanquick','scanfull','resume'}:
++                    args=['scan','--device',dev,'--mode','full' if kind in ('scanfull','resume') else 'triage',
++                          '--progress-jsonl','--json']
++                    if kind in ('scanfull','resume'):args+=['--ack-risk']
++                    if kind=='resume':args+=['--resume-scan']
++                else:
++                    answer=QMessageBox.question(self,'Experimental physical writes',
++                        'DriveRepair can permanently damage data on a failing drive.\n\n'
++                        'Only consistently readable regions are eligible. A RAM-only write has no crash recovery.\n\n'
++                        'Would you like to review an explicit device confirmation?',
++                        QMessageBox.Yes | QMessageBox.No)
++                    if answer!=QMessageBox.Yes:return
++                    from PySide6.QtWidgets import QInputDialog
++                    typed,ok=QInputDialog.getText(self,'Confirm target disk',
++                        f"Type this disk fingerprint to allow in-place writes:  {d['identity_hint']}")
++                    if not ok or typed.strip()!=d['identity_hint']:
++                        QMessageBox.warning(self,'Not authorized','Fingerprint did not match. No job started.');return
++                    confirm=QMessageBox.warning(self,'Volatile memory risk',
++                        'Continue with NO backup and RAM-only journal? Power loss, USB resets or a crash can permanently destroy the active region. '
++                        'This is a controlled experimental mode, not a guaranteed repair.',
++                        QMessageBox.Yes | QMessageBox.No)
++                    if confirm!=QMessageBox.Yes:return
++                    save_scan_map = False
++                    if kind == 'carefull':
++                        save_scan_map = QMessageBox.question(
++                            self,'Resume after USB disconnect',
++                            'Save a small, private read-only scan checkpoint locally? '
++                            'It contains byte positions and error locations, never sector contents. '
++                            'This is separate from the RAM-only write journal and lets a scan continue after reconnect.',
++                            QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes
++                    args=['care-external','--device',dev,'--mode','full' if kind=='carefull' else 'quick',
++                          '--journal-backend','memory','--ack-volatile-journal','--confirm-identity',d['identity_hint'],
++                          '--ack-risk','--ack-destructive','--ack-no-backup','--ack-data-loss-risk',
++                          '--ack-usb-bridge-risk','--ack-unvalidated-hardware','--ack-unknown-health',
++                          '--progress-jsonl','--json']
++                    if save_scan_map: args+=['--scan-checkpoint','auto']
++            self._last_good_device=d
++            self._last_job_kind=kind;self._job_args=args
++            self.run_command(args)
++        def run_command(self,args):
++            self.progress.setValue(0);self.map.reset(int((self.selected() or {}).get('size_bytes') or 0))
++            self.result.setText('Running — monitoring the device');self.explain.setText('Unknown regions remain unknown until observed.')
++            self.status.setText('Working…');self.help.setText('Read-only where possible; no results are inferred from the progress bar.')
++            self._buf={'stdout':'','stderr':''};self._final_stdout='';self._scanned=0
++            self._last_progress_at=time.monotonic()
++            self.proc=QProcess(self);self.proc.setProgram(cli_prefix()[0]);self.proc.setArguments(cli_prefix()[1:]+args)
++            self.proc.readyReadStandardError.connect(lambda:self.consume('stderr'))
++            self.proc.readyReadStandardOutput.connect(lambda:self.consume('stdout'))
++            self.proc.finished.connect(self.job_done)
++            self.start.setEnabled(False);self.stop.setEnabled(True);self.proc.start()
++        def consume(self,channel):
++            if not self.proc:return
++            data=bytes(self.proc.readAllStandardError() if channel=='stderr' else self.proc.readAllStandardOutput()).decode('utf-8','replace')
++            if channel == 'stdout':
++                self._final_stdout += data
++                return
++            self._buf[channel]+=data
++            while '\n' in self._buf[channel]:
++                line,self._buf[channel]=self._buf[channel].split('\n',1)
++                try:obj=json.loads(line)
++                except (ValueError,TypeError):
++                    if line:self.log.appendPlainText(line[:1200]);continue
++                if isinstance(obj,dict) and obj.get('type')=='progress':self.progress_event(obj)
++                else:self._pending=obj
++        def progress_event(self,event):
++            self._last_progress_at=time.monotonic()
++            self.status.setText(str(event.get('phase') or 'WORKING').replace('_',' ').title())
++            size=int(event.get('size') or self.map.total or 0)
++            cursor=int(event.get('scan_position_bytes') or event.get('offset') or 0)
++            idx=event.get('probe_index');total=event.get('probe_total')
++            if idx is not None and total and str(event.get('scan_mode','')) in ('triage','sample'):
++                pct=max(0,min(100,float(idx)/float(total)))
++            else:
++                pct=100.0*cursor/size if size else 0.0
++            self.progress.setValue(max(0,min(1000,round(10*pct))))
++            self.metric_labels['done'].setText(f'{pct:.1f}%')
++            if event.get('attempted_bytes') is not None:
++                self.metric_labels['read'].setText(display_size(event['attempted_bytes']))
++            elif event.get('rewritten_bytes') is not None:
++                self.metric_labels['read'].setText(display_size(event['rewritten_bytes']))
++            if event.get('read_error_chunks') is not None:self.metric_labels['errors'].setText(str(event['read_error_chunks']))
++            if event.get('speed_bps') is not None:self.metric_labels['rate'].setText(display_size(event['speed_bps'])+'/s')
++            if event.get('average_speed_bps') is not None:self.metric_labels['avg'].setText(display_size(event['average_speed_bps'])+'/s')
++            self.help.setText(str(event.get('message') or 'Checking device…'))
++            self.map.ingest(event)
++        def job_done(self,exit_code,_status):
++            self.consume('stdout');self.consume('stderr')
++            self.start.setEnabled(True);self.stop.setEnabled(False)
++            self.proc=None
++            try:
++                result=json.loads(self._final_stdout)
++            except (ValueError,TypeError):
++                result=self._pending if isinstance(self._pending,dict) else {}
++                if self._final_stdout.strip():self.log.appendPlainText(self._final_stdout[-3000:])
++            if not isinstance(result,dict):result={}
++            text=str(result.get('status') or ('Completed' if exit_code==0 else 'Stopped / failed'))
++            self.status.setText(text.replace('_',' ').title())
++            if exit_code==0:
++                self.result.setText('Job finished — review results')
++                self.explain.setText('A completed read or readback match is not proof of file integrity or restored lifespan.')
++            elif 'device' in text or 'identity' in text or 'access' in text or 'discon' in text or result.get('scan',{}).get('status')=='aborted_device_or_access_error':
++                self.result.setText('Drive connection interrupted')
++                self.explain.setText('Reconnect the same drive, refresh the list, and select “Continue interrupted full scan”. Reverification is mandatory; no write restarts automatically.')
++            else:
++                self.result.setText(f'Stopped / attention needed  ({exit_code})')
++                self.explain.setText('Open Expert details for the specific error. No health claim is made.')
++            if result.get('scan_checkpoint'):
++                self.log.appendPlainText('Scan checkpoint: '+str(result['scan_checkpoint']))
++            if 'read_error_chunks' in result:self.metric_labels['errors'].setText(str(result['read_error_chunks']))
++        def closeEvent(self, event):
++            if self.proc and self.proc.state()!=QProcess.NotRunning:
++                if self._last_job_kind in ('carefull','carequick'):
++                    QMessageBox.warning(self,'Write in progress',
++                        'Please keep DriveRepair open during the in-place transaction. '
++                        'The engine does not yet support verified cooperative write cancellation.')
++                    event.ignore()
++                    return
++                answer=QMessageBox.question(self,'Scan in progress',
++                    'Stop the read-only job and close the workstation?',
++                    QMessageBox.Yes | QMessageBox.No)
++                if answer!=QMessageBox.Yes:
++                    event.ignore();return
++                self.proc.terminate()
++                if not self.proc.waitForFinished(2500):
++                    self.proc.kill();self.proc.waitForFinished(1000)
++            event.accept()
++
++        def stop_job(self):
++            if not self.proc or self.proc.state()==QProcess.NotRunning:return
++            if self._last_job_kind in ('carefull','carequick'):
++                QMessageBox.warning(self,'Do not interrupt a write',
++                    'Stopping a physical write mid-transaction can destroy data. The engine has no verified cooperative stop protocol yet. '
++                    'This interface will not forcibly terminate the active write. Disconnect only if necessary to protect hardware.')
++                return
++            self.proc.terminate()
++            self.result.setText('Stopping — waiting for process exit')
++    app=QApplication.instance() or QApplication(sys.argv)
++    win=Workstation();win.show()
++    if os.environ.get('DRIVEREPAIR_QT_SMOKE') == '1':
++        QTimer.singleShot(850, app.quit)
++    return app.exec()
++
++
++if __name__ == '__main__':
++    sys.exit(launch())
+diff --git a/desktop/driverepair_desktop/rates.py b/desktop/driverepair_desktop/rates.py
+new file mode 100644
+index 0000000..1aa1048
+--- /dev/null
++++ b/desktop/driverepair_desktop/rates.py
+@@ -0,0 +1,23 @@
++"""Actual recent-window throughput; not total bytes divided by total runtime."""
++from __future__ import annotations
++from collections import deque
++import time
++
++class RateWindow:
++    def __init__(self, seconds: float = 5.0):
++        self.seconds = seconds
++        self.points = deque()
++
++    def update(self, byte_count: int, now: float | None = None) -> float | None:
++        now = time.monotonic() if now is None else now
++        if self.points and (now < self.points[-1][0] or byte_count < self.points[-1][1]):
++            self.points.clear()
++        self.points.append((now, byte_count))
++        while len(self.points) > 2 and now - self.points[1][0] >= self.seconds:
++            self.points.popleft()
++        if len(self.points) < 2:
++            return None
++        elapsed = now - self.points[0][0]
++        if elapsed <= 0:
++            return None
++        return max(0.0, (byte_count - self.points[0][1]) / elapsed)
+diff --git a/desktop/driverepair_desktop/scan_checkpoint.py b/desktop/driverepair_desktop/scan_checkpoint.py
+new file mode 100644
+index 0000000..35408c9
+--- /dev/null
++++ b/desktop/driverepair_desktop/scan_checkpoint.py
+@@ -0,0 +1,90 @@
++"""Private, non-authoritative checkpoints for restarting READ-ONLY full scans.
++
++A checkpoint records positions and observations, not recovered sector data.
++It can never authorize a physical-device write. The caller MUST freshly
++verify the selected device before loading/resuming an interrupted scan.
++"""
++from __future__ import annotations
++
++import hashlib
++import json
++import os
++from pathlib import Path
++import stat
++import time
++
++SCHEMA = 1
++
++
++def default_path(source_token: str) -> Path:
++    digest = hashlib.sha256(source_token.encode('utf-8')).hexdigest()[:32]
++    return Path.home() / '.driverepair' / 'scan-checkpoints' / f'{digest}.json'
++
++
++def load(path: str | Path, *, source_token: str, size: int, sector: int) -> dict:
++    path = Path(path)
++    if path.is_symlink() or not path.is_file():
++        raise ValueError('Missing or non-regular scan checkpoint')
++    if path.stat().st_size > 1024 * 1024:
++        raise ValueError('Scan checkpoint exceeds safety size limit')
++    with path.open('r', encoding='utf-8') as handle:
++        data = json.load(handle)
++    if (type(data) is not dict or data.get('schema') != SCHEMA or
++            data.get('source_token') != source_token or
++            data.get('size') != size or data.get('sector') != sector):
++        raise ValueError('Checkpoint does not match the freshly identified source')
++    state = data.get('state')
++    if type(state) is not dict:
++        raise ValueError('Invalid checkpoint state')
++    offset = state.get('position')
++    if (type(offset) is not int or offset < 0 or offset > size or offset % sector):
++        raise ValueError('Invalid or unaligned checkpoint position')
++    for name in ('checked', 'readable', 'read_count', 'failures'):
++        if type(state.get(name)) is not int or state[name] < 0:
++            raise ValueError(f'Invalid checkpoint counter: {name}')
++    for name in ('deferred', 'slow', 'skipped'):
++        ranges = state.get(name, [])
++        if type(ranges) is not list or len(ranges) > 1024:
++            raise ValueError(f'Invalid checkpoint ranges: {name}')
++        for item in ranges:
++            if type(item) is not dict or type(item.get('offset')) is not int or \
++                    type(item.get('length')) is not int or \
++                    item['offset'] < 0 or item['length'] <= 0 or \
++                    item['offset'] + item['length'] > size:
++                raise ValueError(f'Invalid checkpoint range in {name}')
++    return state
++
++
++class ScanCheckpoint:
++    def __init__(self, path: str | Path, *, source_token: str, size: int, sector: int,
++                 minimum_interval: float = 2.0) -> None:
++        self.path = Path(path)
++        self.source_token, self.size, self.sector = source_token, size, sector
++        self.minimum_interval = minimum_interval
++        self._last = 0.0
++
++    def save(self, state: dict, *, force: bool = False) -> None:
++        now = time.monotonic()
++        if not force and now - self._last < self.minimum_interval:
++            return
++        self._last = now
++        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
++        if self.path.is_symlink() or (self.path.exists() and not stat.S_ISREG(self.path.stat().st_mode)):
++            raise ValueError('Unsafe checkpoint destination')
++        doc = {'schema': SCHEMA, 'source_token': self.source_token,
++               'size': self.size, 'sector': self.sector, 'state': state}
++        # Keep bounded records. A checkpoint must not become another disk image.
++        payload = json.dumps(doc, separators=(',', ':')).encode('utf-8')
++        if len(payload) > 1024 * 1024:
++            raise ValueError('Scan checkpoint limit exceeded')
++        tmp = self.path.with_suffix(self.path.suffix + '.pending')
++        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0), 0o600)
++        try:
++            with os.fdopen(fd, 'wb') as handle:
++                handle.write(payload)
++                handle.flush()
++                os.fsync(handle.fileno())
++            os.replace(tmp, self.path)
++        finally:
++            if tmp.exists():
++                tmp.unlink()
+diff --git a/desktop/driverepair_desktop/scanner.py b/desktop/driverepair_desktop/scanner.py
+index 0c8c43f..089ac87 100644
+--- a/desktop/driverepair_desktop/scanner.py
++++ b/desktop/driverepair_desktop/scanner.py
+@@ -174,7 +174,8 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
+                 adaptive_min_chunk: int | None = None,
+                 adaptive_max_chunk: int | None = None,
+                 sample_seed: int | None = None,
+-                progress: Callable[..., None] | None = None) -> dict:
++                progress: Callable[..., None] | None = None,
++                resume_state: dict | None = None, checkpoint=None) -> dict:
+     if (not 0 < sector <= 1024 * 1024 or size <= 0 or size % sector or
+             chunk < sector or chunk % sector or not 1 <= max_errors <= 10000 or
+             not 1 <= samples <= 100000):
+@@ -183,7 +184,10 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
+         from .adaptive_scan import adaptive_full_scan
+         return adaptive_full_scan(reader, size=size, sector=sector, chunk=chunk,
+                                   max_errors=max_errors, progress=progress,
+-                                  min_chunk=adaptive_min_chunk, max_chunk=adaptive_max_chunk)
++                                  min_chunk=adaptive_min_chunk, max_chunk=adaptive_max_chunk,
++                                  resume_state=resume_state, checkpoint=checkpoint)
++    if resume_state is not None:
++        raise ValueError('Resume checkpoint supported only for adaptive full scans')
+     blocks = (size + chunk - 1) // chunk
+     baseline = list(scan_offsets(size, chunk, mode, samples, sample_seed)) if mode != 'full' else None
+     if mode == 'triage' and history_hints:
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index 0f234a4..ad34af7 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b8"
++version = "0.3.3b9"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+@@ -20,9 +20,14 @@ classifiers = [
+   "Topic :: System :: Hardware",
+ ]
+ 
++[project.optional-dependencies]
++qt = ["PySide6>=6.6,<7"]
++
+ [project.scripts]
+ driverepair-desktop = "driverepair_desktop.cli:main"
+ driverepair-gui = "driverepair_desktop.gui:launch"
++driverepair-qt-gui = "driverepair_desktop.qtgui:launch"
++driverepair-gui-legacy = "driverepair_desktop.gui:launch"
+ 
+ [build-system]
+ requires = ["setuptools>=61"]
+diff --git a/desktop/tests/test_scan_resume_qt.py b/desktop/tests/test_scan_resume_qt.py
+new file mode 100644
+index 0000000..f25e414
+--- /dev/null
++++ b/desktop/tests/test_scan_resume_qt.py
+@@ -0,0 +1,94 @@
++"""Read-only USB disconnect/resume and honest live-rate regression cases."""
++import errno
++import os
++from pathlib import Path
++import tempfile
++import unittest
++
++from driverepair_desktop.adaptive_scan import adaptive_full_scan, classify_error
++from driverepair_desktop.scan_checkpoint import ScanCheckpoint, load
++from driverepair_desktop.rates import RateWindow
++from driverepair_desktop.qtgui import cli_prefix, display_size
++from driverepair_desktop.devices import Device
++
++
++class SyntheticReader:
++    def __init__(self, data, failure=None):
++        self.data = data
++        self.failure = failure
++        self.reads = []
++        self.writes = 0
++    def read_at(self, offset, count):
++        self.reads.append((offset, count))
++        if offset == self.failure:
++            ex = OSError(errno.EIO, 'USB device was unplugged')
++            ex.winerror = 433
++            raise ex
++        return self.data[offset:offset+count]
++
++
++class ResumeTests(unittest.TestCase):
++    def test_cross_port_scan_identity_does_not_grant_write_identity(self):
++        a=Device('windows:PhysicalDrive2','\\\\.\\PhysicalDrive2','Example HDD',
++                 1000000000000,512,'usb','SERIALABC001')
++        b=Device('windows:PhysicalDrive5','\\\\.\\PhysicalDrive5','Example HDD',
++                 1000000000000,512,'usb','SERIALABC001')
++        c=Device('windows:PhysicalDrive5','\\\\.\\PhysicalDrive5','Example HDD',
++                 1000000000000,512,'usb','SERIALABC002')
++        self.assertEqual(a.scan_resume_identity,b.scan_resume_identity)
++        self.assertNotEqual(a.fingerprint,b.fingerprint)
++        self.assertNotEqual(a.scan_resume_identity,c.scan_resume_identity)
++        self.assertIsNone(Device(a.id,a.path,a.model,a.size_bytes,a.sector_size,a.bus,'').scan_resume_identity)
++
++    def test_unplug_is_not_interpreted_as_bad_platter(self):
++        ex = OSError(errno.EIO, 'device missing')
++        ex.winerror = 433
++        self.assertEqual(classify_error(ex), 'device_or_access_unavailable')
++
++    def test_checkpoint_resume_does_not_repeat_earlier_blocks_or_write(self):
++        data = b'X'*65536
++        with tempfile.TemporaryDirectory() as folder:
++            path = Path(folder) / 'checkpoint.json'
++            cp = ScanCheckpoint(path, source_token='digest', size=len(data), sector=512, minimum_interval=0)
++            a = SyntheticReader(data, failure=8192)
++            original = adaptive_full_scan(a, size=len(data), sector=512,
++                      chunk=4096, min_chunk=4096, max_chunk=4096,
++                      checkpoint=cp.save, max_errors=16, max_followup_reads=8)
++            self.assertEqual(original['status'], 'aborted_device_or_access_error')
++            self.assertEqual(original['resume_position_bytes'], 8192)
++            state = load(path, source_token='digest', size=len(data), sector=512)
++            b = SyntheticReader(data)
++            resumed = adaptive_full_scan(b, size=len(data), sector=512,
++                      chunk=4096, min_chunk=4096, max_chunk=4096,
++                      resume_state=state, checkpoint=cp.save,
++                      max_errors=16, max_followup_reads=8)
++            self.assertEqual(b.reads[0][0], 8192)
++            self.assertEqual(resumed['resumed_from_bytes'], 8192)
++            self.assertEqual(resumed['resume_position_bytes'], len(data))
++            self.assertEqual(resumed['readable_bytes'], len(data))
++            self.assertEqual(a.writes+b.writes, 0)
++            self.assertTrue(path.exists())
++            with self.assertRaisesRegex(ValueError, 'does not match'):
++                load(path, source_token='different-device', size=len(data), sector=512)
++
++    def test_invalid_checkpoint_rejected(self):
++        with tempfile.TemporaryDirectory() as folder:
++            cp=ScanCheckpoint(Path(folder)/'state.json',source_token='a',size=4096,sector=512)
++            cp.save({'position':4097,'checked':0,'readable':0,'read_count':0,
++                     'failures':0,'deferred':[], 'slow':[], 'skipped':[]},force=True)
++            with self.assertRaisesRegex(ValueError, 'unaligned'):
++                load(cp.path,source_token='a',size=4096,sector=512)
++
++    def test_rate_window_is_not_whole_job_average(self):
++        meter=RateWindow(seconds=3)
++        self.assertIsNone(meter.update(0, now=0))
++        self.assertAlmostEqual(meter.update(100, now=1), 100)
++        self.assertAlmostEqual(meter.update(150, now=2), 75)
++        self.assertAlmostEqual(meter.update(650, now=4), 550/3)
++        self.assertAlmostEqual(meter.update(650, now=5), 500/3)
++
++    def test_qt_helpers_are_dependency_free(self):
++        self.assertIn('MiB',display_size(1048576))
++        self.assertTrue(cli_prefix())
++
++if __name__=='__main__': unittest.main()
+diff --git a/docs/QT_WORKSTATION_AND_SCAN_RESUME.md b/docs/QT_WORKSTATION_AND_SCAN_RESUME.md
+new file mode 100644
+index 0000000..1a44e01
+--- /dev/null
++++ b/docs/QT_WORKSTATION_AND_SCAN_RESUME.md
+@@ -0,0 +1,58 @@
++# DriveRepair Qt workstation and interrupted-scan recovery (0.3.3b9)
++
++## What changed
++
++The optional PySide6 workstation is a simpler interface to the **existing** recovery CLI, not a second disk engine. From the launcher select **Fix my drive**, **Recover files**, or **Check drive**; then explicitly press **Start selected job**. Drives are identified by model, capacity, bus, masked serial and a short fingerprint. I/O runs in a child process, and the interface can remain responsive even when Windows device enumeration hangs. The recovery map is a coarse read-activity summary, **not** physical platter topology and not a certificate of bit correctness.
++
++To install:
++
++```powershell
++cd desktop
++python -m pip install -e ".[qt]"
++python -m driverepair_desktop qt-gui
++```
++
++For portable `.pyz`, install PySide6 into the same Python interpreter first, then run `python DriveRepair-0.3.3b9.pyz gui`. Without PySide6, `gui` prints a warning and launches the existing Tk interface. All existing specialist functionality remains available with `gui-legacy`.
++
++Qt/PySide6 is subject to LGPLv3/GPL/commercial licensing. Review distribution and library-replacement obligations before shipping a bundled installer. No new network APIs or cloud services are used.
++
++### Recovery speed metrics
++
++**Recent speed** is a rolling five-second throughput sample based on successive committed/read byte counters. **Job average** is total progress divided by elapsed time. Neither speed represents an instant guarantee of future throughput; retries and disconnects can reduce both. When two samples are unavailable, recent speed is unknown instead of mislabeled as an average. The legacy Tk UI has also stopped calling the whole-job average “current speed.”
++
++### USB removal and scan resumption
++
++For an **adaptive full read-only scan**, DriveRepair saves a small local checkpoint to `~/.driverepair/scan-checkpoints/` by default. It contains a hashed media identity (model, reported serial, size, sector size, bus), current byte position, read-error offsets, and limited slow/unknown range metadata. It contains **no source sector bytes**. Files are local and are never uploaded or automatically deleted. You can override its destination with `--scan-checkpoint PATH`.
++
++```powershell
++# Scan. A disconnection will halt the job and preserve a checkpoint.
++python -m driverepair_desktop scan --device windows:PhysicalDrive2 --mode full --ack-risk --json
++
++# AFTER the same USB disk is physically reconnected and discoverable again:
++python -m driverepair_desktop scan --device windows:PhysicalDrive2 --mode full --ack-risk --resume-scan --json
++```
++
++The application **never automatically resumes a physical write** after disconnection. It must re-enumerate and verify the current disk identity; if Windows `Get-Disk` freezes or returns a changed identity, it fails closed. A changed `PhysicalDrive` number alone need not invalidate the **read-only** scan checkpoint, but a missing/ambiguous reported media serial, changed USB bridge identity or duplicate bridge serial can prevent trustworthy resumption. These stable checkpoint keys never authorize writes; physical writes still use stricter path-specific checks. Previously failed ranges remain unresolved until re-examined; a checkpoint alone does not prove they were read. Already visited read-only areas need not be scanned from byte zero. USB recovery is manually triggered, not automatic hot-plug resumption; automatic detection and validation are still unqualified on Windows hardware.
++
++For a **guided Full Repair** with `--journal-backend memory`, **no scan checkpoint is saved by default**. This preserves the promise of no saved files in RAM-only mode. If you explicitly accept a small offsets-only metadata file (not a sector journal), add `--scan-checkpoint auto` and later `--resume-scan` with the same saved metadata. This still cannot resume a lost *RAM write transaction*. The Qt interface asks before enabling that optional checkpoint. A disk-backed recovery journal is preferable if valuable data is involved.
++
++The scanning and checkpoint paths are **read-only against the source**. The user must separately authorize every in-place repair workflow. The program cannot guarantee that a drive with a broken controller/USB bridge will reopen or survive another scan.
++
++## Engineering decisions on advanced proposals
++
++**Firmware layer:** SCSI generic and NVMe admin passthrough are mediated by OS and controller drivers; they do not magically bypass a failed controller. Vendor service-area commands, translator edits, SMR mapping repairs, forced bootloader modes and raw NAND reads are **model- and firmware-specific**, can permanently brick media, and are not verified here. This release adds no arbitrary vendor-command console, unlock sequence, or firmware write. Existing read-only firmware inventory remains. Only documented, authenticated vendor tools and a bench-qualified device matrix should ever be used for firmware service.
++
++**AI-assisted recovery:** learned fragment classifiers can help prioritize *candidates* on forensic copies. Classification confidence is not the original bytes or a verified file reconstruction. Untrained CNN/Transformer samples, a generative GAN patch, and arbitrary gap-stitching must not be marketed as reliable recovery. This release does not add unvalidated model weights, secretly fill unreadable sectors with synthetic data, or alter original evidence. A future optional lab mode could propose files on a separate copy, track exact provenance, validate against known file structure, and clearly label synthesized bytes as synthetic.
++
++**IPC:** Continue using the existing progress JSONL between the CLI and Qt. Raw disk contents remain inside the recovery engine; no shared-memory daemon, extra controller, or device-specific service is necessary to paint the GUI. Progress is throttled, so the UI does not run at the disk's I/O event rate.
++
++**Stop controls:** Read-only jobs can terminate. In-place writes cannot be guaranteed safe if forcibly stopped in the middle of a write; the Qt UI refuses to call such a termination a safe stop. Cooperative transaction-boundary cancellation must be implemented and hardware-qualified before replacing that behavior.
++
++## Release validation and remaining gaps
++
++- Synthetic read-only fault-injection: Windows `winerror=433` is classified as device loss, no writes are issued, a checkpoint is stored, and a fresh same-identity reader resumes at the last safe offset.
++- Test checkpoint identity/geometry mismatch, invalid offsets, and rolling recent throughput.
++- Existing Python tests remain part of CI. Rust compilation and boot image qualification still require their native toolchains.
++- **Qt runtime integration needs a Windows/macOS/Linux PySide6 install.** This build environment does not include PySide6, so the Qt UI is source/compile checked here, *not* represented as a completed GUI clickthrough.
++- **Windows USB unplug/replug and disk identity rechecks need physical hardware testing.** A simulated disconnect does not prove that a real USB bridge, OS cache, or disk firmware recovers reliably.
++- Physical recovery and firmware modifications remain experimental or disabled. No competitive superiority or recovery-success guarantees are asserted.
+diff --git a/scripts/build_desktop.py b/scripts/build_desktop.py
+index 1b712ac..a6ed2b0 100644
+--- a/scripts/build_desktop.py
++++ b/scripts/build_desktop.py
+@@ -14,7 +14,7 @@ from pathlib import Path
+ 
+ REPO = Path(__file__).resolve().parent.parent
+ DESKTOP = REPO / 'desktop'
+-VERSION = '0.3.3b8'
++VERSION = '0.3.3b9'
+ 
+ 
+ def command(args: list[str], cwd: Path = DESKTOP) -> None:

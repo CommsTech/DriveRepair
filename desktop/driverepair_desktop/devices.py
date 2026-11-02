@@ -37,6 +37,20 @@ class Device:
                 str(self.sector_size), self.bus, self.serial)
         return hashlib.sha256("\0".join(data).encode("utf-8")).hexdigest()
 
+    @property
+    def scan_resume_identity(self) -> str | None:
+        """Stable READ-ONLY scan identity across USB port / PhysicalDrive renumbering.
+
+        Not a physical-write authority. A USB bridge might hide or reuse serials;
+        only use for scan metadata and require a meaningful serial on resume.
+        """
+        serial = self.serial.strip()
+        if len(serial) < 4 or serial.lower() in {'unknown', 'none', 'null', 'n/a', 'unavailable'}:
+            return None
+        parts = (self.model.strip().casefold(), serial.casefold(),
+                 str(self.size_bytes), str(self.sector_size), self.bus.strip().casefold())
+        return hashlib.sha256("\0".join(parts).encode('utf-8')).hexdigest()
+
     def public(self) -> dict:
         """Do not include full hardware serial numbers in routine output."""
         return {
