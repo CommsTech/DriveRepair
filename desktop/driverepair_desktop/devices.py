@@ -64,14 +64,61 @@ class Device:
         }
 
 
-def _run(command: list[str], timeout: float = 25) -> bytes:
+def _kill_process_tree(pid: int) -> None:
+    """Best-effort Windows process-tree kill so timed-out Get-Disk cannot wedge Storage."""
+    if pid <= 0:
+        return
+    if sys.platform == 'win32':
+        try:
+            subprocess.run(
+                ['taskkill', '/F', '/T', '/PID', str(pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+        return
     try:
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                check=True, timeout=timeout)
-        return result.stdout
-    except (FileNotFoundError, subprocess.CalledProcessError,
-            subprocess.TimeoutExpired) as exc:
+        import os
+        import signal
+        os.kill(pid, signal.SIGKILL)
+    except (OSError, ImportError):
+        pass
+
+
+def _run(command: list[str], timeout: float = 25) -> bytes:
+    proc: subprocess.Popen[bytes] | None = None
+    try:
+        proc = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            _kill_process_tree(proc.pid)
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            try:
+                proc.communicate(timeout=3)
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+            raise RuntimeError(
+                f"Device discovery failed ({command[0]}): Command {command!r} "
+                f"timed out after {timeout} seconds"
+            ) from exc
+        if proc.returncode:
+            detail = (stderr or b'').decode('utf-8', 'replace').strip()
+            raise RuntimeError(
+                f"Device discovery failed ({command[0]}): exit {proc.returncode}"
+                + (f": {detail}" if detail else "")
+            )
+        return stdout
+    except FileNotFoundError as exc:
         raise RuntimeError(f"Device discovery failed ({command[0]}): {exc}") from exc
+    finally:
+        if proc is not None and proc.poll() is None:
+            _kill_process_tree(proc.pid)
 
 
 def _bool(value: object) -> bool:
@@ -269,12 +316,15 @@ def _windows_devices_from_wmic(run: Callable[..., bytes]) -> list[Device]:
 
 
 def windows_devices(run: Callable[..., bytes] = _run) -> list[Device]:
-    # Prefer authoritative Get-Disk: it identifies boot/system disks.
-    # Legacy enumeration remains informational and MUST NOT authorize patient writes.
+    # Inventory prefers CIM/WMIC first. Get-Disk frequently hangs after USB dock
+    # reseat on Windows and can stall the Storage stack so later finders also
+    # time out — leaving the GUI with zero drives even though Win32_DiskDrive
+    # still sees the USB patients. CIM/WMIC results are USB-only and remain
+    # informational; select_external_device still requires Get-Disk for writes.
     errors: list[str] = []
     last_empty: list[Device] | None = None
-    for finder in (_windows_devices_from_get_disk, _windows_devices_from_cim,
-                   _windows_devices_from_wmic):
+    for finder in (_windows_devices_from_cim, _windows_devices_from_wmic,
+                   _windows_devices_from_get_disk):
         try:
             found = finder(run)
             if found:

@@ -13,6 +13,7 @@ PRIVATE TEST — **0.3.3b12** bounded I/O + cooperative stop + Qt upgrade.
 ## Lab evidence
 
 - Unit: `test_b12_reliability` 5/5 passed
+- Windows inventory: prefer CIM/WMIC before Get-Disk (Get-Disk hangs after USB dock reseat and was hiding all 3 USB patients in the Qt list)
 - Sacrificial Seagate ST1000LM048 write+verify still required before public release
 
 ## Seagate / USB patients
