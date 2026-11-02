@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .rescue_display import RescueDisplayState, format_duration
 from .console_ui import fmt_bytes
-from .preferences import load_preferences, save_preferences, DEFAULTS
+from .preferences import load_preferences, save_preferences
 from .media_profiles import identify_profile
 
 

@@ -97,7 +97,7 @@ def launch():
         from PySide6.QtGui import QColor, QFont, QPainter
         from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
             QLabel, QPushButton, QFrame, QProgressBar, QComboBox, QLineEdit, QFileDialog,
-            QPlainTextEdit, QMessageBox, QCheckBox, QScrollArea, QToolButton)
+            QPlainTextEdit, QMessageBox, QCheckBox, QToolButton)
     except ImportError as exc:
         raise RuntimeError('Qt workstation requires the optional PySide6 package: python -m pip install PySide6') from exc
 
@@ -137,8 +137,11 @@ def launch():
     '''
 
     def card(parent_layout, *, gap=8):
-        pane = QFrame(); pane.setObjectName('card')
-        lay = QVBoxLayout(pane); lay.setContentsMargins(18,16,18,16);lay.setSpacing(gap)
+        pane = QFrame()
+        pane.setObjectName('card')
+        lay = QVBoxLayout(pane)
+        lay.setContentsMargins(18,16,18,16)
+        lay.setSpacing(gap)
         parent_layout.addWidget(pane)
         return lay
 
@@ -230,76 +233,132 @@ def launch():
 
     class Workstation(QMainWindow):
         def __init__(self):
-            super().__init__();self.setWindowTitle('DriveRepair | Recovery Workstation')
-            self.resize(1210,850); self.setMinimumSize(850,640)
-            self._pending = None; self._mode = None; self._buf = {'stdout':'','stderr':''};self._final_stdout = ''
-            self._devices=[]; self._job_args=[]; self._last_job_kind='';self._last_good_device=None
+            super().__init__()
+            self.setWindowTitle('DriveRepair | Recovery Workstation')
+            self.resize(1210,850)
+            self.setMinimumSize(850,640)
+            self._pending = None
+            self._mode = None
+            self._buf = {'stdout':'','stderr':''}
+            self._final_stdout = ''
+            self._devices=[]
+            self._job_args=[]
+            self._last_job_kind=''
+            self._last_good_device=None
             self._scanned=0
             self._pending_resume=None
             self._resume_poll_count=0
             self._last_progress_at=None
             self._last_phase=None
-            self._heartbeat=QTimer(self);self._heartbeat.setInterval(1000)
-            self._heartbeat.timeout.connect(self.check_stall);self._heartbeat.start()
-            self._reconnect_timer=QTimer(self);self._reconnect_timer.setInterval(12000)
+            self._heartbeat=QTimer(self)
+            self._heartbeat.setInterval(1000)
+            self._heartbeat.timeout.connect(self.check_stall)
+            self._heartbeat.start()
+            self._reconnect_timer=QTimer(self)
+            self._reconnect_timer.setInterval(12000)
             self._reconnect_timer.timeout.connect(self.refresh_devices)
-            self.proc = None; self.inventory_proc = None
+            self.proc = None
+            self.inventory_proc = None
             self.setStyleSheet(css)
-            central=QWidget();self.setCentralWidget(central)
-            root=QVBoxLayout(central);root.setContentsMargins(22,18,22,16);root.setSpacing(14)
-            header=QHBoxLayout(); root.addLayout(header)
-            brand=QVBoxLayout();label=QLabel('DriveRepair');label.setObjectName('heading');brand.addWidget(label)
-            sub=QLabel('RECOVERY WORKSTATION  •  PRIVATE BY DESIGN');sub.setObjectName('eyebrow');brand.addWidget(sub)
-            header.addLayout(brand);header.addStretch()
-            self.details_button=QPushButton('Expert details');self.details_button.setCheckable(True)
-            self.details_button.toggled.connect(self.show_details);header.addWidget(self.details_button)
-            self.legacy=QPushButton('Legacy tools');self.legacy.clicked.connect(self.open_legacy);header.addWidget(self.legacy)
+            central=QWidget()
+            self.setCentralWidget(central)
+            root=QVBoxLayout(central)
+            root.setContentsMargins(22,18,22,16)
+            root.setSpacing(14)
+            header=QHBoxLayout()
+            root.addLayout(header)
+            brand=QVBoxLayout()
+            label=QLabel('DriveRepair')
+            label.setObjectName('heading')
+            brand.addWidget(label)
+            sub=QLabel('RECOVERY WORKSTATION  •  PRIVATE BY DESIGN')
+            sub.setObjectName('eyebrow')
+            brand.addWidget(sub)
+            header.addLayout(brand)
+            header.addStretch()
+            self.details_button=QPushButton('Expert details')
+            self.details_button.setCheckable(True)
+            self.details_button.toggled.connect(self.show_details)
+            header.addWidget(self.details_button)
+            self.legacy=QPushButton('Legacy tools')
+            self.legacy.clicked.connect(self.open_legacy)
+            header.addWidget(self.legacy)
             hero = card(root)
-            status_row=QHBoxLayout();hero.addLayout(status_row)
-            self.status=QLabel('Ready to help');self.status.setObjectName('heading');status_row.addWidget(self.status)
+            status_row=QHBoxLayout()
+            hero.addLayout(status_row)
+            self.status=QLabel('Ready to help')
+            self.status.setObjectName('heading')
+            status_row.addWidget(self.status)
             status_row.addWidget(help_icon('Each phase reports only evidence actually observed. A readable block is not proof of correct files, and rewriting data does not restore physical lifespan.'))
             status_row.addStretch()
             self.help=QLabel('Choose a drive and what you need to do. Nothing starts until you press Start.')
-            self.help.setWordWrap(True);self.help.setObjectName('muted');hero.addWidget(self.help)
-            self.progress=QProgressBar();self.progress.setRange(0,1000);self.progress.setValue(0);hero.addWidget(self.progress)
-            metrics=QHBoxLayout();hero.addLayout(metrics)
+            self.help.setWordWrap(True)
+            self.help.setObjectName('muted')
+            hero.addWidget(self.help)
+            self.progress=QProgressBar()
+            self.progress.setRange(0,1000)
+            self.progress.setValue(0)
+            hero.addWidget(self.progress)
+            metrics=QHBoxLayout()
+            hero.addLayout(metrics)
             self.metric_labels={}
             self.metric_headers={}
             for key,title in [('done','PROGRESS'),('read','DATA READ'),('rate','RECENT SPEED'),('avg','JOB AVERAGE'),('errors','READ ERRORS'),('eta','TIME LEFT')]:
-                area=QVBoxLayout();m=QLabel(title);m.setObjectName('eyebrow')
+                area=QVBoxLayout()
+                m=QLabel(title)
+                m.setObjectName('eyebrow')
                 descriptions={'done':'Percent of planned scan work. Quick Scan samples 10% of the drive; this is not full-device coverage.',
                               'read':'Bytes actually requested from the source. Retries may count again; not always unique media coverage.',
                               'rate':'Recent transfer speed over the last five seconds. If stalled, this changes to Waiting on drive.',
                               'avg':'Total bytes attempted divided by elapsed job time. It is not the instantaneous speed.',
                               'errors':'Failed read requests. A failed request may span many sectors; this is not a count of physically defective sectors.',
                               'eta':'Estimate based on the current scan pass. It can change sharply on a failing drive and does not include future repair time.'}
-                m.setToolTip(descriptions[key]);area.addWidget(m)
+                m.setToolTip(descriptions[key])
+                area.addWidget(m)
                 self.metric_headers[key]=m
-                v=QLabel('—');v.setObjectName('metric');area.addWidget(v);metrics.addLayout(area,1)
+                v=QLabel('—')
+                v.setObjectName('metric')
+                area.addWidget(v)
+                metrics.addLayout(area,1)
                 self.metric_labels[key]=v
-            body=QHBoxLayout();root.addLayout(body,1)
-            left=QVBoxLayout();body.addLayout(left,2)
+            body=QHBoxLayout()
+            root.addLayout(body,1)
+            left=QVBoxLayout()
+            body.addLayout(left,2)
             l=card(left)
-            pick=QHBoxLayout();l.addLayout(pick)
-            ttl=QLabel('01  Select a drive');ttl.setStyleSheet('font-weight:700;font-size:15px');pick.addWidget(ttl)
+            pick=QHBoxLayout()
+            l.addLayout(pick)
+            ttl=QLabel('01  Select a drive')
+            ttl.setStyleSheet('font-weight:700;font-size:15px')
+            pick.addWidget(ttl)
             pick.addStretch()
             self.inspect_button=QPushButton('Drive details ⓘ')
             self.inspect_button.setToolTip('Read-only OS information such as physical/logical sector size, queue limits, transport and firmware revision where available. It does NOT establish safe write permission.')
             self.inspect_button.clicked.connect(self.inspect_drive)
             pick.addWidget(self.inspect_button)
-            btn=QPushButton('Refresh drives');btn.clicked.connect(self.refresh_devices);pick.addWidget(btn)
-            self.device_box=QComboBox();l.addWidget(self.device_box)
+            btn=QPushButton('Refresh drives')
+            btn.clicked.connect(self.refresh_devices)
+            pick.addWidget(btn)
+            self.device_box=QComboBox()
+            l.addWidget(self.device_box)
             l.addWidget(help_icon('Check the model, capacity and serial suffix before starting. USB bridge numbers can change on reconnect. Physical writes always require renewed identity verification; read-only scans can resume using a stable media fingerprint.'))
             self.device_note=QLabel('The selected disk will be identified again before physical writes.')
-            self.device_note.setWordWrap(True);self.device_note.setObjectName('muted');l.addWidget(self.device_note)
+            self.device_note.setWordWrap(True)
+            self.device_note.setObjectName('muted')
+            l.addWidget(self.device_note)
             workflow=card(left)
-            title=QLabel('02  Choose a goal');title.setStyleSheet('font-weight:700;font-size:15px');workflow.addWidget(title)
-            goals=QHBoxLayout();workflow.addLayout(goals)
+            title=QLabel('02  Choose a goal')
+            title.setStyleSheet('font-weight:700;font-size:15px')
+            workflow.addWidget(title)
+            goals=QHBoxLayout()
+            workflow.addLayout(goals)
             for title,goal in [('Fix my drive','carequick'),('Recover files','rescue'),('Check drive','scanquick')]:
                 b=QPushButton(title)
                 b.clicked.connect(lambda _,g=goal:self.select_goal(g))
                 goals.addWidget(b)
-            advanced=QLabel('Or choose a specific operation:');advanced.setObjectName('muted');workflow.addWidget(advanced)
+            advanced=QLabel('Or choose a specific operation:')
+            advanced.setObjectName('muted')
+            workflow.addWidget(advanced)
             self.job_box=QComboBox()
             self._jobs={
                 'fix':[('Quick targeted repair (experimental)','carequick'),
@@ -311,42 +370,72 @@ def launch():
                          ('Full surface scan (read-only)','scanfull'),
                          ('Continue interrupted full scan','resume')],
             }
-            self.job_box.currentIndexChanged.connect(self.choice_changed);workflow.addWidget(self.job_box)
-            help_row=QHBoxLayout();workflow.addLayout(help_row)
+            self.job_box.currentIndexChanged.connect(self.choice_changed)
+            workflow.addWidget(self.job_box)
+            help_row=QHBoxLayout()
+            workflow.addLayout(help_row)
             help_row.addWidget(help_icon('Fix: attempts verified writes only to repeatably readable weak regions after authorization. Recover: copies data to a separate image. Check: reads without writing. Use the goal buttons to show relevant operations.'))
             self.auto_resume=QCheckBox('Resume read-only full scan when the same USB drive reconnects')
             self.auto_resume.setChecked(True)
             self.auto_resume.setToolTip('Only a read-only full scan with a saved checkpoint can restart automatically. No in-place writes or RAM-only transactions restart after a disconnect.')
             help_row.addWidget(self.auto_resume,1)
-            self.dest=QLineEdit(); self.dest.setPlaceholderText('Choose an existing source image…')
-            self.browse=QPushButton('Choose image…');self.browse.clicked.connect(self.pick_image)
-            pathrow=QHBoxLayout();pathrow.addWidget(self.dest,1);pathrow.addWidget(self.browse);workflow.addLayout(pathrow)
+            self.dest=QLineEdit()
+            self.dest.setPlaceholderText('Choose an existing source image…')
+            self.browse=QPushButton('Choose image…')
+            self.browse.clicked.connect(self.pick_image)
+            pathrow=QHBoxLayout()
+            pathrow.addWidget(self.dest,1)
+            pathrow.addWidget(self.browse)
+            workflow.addLayout(pathrow)
             self.opts=QLabel('Automatic settings  •  Read-only by default  •  No uploads')
-            self.opts.setObjectName('muted');workflow.addWidget(self.opts)
-            act=QHBoxLayout();workflow.addLayout(act)
-            self.start=QPushButton('Start selected job');self.start.setObjectName('primary');self.start.clicked.connect(self.start_job);act.addWidget(self.start,1)
-            self.stop=QPushButton('Stop');self.stop.setObjectName('danger');self.stop.setEnabled(False)
-            self.stop.clicked.connect(self.stop_job);act.addWidget(self.stop)
-            right=QVBoxLayout();body.addLayout(right,3)
+            self.opts.setObjectName('muted')
+            workflow.addWidget(self.opts)
+            act=QHBoxLayout()
+            workflow.addLayout(act)
+            self.start=QPushButton('Start selected job')
+            self.start.setObjectName('primary')
+            self.start.clicked.connect(self.start_job)
+            act.addWidget(self.start,1)
+            self.stop=QPushButton('Stop')
+            self.stop.setObjectName('danger')
+            self.stop.setEnabled(False)
+            self.stop.clicked.connect(self.stop_job)
+            act.addWidget(self.stop)
+            right=QVBoxLayout()
+            body.addLayout(right,3)
             map_card=card(right)
-            map_head=QHBoxLayout();map_card.addLayout(map_head)
-            map_title=QLabel('Full-drive surface coverage');map_title.setStyleSheet('font-weight:700;font-size:15px');map_head.addWidget(map_title)
+            map_head=QHBoxLayout()
+            map_card.addLayout(map_head)
+            map_title=QLabel('Full-drive surface coverage')
+            map_title.setStyleSheet('font-weight:700;font-size:15px')
+            map_head.addWidget(map_title)
             map_head.addWidget(help_icon('Each cell always represents the same fixed portion of the ENTIRE drive. Only the portion actually read fills green. Orange/red markers show slow or failed requests, not confirmed physical damage. Hover over a cell for its offsets and coverage.'))
             map_head.addStretch()
-            self.map=ScanMap();map_card.addWidget(self.map)
+            self.map=ScanMap()
+            map_card.addWidget(self.map)
             legend=QLabel('<span style="color:#36b794">■</span> Readable     '
                           '<span style="color:#eeaa52">■</span> Slow     '
                           '<span style="color:#ed6472">■</span> Read error     '
                           '<span style="color:#253951">■</span> Untested')
-            legend.setTextFormat(Qt.RichText);map_card.addWidget(legend)
+            legend.setTextFormat(Qt.RichText)
+            map_card.addWidget(legend)
             self.advice=QLabel('A green block means data could be read. It does not prove file integrity or long-term drive health.')
-            self.advice.setWordWrap(True);self.advice.setObjectName('muted');map_card.addWidget(self.advice)
+            self.advice.setWordWrap(True)
+            self.advice.setObjectName('muted')
+            map_card.addWidget(self.advice)
             result_card=card(right)
-            self.result=QLabel('No job running');self.result.setStyleSheet('font-size:16px;font-weight:700');result_card.addWidget(self.result)
+            self.result=QLabel('No job running')
+            self.result.setStyleSheet('font-size:16px;font-weight:700')
+            result_card.addWidget(self.result)
             self.explain=QLabel('Recovery reports will show what is verified, unresolved, and untested.')
-            self.explain.setWordWrap(True);self.explain.setObjectName('muted');result_card.addWidget(self.explain)
-            self.log=QPlainTextEdit();self.log.setReadOnly(True);self.log.setMaximumBlockCount(4000)
-            self.log.setVisible(bool(debug_log_path));root.addWidget(self.log)
+            self.explain.setWordWrap(True)
+            self.explain.setObjectName('muted')
+            result_card.addWidget(self.explain)
+            self.log=QPlainTextEdit()
+            self.log.setReadOnly(True)
+            self.log.setMaximumBlockCount(4000)
+            self.log.setVisible(bool(debug_log_path))
+            root.addWidget(self.log)
             if debug_log_path is not None:
                 self.log.appendPlainText(f'Debug tracking ON — {debug_log_path}')
                 debug_trace(f'Debug tracking ON — {debug_log_path}\n')
@@ -380,10 +469,13 @@ def launch():
             QMessageBox.information(self,'Legacy toolkit','For advanced file-system, forensic, firmware-information and refresh tools, run:  python -m driverepair_desktop gui-legacy  (the existing Tk interface).')
         def pick_image(self):
             path,_=QFileDialog.getOpenFileName(self,'Select source disk image','','Disk images (*.img *.dd *.raw);;All files (*)')
-            if path:self.dest.setText(path)
+            if path:
+                self.dest.setText(path)
         def choice_changed(self):
-            kind=self.job_box.currentData();is_image=kind=='rescue'
-            self.dest.setVisible(is_image);self.browse.setVisible(is_image)
+            kind=self.job_box.currentData()
+            is_image=kind=='rescue'
+            self.dest.setVisible(is_image)
+            self.browse.setVisible(is_image)
             self.auto_resume.setVisible(kind in {'scanfull','resume','carefull'})
             hints={'health':'Reads SMART attributes where available; no physical writes.',
                    'scanquick':'Samples at least 10% of the entire drive with distributed random locations; no writes.',
@@ -395,28 +487,36 @@ def launch():
                    'resume':'Rechecks identity before continuing the saved read-only scan position.'}
             self.opts.setText(hints.get(kind,''))
         def refresh_devices(self):
-            if self.inventory_proc and self.inventory_proc.state()!=QProcess.NotRunning:return
+            if self.inventory_proc and self.inventory_proc.state()!=QProcess.NotRunning:
+                return
             self.device_note.setText('Looking for external drives…')
             self.inventory_proc=QProcess(self)
-            self.inventory_proc.setProgram(cli_prefix()[0]);self.inventory_proc.setArguments(cli_prefix()[1:]+['list','--json'])
-            self.inventory_proc.finished.connect(self.inventory_done);self.inventory_proc.start()
+            self.inventory_proc.setProgram(cli_prefix()[0])
+            self.inventory_proc.setArguments(cli_prefix()[1:]+['list','--json'])
+            self.inventory_proc.finished.connect(self.inventory_done)
+            self.inventory_proc.start()
         def inventory_done(self,code,_status):
             stdout=bytes(self.inventory_proc.readAllStandardOutput()).decode('utf-8','replace')
             stderr=bytes(self.inventory_proc.readAllStandardError()).decode('utf-8','replace')
             if code!=0:
                 self.device_note.setText('Device discovery failed. Reconnect the USB dock and retry; never bypass identity checks.')
-                self.note_log(stderr[:3000]);return
-            try: data=json.loads(stdout)
+                self.note_log(stderr[:3000])
+                return
+            try:
+                data=json.loads(stdout)
             except (ValueError,TypeError):
-                self.device_note.setText('Could not interpret drive inventory');return
+                self.device_note.setText('Could not interpret drive inventory')
+                return
             prev=self.device_box.currentData()
-            self.device_box.clear();self._devices=data
+            self.device_box.clear()
+            self._devices=data
             for d in data:
                 self.device_box.addItem(f"{d['model']}    •    {display_size(d['size_bytes'])}    •    {d['bus']}    •    {d.get('serial_suffix','')}",d)
             if prev:
                 for i,d in enumerate(data):
                     if d.get('id')==prev.get('id') and d.get('identity_hint')==prev.get('identity_hint'):
-                        self.device_box.setCurrentIndex(i);break
+                        self.device_box.setCurrentIndex(i)
+                        break
             self.device_note.setText(f'{len(data)} external drive(s) available. Fresh identity required before writes.')
             pending=self._pending_resume
             if pending and self.auto_resume.isChecked() and not (self.proc and self.proc.state()!=QProcess.NotRunning):
@@ -454,7 +554,8 @@ def launch():
                     self.explain.setText('Windows/USB driver may be unresponsive. This is not proof of damaged sectors.')
             QTimer.singleShot(9000,bounded_inspection)
         def inspect_done(self,exit_code,_status):
-            if not getattr(self,'inspect_proc',None):return
+            if not getattr(self,'inspect_proc',None):
+                return
             raw=bytes(self.inspect_proc.readAllStandardOutput()).decode('utf-8','replace')
             err=bytes(self.inspect_proc.readAllStandardError()).decode('utf-8','replace')
             if exit_code:
@@ -463,8 +564,10 @@ def launch():
                     'The operating system could not supply drive information right now. '
                     'No disk writes were attempted.')
                 return
-            try: info=json.loads(raw)
-            except (ValueError,TypeError): info={}
+            try:
+                info=json.loads(raw)
+            except (ValueError,TypeError):
+                info={}
             lines=[f'{key.replace("_"," ").title()}: {value}'
                    for key,value in info.items() if value is not None and key!='notes']
             lines.append(str(info.get('notes') or 'Unverified host metadata'))
@@ -472,19 +575,29 @@ def launch():
         def start_job(self):
             self._pending_resume=None
             self._reconnect_timer.stop()
-            if self.proc and self.proc.state()!=QProcess.NotRunning:return
-            kind=self.job_box.currentData(); d=self.selected()
+            if self.proc and self.proc.state()!=QProcess.NotRunning:
+                return
+            kind=self.job_box.currentData()
+            d=self.selected()
             if kind=='rescue':
                 src=self.dest.text().strip()
-                if not Path(src).is_file():QMessageBox.warning(self,'Source required','Select a readable source image.');return
+                if not Path(src).is_file():
+                    QMessageBox.warning(self,'Source required','Select a readable source image.')
+                    return
                 out,_=QFileDialog.getSaveFileName(self,'New recovery image (must not exist)','recovered.img','Disk image (*.img);;All files (*)')
-                if not out:return
-                if os.path.exists(out):QMessageBox.warning(self,'Destination exists','Choose a new file; no existing image will be overwritten.');return
+                if not out:
+                    return
+                if os.path.exists(out):
+                    QMessageBox.warning(self,'Destination exists','Choose a new file; no existing image will be overwritten.')
+                    return
                 args=['rescue-image','--image',src,'--output',out,'--multi-pass','--progress-jsonl','--no-live-dashboard','--json']
             else:
-                if not d:QMessageBox.warning(self,'Choose a drive','Connect a drive and select it first.');return
+                if not d:
+                    QMessageBox.warning(self,'Choose a drive','Connect a drive and select it first.')
+                    return
                 dev=d['id']
-                if kind=='health':args=['health','--device',dev,'--json']
+                if kind=='health':
+                    args=['health','--device',dev,'--json']
                 elif kind in {'scanquick','scanfull','resume'}:
                     args=['scan','--device',dev,'--mode','full' if kind in ('scanfull','resume') else 'triage',
                           '--progress-jsonl','--json']
@@ -496,8 +609,10 @@ def launch():
                         args+=['--chunk-mib',str(plan['chunk']//(1024*1024)),
                                '--samples',str(plan['samples']),'--max-errors','10000',
                                '--compare-suspects','--randomize-samples']
-                    if kind in ('scanfull','resume'):args+=['--ack-risk']
-                    if kind=='resume':args+=['--resume-scan']
+                    if kind in ('scanfull','resume'):
+                        args+=['--ack-risk']
+                    if kind=='resume':
+                        args+=['--resume-scan']
                 else:
                     answer=QMessageBox.question(self,'Experimental physical writes',
                         'DriveRepair can permanently damage data on a failing drive.\n\n'
@@ -507,12 +622,14 @@ def launch():
                         'It will not forcibly close applications or remove the drive letter permanently.\n\n'
                         'Continue to device confirmation?',
                         QMessageBox.Yes | QMessageBox.No)
-                    if answer!=QMessageBox.Yes:return
+                    if answer!=QMessageBox.Yes:
+                        return
                     from PySide6.QtWidgets import QInputDialog
                     typed,ok=QInputDialog.getText(self,'Confirm target disk',
                         f"Type this disk fingerprint to allow in-place writes:  {d['identity_hint']}")
                     if not ok or typed.strip()!=d['identity_hint']:
-                        QMessageBox.warning(self,'Not authorized','Fingerprint did not match. No job started.');return
+                        QMessageBox.warning(self,'Not authorized','Fingerprint did not match. No job started.')
+                        return
                     journal_args=[]
                     if kind=='careresume':
                         location=QFileDialog.getExistingDirectory(self,'Select the EXACT existing DriveRepair repair journal folder (not a recovery image)')
@@ -575,24 +692,35 @@ def launch():
                     if save_scan_map:
                         args+=['--scan-checkpoint','auto']
             self._last_good_device=d
-            self._last_job_kind=kind;self._job_args=args
+            self._last_job_kind=kind
+            self._job_args=args
             self.run_command(args)
         def run_command(self,args):
-            self.progress.setValue(0);self.map.reset(int((self.selected() or {}).get('size_bytes') or 0))
-            self.result.setText('Running — monitoring the device');self.explain.setText('Unknown regions remain unknown until observed.')
-            self.status.setText('Working…');self.help.setText('Read-only where possible; no results are inferred from the progress bar.')
-            self._buf={'stdout':'','stderr':''};self._final_stdout='';self._scanned=0
+            self.progress.setValue(0)
+            self.map.reset(int((self.selected() or {}).get('size_bytes') or 0))
+            self.result.setText('Running — monitoring the device')
+            self.explain.setText('Unknown regions remain unknown until observed.')
+            self.status.setText('Working…')
+            self.help.setText('Read-only where possible; no results are inferred from the progress bar.')
+            self._buf={'stdout':'','stderr':''}
+            self._final_stdout=''
+            self._scanned=0
             self._last_progress_at=time.monotonic()
             self._last_phase=None
             self._last_error=None
-            self.proc=QProcess(self);self.proc.setProgram(cli_prefix()[0]);self.proc.setArguments(cli_prefix()[1:]+args)
+            self.proc=QProcess(self)
+            self.proc.setProgram(cli_prefix()[0])
+            self.proc.setArguments(cli_prefix()[1:]+args)
             self.proc.readyReadStandardError.connect(lambda:self.consume('stderr'))
             self.proc.readyReadStandardOutput.connect(lambda:self.consume('stdout'))
             self.proc.finished.connect(self.job_done)
             self.stop.setText('Stop')
-            self.start.setEnabled(False);self.stop.setEnabled(True);self.proc.start()
+            self.start.setEnabled(False)
+            self.stop.setEnabled(True)
+            self.proc.start()
         def consume(self,channel):
-            if not self.proc:return
+            if not self.proc:
+                return
             data=bytes(self.proc.readAllStandardError() if channel=='stderr' else self.proc.readAllStandardOutput()).decode('utf-8','replace')
             if channel == 'stdout':
                 self._final_stdout += data
@@ -600,15 +728,18 @@ def launch():
             self._buf[channel]+=data
             while '\n' in self._buf[channel]:
                 line,self._buf[channel]=self._buf[channel].split('\n',1)
-                try:obj=json.loads(line)
+                try:
+                    obj=json.loads(line)
                 except (ValueError,TypeError):
                     if line:
                         self.note_log(line[:1200])
                         if line.startswith('Error:'):
                             self._last_error=line[6:].strip()[:600]
                     continue
-                if isinstance(obj,dict) and obj.get('type')=='progress':self.progress_event(obj)
-                else:self._pending=obj
+                if isinstance(obj,dict) and obj.get('type')=='progress':
+                    self.progress_event(obj)
+                else:
+                    self._pending=obj
         def progress_event(self,event):
             self._last_progress_at=time.monotonic()
             self.status.setText(str(event.get('phase') or 'WORKING').replace('_',' ').title())
@@ -627,24 +758,31 @@ def launch():
                 self.metric_labels['read'].setText(display_size(event['attempted_bytes']))
             elif event.get('rewritten_bytes') is not None:
                 self.metric_labels['read'].setText(display_size(event['rewritten_bytes']))
-            if event.get('read_error_chunks') is not None:self.metric_labels['errors'].setText(str(event['read_error_chunks']))
-            if event.get('speed_bps') is not None:self.metric_labels['rate'].setText(display_size(event['speed_bps'])+'/s')
-            if event.get('average_speed_bps') is not None:self.metric_labels['avg'].setText(display_size(event['average_speed_bps'])+'/s')
+            if event.get('read_error_chunks') is not None:
+                self.metric_labels['errors'].setText(str(event['read_error_chunks']))
+            if event.get('speed_bps') is not None:
+                self.metric_labels['rate'].setText(display_size(event['speed_bps'])+'/s')
+            if event.get('average_speed_bps') is not None:
+                self.metric_labels['avg'].setText(display_size(event['average_speed_bps'])+'/s')
             self.help.setText(str(event.get('message') or 'Checking device…'))
             self.map.ingest(event)
             self.advice.setText(f'Full-drive map: {self.map.coverage.coverage_pct:.2f}% read successfully. '
                                 'Colored stripes mark observations, not full-region certification.')
         def job_done(self,exit_code,_status):
-            self.consume('stdout');self.consume('stderr')
-            self.start.setEnabled(True);self.stop.setEnabled(False)
+            self.consume('stdout')
+            self.consume('stderr')
+            self.start.setEnabled(True)
+            self.stop.setEnabled(False)
             self.metric_labels['eta'].setText('—')
             self.proc=None
             try:
                 result=json.loads(self._final_stdout)
             except (ValueError,TypeError):
                 result=self._pending if isinstance(self._pending,dict) else {}
-                if self._final_stdout.strip():self.note_log(self._final_stdout[-3000:])
-            if not isinstance(result,dict):result={}
+                if self._final_stdout.strip():
+                    self.note_log(self._final_stdout[-3000:])
+            if not isinstance(result,dict):
+                result={}
             text=str(result.get('status') or ('Completed' if exit_code==0 else 'Stopped / failed'))
             self.status.setText(text.replace('_',' ').title())
             if exit_code==0:
@@ -686,7 +824,8 @@ def launch():
                     self.stop.setText('Cancel reconnect')
                     self.stop.setEnabled(True)
                     self._reconnect_timer.start()
-            if 'read_error_chunks' in result:self.metric_labels['errors'].setText(str(result['read_error_chunks']))
+            if 'read_error_chunks' in result:
+                self.metric_labels['errors'].setText(str(result['read_error_chunks']))
         def closeEvent(self, event):
             if self.proc and self.proc.state()!=QProcess.NotRunning:
                 if self._last_job_kind in ('carefull','carequick','careresume'):
@@ -699,10 +838,12 @@ def launch():
                     'Stop the read-only job and close the workstation?',
                     QMessageBox.Yes | QMessageBox.No)
                 if answer!=QMessageBox.Yes:
-                    event.ignore();return
+                    event.ignore()
+                    return
                 self.proc.terminate()
                 if not self.proc.waitForFinished(2500):
-                    self.proc.kill();self.proc.waitForFinished(1000)
+                    self.proc.kill()
+                    self.proc.waitForFinished(1000)
             event.accept()
 
         def stop_job(self):
@@ -713,7 +854,8 @@ def launch():
                 self.stop.setText('Stop')
                 self.result.setText('Automatic reconnect cancelled')
                 return
-            if not self.proc or self.proc.state()==QProcess.NotRunning:return
+            if not self.proc or self.proc.state()==QProcess.NotRunning:
+                return
             if self._last_job_kind in ('carefull','carequick','careresume'):
                 QMessageBox.warning(self,'Do not interrupt a write',
                     'Stopping a physical write mid-transaction can destroy data. The engine has no verified cooperative stop protocol yet. '
@@ -723,7 +865,8 @@ def launch():
             self.result.setText('Stopping — waiting for process exit')
     app=QApplication.instance() or QApplication(sys.argv)
     app.setFont(QFont('Segoe UI', 10))
-    win=Workstation();win.show()
+    win=Workstation()
+    win.show()
     if os.environ.get('DRIVEREPAIR_QT_SMOKE') == '1':
         QTimer.singleShot(850, app.quit)
     return app.exec()

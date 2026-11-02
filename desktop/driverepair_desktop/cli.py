@@ -1561,9 +1561,8 @@ def run(argv: list[str] | None = None) -> int:
                 from .gui import launch
                 launch()
             else:
-                try:
-                    import PySide6
-                except ImportError:
+                import importlib.util
+                if importlib.util.find_spec('PySide6') is None:
                     if args.command == 'qt-gui':
                         raise RuntimeError('PySide6 not installed: python -m pip install PySide6')
                     print('PySide6 not installed; launching legacy Tk. For the new UI: python -m pip install PySide6', file=sys.stderr)

@@ -7,7 +7,6 @@ This module never issues write, TRIM, discard, format, or repair commands.
 from __future__ import annotations
 
 import ctypes
-import errno
 import os
 import random
 import statistics
