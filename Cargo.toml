@@ -38,7 +38,8 @@ uefi = []
 members = []
 exclude = [
     "src/boot/uefi",
-    "src/boot/bios"
+    "src/boot/bios",
+    "rust/recovery-core"
 ]
 
 # Note: Build targets are specified per build command
