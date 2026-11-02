@@ -705,10 +705,19 @@ def launch() -> None:
     bf = ttk.Frame(tab_drive)
     bf.pack(anchor="w", pady=8)
     ttk.Button(bf, text="Refresh inventory", command=refresh_devices).pack(side="left", padx=(0, 6))
-    for label, kind in [("SMART", "health"), ("Quick scan", "sample"), ("Full scan", "full"),
-                        ("Benchmark", "benchmark"), ("Rescue (Linux/Windows)", "rescue"),
+    for label, kind in [("SMART", "health"),
+                        ("Quick scan (diagnose)", "sample"),
+                        ("Full scan (diagnose)", "full"),
+                        ("Benchmark", "benchmark"),
+                        ("Rescue to image", "rescue"),
                         ("Resume rescue", "resume")]:
         ttk.Button(bf, text=label, command=lambda k=kind: device_action(k)).pack(side="left", padx=(0, 6))
+    ttk.Label(
+        tab_drive,
+        text='Scans only measure readability/latency — they never rewrite the patient disk. '
+             'Use Rescue to image to copy data off, or In-place refresh only when you accept write risk.',
+        style='Muted.TLabel', wraplength=980,
+    ).pack(anchor='w', pady=(4, 0))
     row(tab_drive, "Rescue image output", dest_file, pick_output)
 
     # --- Image recovery ---
@@ -1332,14 +1341,45 @@ def launch() -> None:
                         elapsed = float(v.get('elapsed_seconds') or 0)
                         if elapsed > 0 and int(v.get('recovered_bytes') or 0) > 0:
                             speed_var.set(f"{fmt_bytes(int(int(v['recovered_bytes']) / elapsed))}/s avg")
-                    warning_var.set(
-                        'INCOMPLETE IMAGE: some areas remain missing or unverified. Keep the recovery journal.' 
-                        if incomplete else
-                        'Job finished. Verify recovered data before relying on the image.'
-                        if code == 0 else
-                        'Job stopped or failed. Preserve the image and recovery journal for resume.')
-                    warning_label.configure(fg=C['warn'] if incomplete else
-                                            C['muted'] if code == 0 else C['fail'])
+                    is_scan = str(title).lower().find('scan') >= 0
+                    is_refresh = str(title).lower().find('refresh') >= 0
+                    if incomplete:
+                        warning_var.set(
+                            'INCOMPLETE IMAGE: some areas remain missing or unverified. Keep the recovery journal.'
+                        )
+                        warning_label.configure(fg=C['warn'])
+                    elif code == 0 and is_scan:
+                        readiness = (last_result or {}).get('repair_readiness') or {}
+                        blockers = readiness.get('blockers') or []
+                        health = (last_result or {}).get('health') or {}
+                        warning_var.set(
+                            'DIAGNOSE ONLY — scan does not repair or rewrite sectors. '
+                            'Next: Rescue to a separate healthy image (safe), or In-place refresh '
+                            '(writes the patient; explicit risk acks required). '
+                            + (
+                                'Blocked for repair triage: ' + '; '.join(blockers[:2])
+                                if blockers else
+                                f"Triage health media={health.get('media', '?')} "
+                                f"transport={health.get('transport', '?')} "
+                                f"mechanical*={health.get('mechanical', '?')}."
+                            )
+                        )
+                        warning_label.configure(fg=C['warn'] if blockers else C['muted'])
+                    elif code == 0 and is_refresh:
+                        warning_var.set(
+                            'Refresh finished. Readback match is not restored lifespan; keep backups.'
+                        )
+                        warning_label.configure(fg=C['muted'])
+                    elif code == 0:
+                        warning_var.set(
+                            'Job finished. Verify recovered data before relying on the image.'
+                        )
+                        warning_label.configure(fg=C['muted'])
+                    else:
+                        warning_var.set(
+                            'Job stopped or failed. Preserve the image and recovery journal for resume.'
+                        )
+                        warning_label.configure(fg=C['fail'])
                     status.set(f"{title}: {'finished — review results' if code == 0 else f'exited {code} — journal may support resume'}")
                     if last_result and last_result.get('status') in {
                         'manifest_created_unattested', 'matches_unattested_manifest',

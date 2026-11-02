@@ -2,11 +2,15 @@
 
 Unknown must remain unknown. SMART PASSED is not a clean bill of health.
 Hardware information is summarized with serial numbers omitted.
+When smartctl is missing on Windows, a coarse Get-Disk/Get-PhysicalDisk
+HealthStatus fallback may be used — it is NOT a substitute for SMART attributes.
 """
 from __future__ import annotations
 
 import json
+import re
 import subprocess
+import sys
 from typing import Callable
 
 from .devices import Device
@@ -60,13 +64,86 @@ def health_snapshot(device: Device,
     }
 
 
+def windows_storage_health(device: Device,
+                           run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> dict | None:
+    """Coarse Windows Storage health when smartctl is unavailable.
+
+    Uses Get-Disk / Get-PhysicalDisk HealthStatus only. USB bridges often mask
+    or fake serials; this is weaker than SMART attribute counters.
+    """
+    if not sys.platform.startswith('win'):
+        return None
+    match = re.search(r'PhysicalDrive(\d+)$', device.path.replace('/', '\\'), re.I)
+    if not match:
+        return None
+    number = match.group(1)
+    script = (
+        f"$d = Get-Disk -Number {number} -ErrorAction Stop; "
+        "$p = @(Get-PhysicalDisk -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.DeviceId -eq [string]$d.Number -or $_.FriendlyName -eq $d.FriendlyName })"
+        "[0]; "
+        "[pscustomobject]@{ disk_health=[string]$d.HealthStatus; "
+        "disk_operational=[string]$d.OperationalStatus; "
+        "physical_health=if($p){[string]$p.HealthStatus}else{'Unknown'}; "
+        "physical_operational=if($p){[string]$p.OperationalStatus}else{'Unknown'} } "
+        "| ConvertTo-Json -Compress"
+    )
+    try:
+        proc = run(
+            ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+            capture_output=True, timeout=25, check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0 or not proc.stdout:
+        return None
+    try:
+        raw = json.loads(proc.stdout.decode('utf-8-sig'))
+    except (ValueError, UnicodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    labels = ' '.join(
+        str(raw.get(k) or '') for k in (
+            'disk_health', 'physical_health', 'disk_operational', 'physical_operational'
+        )
+    ).lower()
+    if any(token in labels for token in ('unhealthy', 'fail', 'lost communication')):
+        status = 'failure_reported'
+    elif any(token in labels for token in ('warning', 'degraded', 'predictive')):
+        status = 'windows_health_warning'
+    elif 'healthy' in labels or labels.strip() in {'ok online', 'healthy ok', 'healthy online'}:
+        status = 'windows_health_limited'
+    elif 'healthy' in (str(raw.get('disk_health') or '') + str(raw.get('physical_health') or '')).lower():
+        status = 'windows_health_limited'
+    else:
+        status = 'unknown'
+    return {
+        'status': status,
+        'device': device.public(),
+        'source': 'windows_storage_healthstatus',
+        'windows_storage': raw,
+        'smartctl_exit_status': None,
+        'smart_status_passed': None,
+        'temperature_c': None,
+        'nvme': {},
+        'ata_selected_raw_attributes': [],
+        'notes': (
+            'Windows HealthStatus only (Get-Disk/Get-PhysicalDisk). '
+            'Not SMART attributes; USB docks may mask real media counters. '
+            'Install smartmontools (smartctl) for stronger evidence. '
+            'No self-test, erase, remap, refresh, or repair was started.'
+        ),
+    }
+
+
 def try_health_snapshot(device: Device,
                         run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> dict | None:
-    """Best-effort SMART probe. Returns None when tooling/USB bridge cannot answer."""
+    """Best-effort SMART probe, then Windows storage health fallback."""
     try:
         return health_snapshot(device, run=run)
     except RuntimeError:
-        return None
+        return windows_storage_health(device, run=run)
 
 
 def media_from_smart(snapshot: dict | None) -> str:
@@ -76,6 +153,10 @@ def media_from_smart(snapshot: dict | None) -> str:
     status = snapshot.get("status")
     if status == "failure_reported":
         return "FAIL"
+    if status == "windows_health_warning":
+        return "WARN"
+    if status == "windows_health_limited":
+        return "OK"
     attrs = {
         int(item.get("id")): item.get("raw_value")
         for item in (snapshot.get("ata_selected_raw_attributes") or [])
