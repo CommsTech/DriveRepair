@@ -18,6 +18,7 @@ import time
 import zipfile
 
 from .devices import (list_external_devices, select_external_device,
+                      assert_windows_external_write_gate,
                       linux_all_devices, select_linux_any_disk)
 from .scanner import ImageReader, open_device_readonly, scan_reader
 from .scan_history import load_hints, save_hints
@@ -892,6 +893,7 @@ def _run_extras(args) -> int:
                 selected = select_linux_any_disk(args.device)
             else:
                 selected = select_external_device(args.device)
+                assert_windows_external_write_gate(selected)
             device_label = f"{selected.id}  {selected.model[:28]}  {cui.fmt_bytes(selected.size_bytes)}"
             require_destructive_acknowledgements(
                 ack_risk=args.ack_risk,
@@ -1251,6 +1253,8 @@ def _run_care(args) -> int:
         raise ValueError('Disk journal directory required unless RAM-only mode is selected')
     journal_path = args.journal if not ram_only else 'RAM_ONLY_NO_FILES'
     selected = select_external_device(args.device) if is_hardware else None
+    if is_hardware:
+        assert_windows_external_write_gate(selected)
     require_destructive_acknowledgements(
         ack_risk=args.ack_risk, ack_destructive=args.ack_destructive,
         ack_no_backup=args.ack_no_backup, ack_data_loss_risk=args.ack_data_loss_risk,

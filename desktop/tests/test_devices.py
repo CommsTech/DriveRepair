@@ -3,7 +3,8 @@ import plistlib
 import unittest
 
 from driverepair_desktop.devices import (
-    Device, linux_devices, macos_devices, select_external_device, windows_devices,
+    Device, assert_windows_external_write_gate, linux_devices, macos_devices,
+    select_external_device, windows_devices,
 )
 
 
@@ -72,6 +73,29 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual([disk.id for disk in disks], ["windows:PhysicalDrive2"])
         self.assertEqual(disks[0].path, r"\\.\PhysicalDrive2")
         self.assertEqual(disks[0].provenance, "legacy-inventory")
+
+    def test_select_matches_list_fingerprint_when_get_disk_size_disagrees(self):
+        # USB bridges often report a different Size via Get-Disk than CIM.
+        cim = [{"Index": 2, "InterfaceType": "USB", "Model": "USB flash",
+                "Size": 500105249280, "SerialNumber": "USB1", "BytesPerSector": 512}]
+        get_disk = [{"Number": 2, "BusType": "USB", "IsBoot": False, "IsSystem": False,
+                     "IsOffline": False, "FriendlyName": "USB flash",
+                     "Size": 500107862016, "LogicalSectorSize": 512, "SerialNumber": "USB1"}]
+
+        def run(cmd, timeout=None):
+            joined = " ".join(cmd).lower()
+            if "get-disk" in joined:
+                return json.dumps(get_disk).encode()
+            if "get-ciminstance" in joined or "win32_diskdrive" in joined:
+                return json.dumps(cim).encode()
+            if cmd and str(cmd[0]).lower().startswith("wmic"):
+                return b"Node,BytesPerSector,Index,InterfaceType,Model,SerialNumber,Size\n"
+            return json.dumps(cim).encode()
+
+        listed = windows_devices(run)
+        selected = select_external_device(listed[0].id, lambda: listed)
+        self.assertEqual(selected.fingerprint[:12], listed[0].fingerprint[:12])
+        assert_windows_external_write_gate(selected, run)
 
     def test_select_requires_exact_external_identifier(self):
         d = Device("linux:/dev/sdb", "/dev/sdb", "Demo", 1048576, 512, "usb")

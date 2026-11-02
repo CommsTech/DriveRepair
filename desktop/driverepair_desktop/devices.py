@@ -352,25 +352,48 @@ def list_external_devices(platform: str | None = None,
 
 def select_external_device(identifier: str,
                            discover: Callable[[], list[Device]] = list_external_devices) -> Device:
-    # A failing USB disk can stall Get-Disk *all* for 12 s, CIM for 20 s,
-    # and WMIC for 20 s. Ask for the selected disk only first. This still
-    # checks IsBoot/IsSystem/IsOffline and requires model/serial/capacity.
-    # Never use a cached inventory or CIM-only fallback as write authority.
-    if sys.platform == 'win32' and discover is list_external_devices:
-        match = re.fullmatch(r'windows:PhysicalDrive(\d+)', identifier)
-        if match:
-            try:
-                direct = _windows_devices_from_get_disk(_run, number=int(match.group(1)))
-                direct = [d for d in direct if d.id == identifier]
-                if len(direct) == 1:
-                    return direct[0]
-                raise RuntimeError('The selected disk is no longer a verified external, online, non-system disk')
-            except RuntimeError as exc:
-                raise RuntimeError('Selected-disk identity query failed; reconnect the USB dock, '
-                                   'check Windows Disk Management, and retry. No cached device '
-                                   'information can authorize a disk write. ' + str(exc)) from exc
+    # Use the same inventory path as ``list`` so GUI identity_hint / confirm-identity
+    # fingerprints stay stable. Do NOT prefer a separate Get-Disk-only shortcut here:
+    # USB bridges often report a different Size via Get-Disk than Win32_DiskDrive,
+    # which previously made every scan/Fix fail with a fingerprint mismatch after
+    # CIM-first inventory. Physical writes add assert_windows_external_write_gate().
     matches = [device for device in discover() if device.id == identifier]
     if len(matches) != 1:
         raise ValueError("Drive not found in current external-whole-disk inventory. "
                          "Run 'list' again. Internal drives and partitions are excluded.")
     return matches[0]
+
+
+def assert_windows_external_write_gate(device: Device,
+                                       run: Callable[..., bytes] = _run) -> None:
+    """Fail closed before patient writes if Get-Disk no longer shows this USB whole disk.
+
+    Inventory identity (fingerprint / confirm-identity) stays on the list path.
+    Get-Disk is an additional online/external/non-system gate only — USB bridges
+    frequently disagree with CIM on Size, so size is not required to match.
+    """
+    if sys.platform != 'win32':
+        return
+    match = re.fullmatch(r'windows:PhysicalDrive(\d+)', device.id)
+    if not match:
+        raise RuntimeError('Windows write gate requires a windows:PhysicalDriveN identifier')
+    try:
+        found = _windows_devices_from_get_disk(run, number=int(match.group(1)))
+    except RuntimeError as exc:
+        raise RuntimeError(
+            'Selected-disk Get-Disk write gate failed; reconnect the USB dock, '
+            'check Windows Disk Management, and retry. No cached device information '
+            'can authorize a disk write. ' + str(exc)
+        ) from exc
+    found = [d for d in found if d.id == device.id]
+    if len(found) != 1:
+        raise RuntimeError(
+            'The selected disk is no longer a verified external, online, non-system disk'
+        )
+    gated = found[0]
+    # Prefer matching serials when both sides report one; blank USB-bridge
+    # serials are common and must not block an otherwise verified PhysicalDrive.
+    left = device.serial.strip()
+    right = gated.serial.strip()
+    if left and right and left.casefold() != right.casefold():
+        raise RuntimeError('Get-Disk serial disagrees with inventory; refusing raw write')
