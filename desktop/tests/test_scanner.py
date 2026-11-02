@@ -2,8 +2,10 @@ import errno
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
-from driverepair_desktop.scanner import ImageReader, scan_offsets, scan_reader
+from driverepair_desktop.scanner import ImageReader, WindowsReader, scan_offsets, scan_reader
 
 
 class FakeReader:
@@ -21,6 +23,17 @@ class FakeReader:
 
 
 class ScannerTests(unittest.TestCase):
+    def test_windows_read_access_denied_is_actionable(self):
+        kernel = mock.MagicMock()
+        kernel.CreateFileW.return_value = None
+        device = SimpleNamespace(path=r"\\.\PhysicalDrive99")
+        with mock.patch('driverepair_desktop.scanner.sys.platform', 'win32'), \
+             mock.patch('ctypes.WinDLL', return_value=kernel, create=True), \
+             mock.patch('ctypes.get_last_error', return_value=5, create=True):
+            with self.assertRaisesRegex(PermissionError, 'Administrator.*No scan was performed'):
+                WindowsReader(device)
+        self.assertEqual(kernel.CreateFileW.call_args.args[1], 0x80000000)
+
     def test_sample_offsets_never_overlap(self):
         offsets = list(scan_offsets(1024 * 1024, 512, "sample", 30))
         self.assertEqual(len(offsets), 30)
