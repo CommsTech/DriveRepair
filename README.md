@@ -2,10 +2,21 @@
 
 **Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
 
-**Current build: 0.3.3b8 / engineering beta candidate — NOT approved for public hardware-repair use.**
+**Current build: 0.3.3b10 / engineering beta candidate — NOT approved for public hardware-repair use.**
 The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
 
 **If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
+
+## Qt interface, honest coverage and reconnect work (0.3.3b10)
+
+- Quick Repair and the Qt quick read-only check sample **at least 10% of the entire disk** via seeded, distributed locations—not a sequential 10% prefix. This can take many minutes on an HDD. New seeds permit successive investigations to cover different areas. Complete verification still requires a full scan.
+- The new full-drive surface map shows **fractional coverage inside each fixed cell**. Tiny samples cannot paint a multi-GB cell entirely green. Failed-read markers report observations, not proven damaged sectors. Hover cells and use the new help icons for explanations.
+- The Qt sampled-scan percentage bug is fixed (`100%` of planned work used to show `1%`). A time-left metric is back, distinct from recent transfer speed and job average.
+- Qt now filters operations by Fix / Recover / Check goal and has **Drive details ⓘ** for read-only native OS data. Windows uses a separate `DeviceIoControl` inspector for read-only facts when PowerShell is slow, but that inspector **never authorizes writes**.
+- Full **read-only** scans can be set to watch for USB reconnection and resume with a saved, offsets-only checkpoint and a freshly matched identity. RAM-only physical writes **cannot** be auto-resumed after loss of their active journal.
+- Rust includes a small read-only firmware-vendor inspection interface. No vendor-specific unlocks, service-area writes, firmware flashing, or simulated AI reconstruction are enabled.
+
+See [Qt/reconnect and vendor safety guide](docs/QT_UI_AND_HARDWARE_RELIABILITY_B10.md).
 
 ## Media-aware scanning and simplified workflows (0.3.3b8)
 

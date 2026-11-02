@@ -60,6 +60,7 @@ class Device:
             "location": self.location or "not reported",
             "discovery": self.provenance,
             "identity_hint": self.fingerprint[:12],
+            "resume_hint": self.scan_resume_identity[:12] if self.scan_resume_identity else None,
         }
 
 

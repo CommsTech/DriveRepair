@@ -91,6 +91,12 @@ def parser() -> argparse.ArgumentParser:
     optimization.add_argument('--ack-optimization-risk', action='store_true',
                               help='Acknowledge that optimization can harm recovering/deleted data')
     optimization.add_argument('--json', action='store_true')
+    inspect_host = sub.add_parser('inspect-storage', help='READ-ONLY: OS-reported queue/geometry capabilities, NOT write permission')
+    inspect_host.add_argument('--device', required=True)
+    inspect_host.add_argument('--json', action='store_true')
+    win_probe = sub.add_parser('inspect-windows-disk', help='READ-ONLY: native Win32 disk properties without PowerShell (NOT write authority)')
+    win_probe.add_argument('--number', type=int, required=True)
+    win_probe.add_argument('--json', action='store_true')
     all_disks = sub.add_parser("list-all-linux", help="READ-ONLY: show internal and external Linux whole disks for offline recovery")
     all_disks.add_argument("--json", action="store_true")
     planning = sub.add_parser("plan-system-recovery", help="READ-ONLY: validate offline internal disk and destination before rescue")
@@ -106,12 +112,14 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument("--mode", choices=["triage", "sample", "full"], default="triage")
         cmd.add_argument("--samples", type=int, default=128,
                          help="Evenly spaced chunks in sample mode (default: 128)")
-        cmd.add_argument("--chunk-mib", type=int, default=1, choices=[1, 2, 4, 8],
+        cmd.add_argument("--chunk-mib", type=int, default=1, choices=[1, 2, 4, 8, 16],
                          help="Read size in MiB (default: 1)")
         cmd.add_argument("--remember-anomalies", action="store_true",
                          help="Opt-in local anomaly history (offsets only, no data; hardware only)")
         cmd.add_argument("--compare-suspects", action="store_true",
                          help="Extra repeated reads of suspicious triage regions; does NOT identify correct bytes")
+        cmd.add_argument('--randomize-samples', action='store_true',
+                         help='Use a new recorded stratified sampling seed for each triage run')
         cmd.add_argument("--adaptive-io", action=argparse.BooleanOptionalAction, default=True,
                          help="Adaptive sequential read sizes and bounded deferred retries (full scans)")
         cmd.add_argument('--scan-checkpoint', help='Local metadata path (no sector data) for full read-only scans')
@@ -1350,6 +1358,9 @@ def _run_care(args) -> int:
                                    history_hints=hints, sample_seed=sampling_seed,
                                    progress=scan_progress, resume_state=prior_scan,
                                    checkpoint=checkpoint_writer.save if checkpoint_writer else None)
+                if checkpoint_writer is not None:
+                    scan['scan_checkpoint'] = str(checkpoint_writer.path)
+                    scan['resume_requires_fresh_identity'] = True
                 if calibration is not None:
                     scan['initial_io_calibration'] = calibration
                 if (args.repair_policy == 'balanced' and
@@ -1530,6 +1541,15 @@ def _scan_checkpoint_for(args, source_token: str, size: int, sector: int):
 def run(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
+        if args.command == 'inspect-storage':
+            from .host_capabilities import inspect_readonly
+            print(json.dumps(inspect_readonly(args.device),indent=2))
+            return 0
+        if args.command == 'inspect-windows-disk':
+            from .windows_native import probe_physicaldrive
+            info=probe_physicaldrive(args.number)
+            print(json.dumps(info, indent=2))
+            return 0
         if args.command in {'gui', 'qt-gui', 'gui-legacy'}:
             if args.command == 'gui-legacy':
                 from .gui import launch
@@ -1779,6 +1799,8 @@ def run(argv: list[str] | None = None) -> int:
                                  adaptive_io=args.adaptive_io,
                                  history_hints=(load_hints(device.fingerprint, size, sector)
                                                 if args.command == 'scan' and args.remember_anomalies else []),
+                                 sample_seed=(__import__('secrets').randbits(64)
+                                              if args.mode=='triage' and args.randomize_samples else None),
                                  progress=report, resume_state=prior_scan,
                                  checkpoint=checkpoint_writer.save if checkpoint_writer else None)
             print(file=sys.stderr)

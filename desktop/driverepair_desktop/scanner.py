@@ -163,7 +163,20 @@ def scan_offsets(size: int, chunk: int, mode: str, samples: int, sample_seed: in
             index = (0 if i == 0 else blocks - 1 if i == n - 1
                      else rng.randrange(lo, max(lo + 1, hi)))
             selected.add(index)
-        for index in sorted(selected):
+        # Stratified RANDOM locations across the *entire* address space.
+        # Randomize bounded groups of 64 probes while preserving seek locality
+        # inside each group. An unrestricted shuffle causes thousands of extra
+        # seeks on SMR/rotational media and makes recovery slower, not smarter.
+        # Preserve boundary samples in the first and last position for quick
+        # sanity checks. Each sample is still unique and counts only once.
+        middle = sorted(selected - {0, blocks - 1})
+        groups = [middle[i:i + 64] for i in range(0, len(middle), 64)]
+        rng.shuffle(groups)
+        order = ([0] if 0 in selected else [])
+        order.extend(index for group in groups for index in group)
+        if blocks - 1 in selected and blocks > 1:
+            order.append(blocks - 1)
+        for index in order:
             yield index * chunk, min(chunk, size - index * chunk)
 
 
