@@ -138,7 +138,7 @@ def open_device_readonly(device: Device) -> Reader:
     return UnixReader(device)
 
 
-def scan_offsets(size: int, chunk: int, mode: str, samples: int):
+def scan_offsets(size: int, chunk: int, mode: str, samples: int, sample_seed: int | None = None):
     if size <= 0 or chunk <= 0 or samples < 1 or mode not in {"sample", "full", "triage"}:
         raise ValueError("Invalid scan parameters")
     blocks = (size + chunk - 1) // chunk
@@ -155,7 +155,7 @@ def scan_offsets(size: int, chunk: int, mode: str, samples: int):
         # interior stratum uses a deterministic pseudo-random offset. This
         # samples locations, not a statistically proven health distribution.
         n = min(samples, blocks)
-        rng = random.Random(0xD12E5C4A ^ blocks ^ n)
+        rng = random.Random(0xD12E5C4A ^ blocks ^ n ^ (sample_seed or 0))
         selected = set()
         for i in range(n):
             lo = i * blocks // n
@@ -171,6 +171,9 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
                 samples: int = 128, chunk: int = 1024 * 1024, max_errors: int = 16,
                 compare_suspects: bool = False, adaptive_io: bool = False,
                 history_hints: list[dict] | None = None,
+                adaptive_min_chunk: int | None = None,
+                adaptive_max_chunk: int | None = None,
+                sample_seed: int | None = None,
                 progress: Callable[..., None] | None = None) -> dict:
     if (not 0 < sector <= 1024 * 1024 or size <= 0 or size % sector or
             chunk < sector or chunk % sector or not 1 <= max_errors <= 10000 or
@@ -179,9 +182,10 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
     if adaptive_io and mode == 'full':
         from .adaptive_scan import adaptive_full_scan
         return adaptive_full_scan(reader, size=size, sector=sector, chunk=chunk,
-                                  max_errors=max_errors, progress=progress)
+                                  max_errors=max_errors, progress=progress,
+                                  min_chunk=adaptive_min_chunk, max_chunk=adaptive_max_chunk)
     blocks = (size + chunk - 1) // chunk
-    baseline = list(scan_offsets(size, chunk, mode, samples)) if mode != 'full' else None
+    baseline = list(scan_offsets(size, chunk, mode, samples, sample_seed)) if mode != 'full' else None
     if mode == 'triage' and history_hints:
         # Anomaly history is only a HINT. Every bookmarked location is re-read;
         # never reuse historical success as evidence for a current rewrite.
@@ -371,8 +375,10 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
         'planned_chunks': planned,
         'read_error_chunks': failures,
         'read_error_ranges': failed_ranges,
+        'read_error_ranges_truncated': failures > len(failed_ranges),
         'slow_regions': slow_regions,
         'historical_hints_used': len(history_hints or []),
+        'sampling_seed': sample_seed if mode == 'triage' else None,
         'slow_region_count': max(slow_region_count, len(slow_regions)),
         'slow_regions_truncated': slow_region_count > 1000,
         'inconsistent_reads': inconsistent_reads,
@@ -380,7 +386,10 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
         'repeat_probe_failed_ranges': repeat_probe_failed_ranges,
         'extra_suspect_reads': 2 * min(len(set(anomalous_indices)), 64, samples) if compare_suspects and mode == 'triage' else 0,
         'follow_up_chunks': max(0, completed - (len(baseline) if baseline is not None else blocks)),
-        'surface_coverage_pct': round(100 * checked / size, 6),
+        'surface_coverage_pct': round(100 * (sum(min(chunk, size - i * chunk) for i in examined)
+                                             if mode == 'triage' else min(size, checked)) / size, 6),
+        'unique_address_bytes': (sum(min(chunk, size - i * chunk) for i in examined)
+                                 if mode == 'triage' else min(size, checked)),
         'elapsed_seconds': round(time.monotonic() - started, 3),
         'notes': ('TRIAGE IS A SPOT-CHECK, not a health certification. ' if mode == 'triage' else '') +
                  'Readability only; no sector repaired, no writes, no correctness guarantee. '

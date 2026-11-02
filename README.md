@@ -2,18 +2,44 @@
 
 **Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
 
-**Current build: 0.3.3b7 / engineering beta candidate — NOT approved for public hardware-repair use.**
+**Current build: 0.3.3b8 / engineering beta candidate — NOT approved for public hardware-repair use.**
 The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
 
 **If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
+
+## Media-aware scanning and simplified workflows (0.3.3b8)
+
+- **Quick Repair checks at least 10% of unique logical addresses**, using
+  deterministic stratified-random positions across the *entire* selected disk.
+  It is not a sub-minute check: a 1 TB disk requires reading at least 100 GB.
+  Do not interpret that 10% sample as proof of health in the other 90%.
+- **Full Repair uses bounded adaptive read sizes.** It checks a few early,
+  sequential regions to select an initial read size, increases on good areas,
+  and defers bad requests for budget-limited smaller reads. Windows I/O error
+  1117 is an I/O error, not proof of physical platter damage.
+- The exact manufacturer-listed `ST1000LM048` model has **SMR** recording.
+  The software avoids interpreting USB as a media type and does not automatically
+  extend rewrites to adjacent SMR logical regions (logical adjacency is not
+  physical adjacency). A CMR-only advanced neighbor rewrite option requires
+  explicit recording confirmation and independently repeated reads.
+- The main Diagnose page hides most expert settings by default. Choose a disk,
+  choose a goal, review storage, then click **Start job**. SMART installation
+  is offered only when missing; nothing installs silently.
+- Device identity must be independently verified before any patient write.
+  Windows selected-disk inventory first tries a bounded `Get-Disk -Number`
+  query instead of repeatedly enumerating every disk. If this hangs, writes
+  remain blocked; read-only findings are still reported rather than discarded.
+- Persistent anomaly hints are optional, metadata-only, and **never authorize writes**. RAM-only
+  operations create no rescue journal and cannot resume after a crash.
+
+See [media-aware scanning guide](docs/MEDIA_AWARE_SCANNING_0.3.3b8.md).
 
 ## Direct disk repair without a backup image (0.3.3b4)
 
 Open **Diagnose / Rescue**, select the external drive by model, capacity and
 fingerprint, then use **Quick repair** (sample and investigate suspicious
 regions) or **Full repair** (read the full surface before selecting safe
-refresh targets). The primary screen now offers **Volatile RAM only (NO saved
-files)** or a disk-backed journal. No recovery image or copy is created during
+refresh targets). The primary screen now offers **Volatile RAM only (no recovery image/journal)** or a disk-backed journal. No recovery image or copy is created during
 in-place maintenance. For a whole-drive rewrite, use **In-place refresh** and
 select `full`; this is significantly riskier, particularly on failing hardware.
 
@@ -260,6 +286,10 @@ For reproducing and verifying the Windows workflow-button fix, see [GUI acceptan
 
 The Diagnose page now offers read-only **Firmware info**, **Optimize advice** and a bounded **Investigate a failed offset** workflow, avoiding another lengthy full scan to examine a known problem. User journal and repair policy choices are remembered locally, but destructive risk acknowledgments never are. Drive optimization uses Windows native tools only on qualified healthy volumes. Firmware reporting is inventory-only: **NO firmware downloads or flashing.** See [Maintenance and Firmware](docs/MAINTENANCE_AND_FIRMWARE.md) for exact commands and test limitations.
 
-### Adaptive scanning and staged desktop jobs (0.3.3b7)
+### Adaptive scanning and staged desktop jobs (0.3.3b8)
 
 Full surface scans now adapt sector-aligned read request sizes, defer difficult areas for bounded smaller reads, and continue to healthy regions after isolated Windows I/O errors. A local **opt-in** anomaly history can prioritize known weak offsets on subsequent quick scans. The desktop GUI stages the job and asks the user to press **Start job** before I/O; it also checks optional health-tool prerequisites and offers a consent-based WinGet installer on Windows. See [Adaptive scanning and setup](docs/ADAPTIVE_SCANNING_AND_SETUP.md). This is not yet certified for physical-drive repair or public beta on valuable disks.
+
+**RAM-only versus history:** RAM-only keeps sector data and transaction state in process RAM and never saves a recovery image or sector journal. An independently selected “Remember bad/slow locations” option may save a small, local, offsets-only diagnostic history on the host computer. It stores no sector bytes, file contents, or write authorization. Disable it when absolutely no diagnostic files are desired.
+
+**Repeat Quick Repair:** Each physical-drive session uses a new recorded random sampling seed. The selected locations are stratified across the disk and processed in address order; a repeat run can inspect different areas. Saved anomaly locations (when enabled) are rechecked separately. A new seed does not establish full-disk integrity. Synthetic image tests retain deterministic sampling.

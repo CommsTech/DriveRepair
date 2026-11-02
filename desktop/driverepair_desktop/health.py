@@ -41,6 +41,10 @@ def health_snapshot(device: Device,
               else 'smart_passed_limited' if passed is True
               else 'unknown')
     nvme = raw.get('nvme_smart_health_information_log') or {}
+    rpm = raw.get('rotation_rate')
+    protocol = str((raw.get('device') or {}).get('protocol') or '').lower()
+    reported_medium = ('ssd' if 'nvme' in protocol or type(rpm) is int and rpm == 0
+                       else 'hdd' if type(rpm) is int and rpm > 0 else 'unknown')
     temp = raw.get('temperature') or {}
     ata = raw.get('ata_smart_attributes') or {}
     attrs = []
@@ -54,6 +58,8 @@ def health_snapshot(device: Device,
         'device': device.public(),
         'smartctl_exit_status': proc.returncode,
         'smart_status_passed': passed if isinstance(passed, bool) else None,
+        'reported_medium': reported_medium,
+        'rotation_rate_rpm': rpm if type(rpm) is int and rpm > 0 else None,
         'temperature_c': temp.get('current'),
         'nvme': {k: nvme.get(k) for k in ('percentage_used', 'media_errors',
                  'num_err_log_entries', 'unsafe_shutdowns', 'critical_warning', 'power_on_hours')
@@ -126,6 +132,7 @@ def windows_storage_health(device: Device,
         'windows_storage': raw,
         'smartctl_exit_status': None,
         'smart_status_passed': None,
+        'reported_medium': 'unknown',
         'temperature_c': None,
         'nvme': {},
         'ata_selected_raw_attributes': [],

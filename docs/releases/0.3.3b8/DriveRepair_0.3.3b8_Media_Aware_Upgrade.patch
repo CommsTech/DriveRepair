@@ -1,0 +1,1125 @@
+diff --git a/.gitea/workflows/ci.yml b/.gitea/workflows/ci.yml
+index c582118..ea665f0 100644
+--- a/.gitea/workflows/ci.yml
++++ b/.gitea/workflows/ci.yml
+@@ -88,7 +88,7 @@ jobs:
+       - name: Portable GUI to recovery engine image test
+         working-directory: desktop
+         env:
+-          DRIVEREPAIR_SMOKE_PYZ: ../dist/DriveRepair-0.3.3b7.pyz
++          DRIVEREPAIR_SMOKE_PYZ: ../dist/DriveRepair-0.3.3b8.pyz
+         run: xvfb-run -a python -m unittest discover -s tests -p test_gui_workflows.py -v
+ 
+   native-recovery-core:
+@@ -121,6 +121,6 @@ jobs:
+       - name: Verify CLI offline rescue commands are packaged
+         run: |
+           python scripts/build_desktop.py --no-wheel
+-          python dist/DriveRepair-0.3.3b7.pyz list-all-linux --help
+-          python dist/DriveRepair-0.3.3b7.pyz plan-system-recovery --help
+-          python dist/DriveRepair-0.3.3b7.pyz rescue-system --help
++          python dist/DriveRepair-0.3.3b8.pyz list-all-linux --help
++          python dist/DriveRepair-0.3.3b8.pyz plan-system-recovery --help
++          python dist/DriveRepair-0.3.3b8.pyz rescue-system --help
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index c2d794e..c399358 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,3 +1,14 @@
++## 0.3.3b8 (2026-11-02) — Media-aware guided scanning
++
++- Exact-model SMR classification (Seagate ST1000LM048), conservative unknown profiles, NVMe/SSD distinctions.
++- Quick Repair 10% unique-address coverage with bounded stratified random sampling, per-hardware-session recorded seeds, honest coverage metadata.
++- Measured early-read transfer-size calibration and full-scan adaptive growth/shrink; 1117 deferred retries remain separate from source writes.
++- Bounded read-only left/right inspection of eligible repair regions; optional CMR-only advanced neighbor rewrites after independent repeated reads.
++- Smaller targeted rewrite extents than the large scan chunks; no raw-drive writes permitted by these profiles alone.
++- Selected-disk Windows Get-Disk query to reduce whole-enumeration timeouts; retain identity fail-closed behavior and scan results if recheck fails.
++- GUI media information, simple-by-default settings, explicit Start job and conditional dependency-install button.
++- Expanded synthetic regression suite. **No Windows USB-dock, flash, firmware or boot-hardware validation.**
++
+ ## 0.3.3b7 — Adaptive I/O, error continuation, staged UI and dependency readiness
+ 
+ - Full scans adapt read sizes (bounded to 8 MiB); Windows native I/O error 1117 is differentiated from invalid requests.
+diff --git a/README.md b/README.md
+index 4e3c193..78fb869 100644
+--- a/README.md
++++ b/README.md
+@@ -2,18 +2,44 @@
+ 
+ **Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
+ 
+-**Current build: 0.3.3b7 / engineering beta candidate — NOT approved for public hardware-repair use.**
++**Current build: 0.3.3b8 / engineering beta candidate — NOT approved for public hardware-repair use.**
+ The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
+ 
+ **If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
+ 
++## Media-aware scanning and simplified workflows (0.3.3b8)
++
++- **Quick Repair checks at least 10% of unique logical addresses**, using
++  deterministic stratified-random positions across the *entire* selected disk.
++  It is not a sub-minute check: a 1 TB disk requires reading at least 100 GB.
++  Do not interpret that 10% sample as proof of health in the other 90%.
++- **Full Repair uses bounded adaptive read sizes.** It checks a few early,
++  sequential regions to select an initial read size, increases on good areas,
++  and defers bad requests for budget-limited smaller reads. Windows I/O error
++  1117 is an I/O error, not proof of physical platter damage.
++- The exact manufacturer-listed `ST1000LM048` model has **SMR** recording.
++  The software avoids interpreting USB as a media type and does not automatically
++  extend rewrites to adjacent SMR logical regions (logical adjacency is not
++  physical adjacency). A CMR-only advanced neighbor rewrite option requires
++  explicit recording confirmation and independently repeated reads.
++- The main Diagnose page hides most expert settings by default. Choose a disk,
++  choose a goal, review storage, then click **Start job**. SMART installation
++  is offered only when missing; nothing installs silently.
++- Device identity must be independently verified before any patient write.
++  Windows selected-disk inventory first tries a bounded `Get-Disk -Number`
++  query instead of repeatedly enumerating every disk. If this hangs, writes
++  remain blocked; read-only findings are still reported rather than discarded.
++- Persistent anomaly hints are optional, metadata-only, and **never authorize writes**. RAM-only
++  operations create no rescue journal and cannot resume after a crash.
++
++See [media-aware scanning guide](docs/MEDIA_AWARE_SCANNING_0.3.3b8.md).
++
+ ## Direct disk repair without a backup image (0.3.3b4)
+ 
+ Open **Diagnose / Rescue**, select the external drive by model, capacity and
+ fingerprint, then use **Quick repair** (sample and investigate suspicious
+ regions) or **Full repair** (read the full surface before selecting safe
+-refresh targets). The primary screen now offers **Volatile RAM only (NO saved
+-files)** or a disk-backed journal. No recovery image or copy is created during
++refresh targets). The primary screen now offers **Volatile RAM only (no recovery image/journal)** or a disk-backed journal. No recovery image or copy is created during
+ in-place maintenance. For a whole-drive rewrite, use **In-place refresh** and
+ select `full`; this is significantly riskier, particularly on failing hardware.
+ 
+@@ -260,6 +286,10 @@ For reproducing and verifying the Windows workflow-button fix, see [GUI acceptan
+ 
+ The Diagnose page now offers read-only **Firmware info**, **Optimize advice** and a bounded **Investigate a failed offset** workflow, avoiding another lengthy full scan to examine a known problem. User journal and repair policy choices are remembered locally, but destructive risk acknowledgments never are. Drive optimization uses Windows native tools only on qualified healthy volumes. Firmware reporting is inventory-only: **NO firmware downloads or flashing.** See [Maintenance and Firmware](docs/MAINTENANCE_AND_FIRMWARE.md) for exact commands and test limitations.
+ 
+-### Adaptive scanning and staged desktop jobs (0.3.3b7)
++### Adaptive scanning and staged desktop jobs (0.3.3b8)
+ 
+ Full surface scans now adapt sector-aligned read request sizes, defer difficult areas for bounded smaller reads, and continue to healthy regions after isolated Windows I/O errors. A local **opt-in** anomaly history can prioritize known weak offsets on subsequent quick scans. The desktop GUI stages the job and asks the user to press **Start job** before I/O; it also checks optional health-tool prerequisites and offers a consent-based WinGet installer on Windows. See [Adaptive scanning and setup](docs/ADAPTIVE_SCANNING_AND_SETUP.md). This is not yet certified for physical-drive repair or public beta on valuable disks.
++
++**RAM-only versus history:** RAM-only keeps sector data and transaction state in process RAM and never saves a recovery image or sector journal. An independently selected “Remember bad/slow locations” option may save a small, local, offsets-only diagnostic history on the host computer. It stores no sector bytes, file contents, or write authorization. Disable it when absolutely no diagnostic files are desired.
++
++**Repeat Quick Repair:** Each physical-drive session uses a new recorded random sampling seed. The selected locations are stratified across the disk and processed in address order; a repeat run can inspect different areas. Saved anomaly locations (when enabled) are rechecked separately. A new seed does not establish full-disk integrity. Synthetic image tests retain deterministic sampling.
+diff --git a/desktop/README.md b/desktop/README.md
+index ce986a4..5a25f42 100644
+--- a/desktop/README.md
++++ b/desktop/README.md
+@@ -1,3 +1,20 @@
++## 0.3.3b8 media-aware scanning and UI
++
++Quick Repair now samples **at least 10% of unique disk addresses**, not 128
++isolated MiB. This can take many minutes on a 1 TB drive and hours on very
++large disks. Full Repair dynamically chooses bounded transfer sizes and returns
++to error regions with smaller reads; neither mode promises original file
++correctness. The selected media profile is shown in the GUI. ST1000LM048 is
++manufacturer-documented SMR; no automatic adjacent-block rewrites are allowed
++for SMR, SSD, NVMe or unidentified recording types. CMR-specific adjacent
++rewrites require advanced CLI confirmation and journal readback checks.
++
++Selecting a workflow only stages it. Press **Start job** after reviewing the
++selected disk and recovery-storage setting. Advanced tuning is collapsed by
++default. If Windows discovery stalls, do not bypass device identity for a raw
++write; use the report from the completed read-only scan and investigate the USB
++dock or Windows Storage service. See `docs/MEDIA_AWARE_SCANNING_0.3.3b8.md`.
++
+ ## No image required: targeted in-place repair (experimental)
+ 
+ The **Diagnose / Rescue** page now shows **Quick repair**, **Full repair**,
+@@ -231,6 +248,10 @@ Tk GUI telemetry/legend tests; Windows and macOS GUI/hardware checks remain pend
+ 
+ Run `firmware-info --device ...` to inspect installed firmware when possible (not update availability); run `probe-region` for bounded, read-only investigation of a known failing offset; run `optimize-volume --device ... --letter E` for advisory Windows volume optimization. Physical optimization requires additional explicit authorization and healthy independent evidence. The GUI now remembers non-sensitive journal/policy selections but always reconfirms write risks. See [Maintenance guide](../docs/MAINTENANCE_AND_FIRMWARE.md).
+ 
+-### Adaptive full-surface scans and explicit Start (0.3.3b7)
++### Adaptive full-surface scans and explicit Start (0.3.3b8)
+ 
+ On the desktop app, choose a workflow and review its options, then click the **Start job** button at the bottom. It changes to **Stop job** while working. Full scans use adaptive I/O and defer hard regions; triage scans are sampled and do not certify the whole disk. The optional **Remember bad/slow disk locations** checkbox saves only local offset metadata and is unavailable in no-file RAM-only operations. On launch, a local tool check identifies whether `smartctl` is available; Windows users may choose the consent-based WinGet installation button. For limitations and exact CLI examples, see `../docs/ADAPTIVE_SCANNING_AND_SETUP.md`.
++
++**RAM-only versus history:** RAM-only keeps sector data and transaction state in process RAM and never saves a recovery image or sector journal. An independently selected “Remember bad/slow locations” option may save a small, local, offsets-only diagnostic history on the host computer. It stores no sector bytes, file contents, or write authorization. Disable it when absolutely no diagnostic files are desired.
++
++**Repeat Quick Repair:** Each physical-drive session uses a new recorded random sampling seed. The selected locations are stratified across the disk and processed in address order; a repeat run can inspect different areas. Saved anomaly locations (when enabled) are rechecked separately. A new seed does not establish full-disk integrity. Synthetic image tests retain deterministic sampling.
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index acb0a76..eb14f37 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b7"
++__version__ = "0.3.3b8"
+diff --git a/desktop/driverepair_desktop/adaptive_scan.py b/desktop/driverepair_desktop/adaptive_scan.py
+index b8546c3..95b5496 100644
+--- a/desktop/driverepair_desktop/adaptive_scan.py
++++ b/desktop/driverepair_desktop/adaptive_scan.py
+@@ -224,3 +224,56 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
+     if investigation is not None:
+         result['error_investigation'] = investigation
+     return result
++
++
++def calibrate_initial_read(reader, *, size: int, sector: int,
++                           max_chunk: int = 16 * 1024 * 1024,
++                           min_chunk: int = 1024 * 1024) -> dict:
++    """Small, read-only transfer-size calibration; never a health certification.
++
++    Tests increasing aligned reads in sequential locations, avoiding repeatedly
++    reading one cached region. Returns the best *observed* good size; later
++    full-scan scheduling still adapts as the drive's state changes. Stops on
++    first failure to avoid hammering a suspected bad region.
++    """
++    if size <= 0 or sector <= 0 or size % sector:
++        raise ValueError('Invalid device geometry')
++    candidates = []
++    c = max(sector, min_chunk // sector * sector)
++    while c <= max_chunk:
++        candidates.append(c)
++        c *= 2
++    readings = []
++    at = 0
++    for request in candidates[:5]:
++        length = min(request, size - at)
++        length -= length % sector
++        if length <= 0:
++            break
++        t0 = time.monotonic()
++        try:
++            received = reader.read_at(at, length)
++            if len(received) != length:
++                raise OSError(errno.EIO, 'short calibration read')
++        except OSError as exc:
++            return {'chosen_chunk': _choose_calibrated(readings, min_chunk),
++                    'measurements': readings, 'ended_on_error': True,
++                    'error_class': classify_error(exc),
++                    'extra_probe_bytes': at}
++        seconds = max(time.monotonic() - t0, 0.000001)
++        readings.append({'chunk': length, 'seconds': round(seconds, 6),
++                         'bytes_per_second': round(length / seconds)})
++        at += length
++    return {'chosen_chunk': _choose_calibrated(readings, min_chunk),
++            'measurements': readings, 'ended_on_error': False,
++            'extra_probe_bytes': at}
++
++
++def _choose_calibrated(records: list[dict], fallback: int) -> int:
++    if not records:
++        return fallback
++    fastest = max(float(r['bytes_per_second']) for r in records)
++    # Favor larger requests when their observed rate is within 95% of best,
++    # reducing syscall overhead without chasing tiny timing fluctuations.
++    return max(int(r['chunk']) for r in records
++               if float(r['bytes_per_second']) >= fastest * .95)
+diff --git a/desktop/driverepair_desktop/cli.py b/desktop/driverepair_desktop/cli.py
+index 19b668a..f611642 100644
+--- a/desktop/driverepair_desktop/cli.py
++++ b/desktop/driverepair_desktop/cli.py
+@@ -55,7 +55,8 @@ from .tsk_recovery import list_deleted_tsk, recover_selected_tsk
+ from .forensics import image_evidence_manifest
+ from .filesystems import detect_filesystems, recover_image
+ from .sensors import SensorSuite
+-from .guided_repair import tuned_scan, plan_targeted_refresh, investigate_failed_ranges
++from .guided_repair import (tuned_scan, plan_targeted_refresh, investigate_failed_ranges,
++                            inspect_adjacent_regions)
+ from .maintenance import (firmware_inventory, windows_volume_facts,
+                           volume_optimization_plan, execute_optimization)
+ from .health import media_from_smart
+@@ -128,7 +129,7 @@ def parser() -> argparse.ArgumentParser:
+         cmd.add_argument('--mode', choices=['quick', 'full'], default='quick')
+         cmd.add_argument('--adaptive-io', action=argparse.BooleanOptionalAction, default=True)
+         cmd.add_argument('--remember-anomalies', action='store_true',
+-                         help='Store small, private offset hints for future triage (disk journal only)')
++                         help='Opt-in tiny local offset history (NO sector bytes; independent of RAM/disk journal)')
+         cmd.add_argument('--journal', help='Required for disk/ramdisk journal only; not used in volatile RAM mode')
+         cmd.add_argument('--journal-backend', choices=['disk', 'memory'], default='disk',
+                          help='disk=crash-recoverable; memory=no files, NO crash recovery (high risk)')
+@@ -136,6 +137,10 @@ def parser() -> argparse.ArgumentParser:
+                          help='I accept loss of active region data on crash/power failure')
+         cmd.add_argument('--resume', action='store_true', help='Resume the targeted refresh journal without rescanning')
+         cmd.add_argument('--max-regions', type=int, default=64)
++        cmd.add_argument('--recording', choices=['auto', 'cmr', 'smr'], default='auto',
++                         help='Advanced: externally verified recording technology; auto never assumes CMR')
++        cmd.add_argument('--rewrite-neighbors', action='store_true',
++                         help='Advanced high-risk: confirmed CMR only, reread both sides before adding writes')
+         cmd.add_argument('--repair-policy', choices=['preserve', 'balanced'], default='balanced',
+                          help='Balanced retries read errors without rewriting unknown bytes')
+         cmd.add_argument('--ack-media-warning', action='store_true',
+@@ -1209,8 +1214,8 @@ def _run_care(args) -> int:
+     """
+     is_hardware = args.command == 'care-external'
+     ram_only = args.journal_backend == 'memory'
+-    if ram_only and getattr(args, 'remember_anomalies', False):
+-        raise ValueError('RAM-only no-file mode cannot persist anomaly history')
++    # An explicitly opted-in, small offsets-only history file is independent
++    # of a RAM-only REGION journal. No sector bytes or recovery image are saved.
+     if ram_only and args.resume:
+         raise ValueError('RAM-only operations cannot resume after an application crash')
+     if ram_only and not args.ack_volatile_journal:
+@@ -1262,8 +1267,14 @@ def _run_care(args) -> int:
+         scan_started = time.monotonic()
+         if not args.resume:
+             settings = tuned_scan(size=size, sector=sector, mode=args.mode,
+-                                  bus=selected.bus if is_hardware else '')
++                                  bus=selected.bus if is_hardware else '',
++                                  model=selected.model if is_hardware else '',
++                                  media_type=(snapshot or {}).get('reported_medium', ''),
++                                  recording='' if args.recording == 'auto' else args.recording)
+             chunk = settings['chunk']
++            # Large read requests identify weak areas; rewrite only a small,
++            # separately verified and journaled subregion (SMR write amplification).
++            repair_chunk = min(1024 * 1024, chunk)
+             hints = (load_hints(selected.fingerprint, size, sector)
+                      if is_hardware and args.remember_anomalies else [])
+             reader = open_device_readonly(selected) if is_hardware else ImageReader(args.image)
+@@ -1292,12 +1303,33 @@ def _run_care(args) -> int:
+                                   'median_ms': info.get('median_ms'),
+                                   'message': 'Checking regions before targeted recovery / repair'},
+                                  force=index == total or bool(info.get('failed')))
++                calibration = None
++                if args.mode == 'full' and args.adaptive_io:
++                    from .adaptive_scan import calibrate_initial_read
++                    calibration = calibrate_initial_read(
++                        reader, size=size, sector=sector,
++                        max_chunk=settings.get('max_chunk', 8*1024*1024),
++                        min_chunk=settings.get('min_chunk', 1024*1024))
++                    if calibration['ended_on_error']:
++                        # A larger request failed: stay at/below the last good size.
++                        chunk = min(chunk, calibration['chosen_chunk'])
++                    else:
++                        # Tiny cached reads can measure artificially fast; do not
++                        # demote a healthy multi-TB scan below its media profile.
++                        chunk = max(chunk, calibration['chosen_chunk'])
++                import secrets
++                sampling_seed = secrets.randbits(64) if is_hardware and args.mode == 'quick' else None
+                 scan = scan_reader(reader, size=size, sector=sector,
+                                    mode=settings['mode'], samples=settings['samples'],
+                                    chunk=chunk, max_errors=settings['max_errors'],
+                                    compare_suspects=(args.mode == 'quick'),
+                                    adaptive_io=bool(args.adaptive_io),
+-                                   history_hints=hints, progress=scan_progress)
++                                   adaptive_min_chunk=settings.get('min_chunk'),
++                                   adaptive_max_chunk=settings.get('max_chunk'),
++                                   history_hints=hints, sample_seed=sampling_seed,
++                                   progress=scan_progress)
++                if calibration is not None:
++                    scan['initial_io_calibration'] = calibration
+                 if (args.repair_policy == 'balanced' and
+                         scan.get('read_error_ranges') and not scan.get('error_investigation') and
+                         scan.get('status') in {'completed_with_read_errors', 'aborted_error_limit'}):
+@@ -1315,16 +1347,31 @@ def _run_care(args) -> int:
+             finally:
+                 reader.close()
+             if is_hardware:
+-                latest = select_external_device(args.device)
+-                assert_stable_identity(selected, latest)
++                # Keep read-only scan findings even when the USB bridge freezes
++                # during the *post-scan* identity query. Such a query must still
++                # block all writes; a cached identity is never authorization.
+                 if args.remember_anomalies:
+                     try:
+                         scan['anomaly_history'] = save_hints(selected.fingerprint, size, sector, scan)
+                     except OSError as exc:
+                         scan['anomaly_history'] = {'saved_hints': 0,
+                                                    'warning': f'Optional history not saved: {type(exc).__name__}'}
++                try:
++                    latest = select_external_device(args.device)
++                    assert_stable_identity(selected, latest)
++                except (RuntimeError, ValueError) as exc:
++                    result = {'status': 'repair_blocked_identity_recheck', 'scan': scan,
++                              'writes_performed': False,
++                              'reason': 'Device identity unavailable after scan',
++                              'next_step': 'Reconnect/verify USB dock and rerun selected-disk identity preflight; '
++                                           'previous scan findings remain read-only hints, never write permission.',
++                              'detail': str(exc)[:1000]}
++                    print(json.dumps(result, indent=2) if args.json else result, flush=True)
++                    return 2
++            scan['media_profile'] = {k: settings[k] for k in
++                ('profile', 'profile_evidence', 'media_note', 'requested_coverage_pct') if k in settings}
+             plan = plan_targeted_refresh(
+-                scan, sector=sector, chunk=chunk, max_regions=args.max_regions,
++                scan, sector=sector, chunk=repair_chunk, max_regions=args.max_regions,
+                 smart=snapshot, hardware=is_hardware,
+                 allow_unknown_health=args.ack_unknown_health,
+                 allow_media_warning=args.ack_media_warning,
+@@ -1343,6 +1390,34 @@ def _run_care(args) -> int:
+                 print(json.dumps(result, indent=2) if args.json else result, flush=True)
+                 return 0
+             targets = plan['targets']
++            # Check immediate left/right sectors as separate READ-ONLY evidence.
++            # SMR/SSD/unknown technologies do not receive automatic neighbor
++            # rewrites. Advanced CMR-only rewrites require explicit option and
++            # verified repeatable data; the journal engine checks once more.
++            adjacent_reader = (open_device_readonly(selected) if is_hardware
++                               else ImageReader(args.image))
++            try:
++                neighbors = inspect_adjacent_regions(
++                    adjacent_reader, size=size, sector=sector, targets=targets,
++                    excluded=(scan.get('read_error_ranges') or []) +
++                             (scan.get('inconsistent_reads') or []) +
++                             (scan.get('repeat_probe_failed_ranges') or []),
++                    window=min(256 * 1024, repair_chunk), max_reads=64)
++            finally:
++                adjacent_reader.close()
++            scan['neighbor_checks'] = neighbors
++            if args.rewrite_neighbors:
++                if settings.get('profile') != 'cmr' or args.recording != 'cmr':
++                    raise ValueError('Adjacent rewrite requires explicit verified CMR recording; '
++                                     'disabled for SMR, SSD and unknown media')
++                targets = sorted(set(targets + neighbors['consistent_neighbors']))
++                if len(targets) > 256 or any(a[0]+a[1] > b[0]
++                                             for a, b in zip(targets, targets[1:])):
++                    raise ValueError('Neighbor writes exceed transaction budget or overlap')
++                plan['targets'] = targets
++                plan['neighbor_write_regions'] = len(neighbors['consistent_neighbors'])
++            else:
++                plan['neighbor_write_regions'] = 0
+         else:
+             # Resume uses the exact original chunk and target queue recorded in the
+             # journal, not a fresh scan that could silently change what is rewritten.
+diff --git a/desktop/driverepair_desktop/devices.py b/desktop/driverepair_desktop/devices.py
+index 60d9295..89dfb44 100644
+--- a/desktop/driverepair_desktop/devices.py
++++ b/desktop/driverepair_desktop/devices.py
+@@ -149,12 +149,15 @@ def _invoke(run: Callable[..., bytes], command: list[str], timeout: float) -> by
+         return run(command)
+ 
+ 
+-def _windows_devices_from_get_disk(run: Callable[..., bytes]) -> list[Device]:
++def _windows_devices_from_get_disk(run: Callable[..., bytes], number: int | None = None) -> list[Device]:
+     # Preferred path when Storage cmdlets are healthy.
+-    script = ("Get-Disk | Select-Object Number,FriendlyName,SerialNumber,UniqueId,"
++    prefix = ("Get-Disk -Number " + str(number) + " -ErrorAction Stop"
++              if number is not None else "Get-Disk")
++    script = (prefix + " | Select-Object Number,FriendlyName,SerialNumber,UniqueId,"
+               "Size,LogicalSectorSize,BusType,IsBoot,IsSystem,IsOffline,Location | "
+               "ConvertTo-Json -Compress -Depth 3")
+-    data = _invoke(run, ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], 12)
++    data = _invoke(run, ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
++                   8 if number is not None else 12)
+     records = json.loads(data.decode("utf-8-sig"))
+     if isinstance(records, dict):
+         records = [records]
+@@ -284,6 +287,23 @@ def list_external_devices(platform: str | None = None,
+ 
+ def select_external_device(identifier: str,
+                            discover: Callable[[], list[Device]] = list_external_devices) -> Device:
++    # A failing USB disk can stall Get-Disk *all* for 12 s, CIM for 20 s,
++    # and WMIC for 20 s. Ask for the selected disk only first. This still
++    # checks IsBoot/IsSystem/IsOffline and requires model/serial/capacity.
++    # Never use a cached inventory or CIM-only fallback as write authority.
++    if sys.platform == 'win32' and discover is list_external_devices:
++        match = re.fullmatch(r'windows:PhysicalDrive(\d+)', identifier)
++        if match:
++            try:
++                direct = _windows_devices_from_get_disk(_run, number=int(match.group(1)))
++                direct = [d for d in direct if d.id == identifier]
++                if len(direct) == 1:
++                    return direct[0]
++                raise RuntimeError('The selected disk is no longer a verified external, online, non-system disk')
++            except RuntimeError as exc:
++                raise RuntimeError('Selected-disk identity query failed; reconnect the USB dock, '
++                                   'check Windows Disk Management, and retry. No cached device '
++                                   'information can authorize a disk write. ' + str(exc)) from exc
+     matches = [device for device in discover() if device.id == identifier]
+     if len(matches) != 1:
+         raise ValueError("Drive not found in current external-whole-disk inventory. "
+diff --git a/desktop/driverepair_desktop/gui.py b/desktop/driverepair_desktop/gui.py
+index 6b22cb5..2868c3b 100644
+--- a/desktop/driverepair_desktop/gui.py
++++ b/desktop/driverepair_desktop/gui.py
+@@ -19,6 +19,7 @@ from pathlib import Path
+ from .rescue_display import RescueDisplayState, format_duration
+ from .console_ui import fmt_bytes
+ from .preferences import load_preferences, save_preferences, DEFAULTS
++from .media_profiles import identify_profile
+ 
+ 
+ # Industrial dark palette (high-contrast status colors, no purple/glow stack).
+@@ -202,6 +203,7 @@ def launch() -> None:
+     capacity_var = tk.StringVar(value="Free space: not checked")
+     warning_var = tk.StringVar(value="Progress is from committed recovery state; unscanned media stays unknown.")
+     advanced_open = tk.BooleanVar(value=False)
++    expert_settings = tk.BooleanVar(value=False)
+     last_result: dict | None = None
+ 
+     shell = ttk.Frame(root, padding=16)
+@@ -220,7 +222,7 @@ def launch() -> None:
+     prereq_row.pack(fill='x', pady=(3, 0))
+     ttk.Label(prereq_row, textvariable=prerequisite_text, style='Muted.TLabel').pack(side='left')
+     prereq_install = ttk.Button(prereq_row, text='Install SMART tools', state='disabled')
+-    prereq_install.pack(side='right')
++    # Shown only when an optional dependency is missing.
+ 
+     # Keep a large, live dashboard during recovery, but do not fill the
+     # Start Here screen with empty telemetry before a job exists.
+@@ -400,6 +402,7 @@ def launch() -> None:
+     tab_refresh = workflow_tab('refresh', ' In-place refresh ')
+     tab_fs = workflow_tab('filesystem', ' Clone repair ')
+ 
++    # Plain-language landing page; advanced controls remain accessible.
+     # Guided workflows: no unnecessary expertise or hidden destructive defaults.
+     ttk.Label(tab_start, text='What would you like to do?',
+               font=('Segoe UI', 16, 'bold')).pack(anchor='w', pady=(4, 12))
+@@ -852,10 +855,15 @@ def launch() -> None:
+         selected.set(item[0] if item else 'No external drive selected')
+         if item and item[0] in inventory:
+             d = inventory[item[0]]
++            profile = identify_profile(model=d.model, bus=d.bus, sector=d.sector_size)
++            detected_medium.set(f'{profile.kind.upper()} · {profile.evidence}. {profile.maintenance_note}')
+             health_var.set(f'{d.model} · {d.size_bytes/10**9:.2f} GB · {d.bus.upper()} · '
+                            'Health not checked (SMART recommended)')
+     tree.bind('<<TreeviewSelect>>', select_device)
+     ttk.Label(tab_drive, textvariable=selected).pack(anchor="w")
++    detected_medium = tk.StringVar(value='Select a drive to identify its media profile.')
++    ttk.Label(tab_drive, textvariable=detected_medium, style='Muted.TLabel',
++              wraplength=920).pack(anchor='w', pady=(2, 8))
+ 
+     def refresh_devices() -> None:
+         if busy:
+@@ -880,7 +888,7 @@ def launch() -> None:
+ 
+     # The main recovery page must offer the no-image / no-output choice.
+     quick_repair_storage = tk.StringVar(value=(
+-        'Volatile RAM only (NO saved files)' if prefs['repair_storage'] == 'memory'
++        'Volatile RAM only (no recovery image/journal)' if prefs['repair_storage'] == 'memory'
+         else 'Disk journal (crash recoverable)'))
+     remember_weak_regions = tk.BooleanVar(value=True)
+     guided_repair_policy = tk.StringVar(value=(
+@@ -931,8 +939,8 @@ def launch() -> None:
+                     flags += ['--journal-backend', 'memory', '--ack-volatile-journal']
+                 else:
+                     flags += ['--journal-backend', 'disk', '--journal', journal]
+-                    if remember_weak_regions.get():
+-                        flags.append('--remember-anomalies')
++                if remember_weak_regions.get():
++                    flags.append('--remember-anomalies')
+                 start(['care-external', '--device', dev, '--mode', mode,
+                        *flags, '--json'],
+                       f'{mode.title()} scan + targeted in-place repair', risky=True, destructive=True)
+@@ -963,6 +971,9 @@ def launch() -> None:
+                         ("Rescue to image", "rescue"),
+                         ("Resume rescue", "resume")]:
+         ttk.Button(bf, text=label, command=lambda k=kind: device_action(k)).pack(side="left", padx=(0, 6))
++    ttk.Label(tab_drive, text='Quick Repair samples 10% of the disk; Full Repair visits the full surface. '
++              'Choose the operation, check the settings, then press Start job below.',
++              style='Muted.TLabel', wraplength=980).pack(anchor='w', pady=(2, 8))
+     policy_row = ttk.Frame(tab_drive)
+     policy_row.pack(fill='x', pady=(4, 2))
+     ttk.Label(policy_row, text='Repair policy:').pack(side='left')
+@@ -972,13 +983,14 @@ def launch() -> None:
+                  width=52).pack(side='left', padx=(6, 12))
+     ttk.Checkbutton(policy_row, text='Allow repair of verified candidates on SMART warning (high risk)',
+                     variable=ack_media_warn).pack(side='left')
+-    ttk.Checkbutton(tab_drive, text='Remember bad/slow disk locations (private metadata only; disk journal mode)',
+-                    variable=remember_weak_regions).pack(anchor='w', pady=(1, 4))
++    history_checkbox = ttk.Checkbutton(tab_drive, text='Remember bad/slow disk locations (optional local metadata; no sector bytes)',
++                    variable=remember_weak_regions)
++    history_checkbox.pack(anchor='w', pady=(1, 4))
+     storage = ttk.Frame(tab_drive)
+     storage.pack(fill='x', pady=(2, 8))
+     ttk.Label(storage, text='Temporary region storage:').pack(side='left')
+     ttk.Combobox(storage, textvariable=quick_repair_storage, state='readonly', width=42,
+-                 values=['Volatile RAM only (NO saved files)',
++                 values=['Volatile RAM only (no recovery image/journal)',
+                          'Disk journal (crash recoverable)']).pack(side='left', padx=8)
+     ttk.Label(storage, text='No image created; RAM-only loses crash recovery.',
+               style='Muted.TLabel').pack(side='left')
+@@ -1046,6 +1058,19 @@ def launch() -> None:
+                command=investigate_error_region).pack(side='left')
+     ttk.Label(tools_row, text='Use a byte offset reported by a stopped Full Scan.',
+               style='Muted.TLabel').pack(side='left', padx=8)
++    expert_frames = (policy_row, history_checkbox, secondary, tools_row)
++    def show_expert_settings() -> None:
++        if expert_settings.get():
++            for panel in expert_frames:
++                if not panel.winfo_manager():
++                    panel.pack(fill='x', pady=(3, 4))
++        else:
++            for panel in expert_frames:
++                panel.pack_forget()
++    ttk.Checkbutton(tab_drive, text='Advanced settings · firmware, benchmarks, risk policies',
++                    variable=expert_settings, command=show_expert_settings).pack(anchor='w', pady=(2, 8))
++    # Show device selection, goal, journal choice and Start by default.
++    show_expert_settings()
+     unknown_health_override = tk.BooleanVar(value=False)
+     ttk.Checkbutton(secondary, text="Permit manual risk override if SMART is unavailable",
+                     variable=unknown_health_override).pack(side="left", padx=(4, 0))
+@@ -1696,10 +1721,13 @@ def launch() -> None:
+                     if tools.get('smart_health_available'):
+                         prerequisite_text.set('SMART tools ready · Core scanning works without optional forensic tools')
+                         prereq_install.configure(state='disabled')
++                        prereq_install.pack_forget()
+                     else:
+                         prerequisite_text.set('SMART not installed · Health checks limited; recovery still available')
+                         prereq_install.configure(state=('normal' if tools.get('install_support') == 'winget'
+                                                          else 'disabled'))
++                        if not prereq_install.winfo_manager():
++                            prereq_install.pack(side='right')
+                 elif kind == 'smartctl_install':
+                     prerequisite_text.set('SMART installation finished; rechecking…')
+                     check_prerequisites()
+diff --git a/desktop/driverepair_desktop/guided_repair.py b/desktop/driverepair_desktop/guided_repair.py
+index 23a841e..228832d 100644
+--- a/desktop/driverepair_desktop/guided_repair.py
++++ b/desktop/driverepair_desktop/guided_repair.py
+@@ -14,18 +14,34 @@ from collections import deque
+ from .health import media_from_smart, transport_from_smart
+ 
+ 
+-def tuned_scan(*, size: int, sector: int, mode: str, bus: str = "") -> dict:
+-    """Deterministic bounded-memory defaults; performance claims need hardware tests."""
+-    if mode not in {"quick", "full"} or size <= 0 or sector <= 0:
+-        raise ValueError("Invalid assisted scan request")
+-    # Large disks need larger sequential reads, not millions of progress events.
+-    chunk = 4 * 1024 * 1024 if mode == "full" and size >= 512 * 1024**3 else 1024 * 1024
+-    chunk = max(sector, (chunk + sector - 1) // sector * sector)
+-    samples = 256 if size >= 1024**4 else 128
+-    if mode == "quick" and bus.lower() in {"usb", "7", "12", "firewire"}:
+-        samples = min(samples, 128)  # avoid exhausting marginal USB docks
+-    return {"mode": "triage" if mode == "quick" else "full",
+-            "chunk": chunk, "samples": samples, "max_errors": 16}
++def tuned_scan(*, size: int, sector: int, mode: str, bus: str = "",
++               model: str = "", media_type: str = "", recording: str = "") -> dict:
++    """Media-aware read settings; quick mode samples >=10% of the disk.
++
++    The quick scan intentionally takes meaningful time on multi-TB devices:
++    sampling 10% of a 12 TB drive is ~1.2 TB of I/O. This is NOT a 2-second
++    screening test. Historical problem regions are additional read-only hints.
++    """
++    from .media_profiles import identify_profile, quick_coverage_plan
++    if mode not in {'quick', 'full'} or size <= 0 or sector <= 0 or size % sector:
++        raise ValueError('Invalid assisted scan request')
++    profile = identify_profile(model=model, bus=bus, media_type=media_type,
++                               recording=recording, sector=sector)
++    if mode == 'quick':
++        quick_chunk = profile.quick_chunk
++        # Bound the progress queue for multi-TB scans without accepting a
++        # smaller-than-requested percentage. An expensive 10% read is honest.
++        while quick_coverage_plan(size, quick_chunk)['samples'] > 100000:
++            quick_chunk *= 2
++        plan = quick_coverage_plan(size, quick_chunk)
++        return {'mode': 'triage', 'chunk': quick_chunk,
++                'samples': plan['samples'], 'max_errors': 10000,
++                'requested_coverage_pct': 10.0, 'profile': profile.kind,
++                'profile_evidence': profile.evidence, 'media_note': profile.maintenance_note}
++    return {'mode': 'full', 'chunk': profile.full_start_chunk, 'samples': 128,
++            'max_errors': 10000, 'max_chunk': profile.full_max_chunk,
++            'min_chunk': profile.read_min_chunk, 'profile': profile.kind,
++            'profile_evidence': profile.evidence, 'media_note': profile.maintenance_note}
+ 
+ 
+ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
+@@ -232,3 +248,59 @@ def plan_targeted_refresh(scan: dict, *, sector: int, chunk: int,
+                   "are manufactured. Unresolved data requires separate rescue or explicit "
+                   "destructive sector reinitialization, not automatic overwrites."),
+     }
++
++
++def inspect_adjacent_regions(reader, *, size: int, sector: int,
++                             targets: list[tuple[int, int]],
++                             excluded: list[dict] | None = None,
++                             window: int = 256 * 1024,
++                             max_reads: int = 64) -> dict:
++    """Read BOTH sides of verified target regions; no source writes.
++
++    Adjoining LBAs are not necessarily physically adjacent tracks, especially
++    through SMR translation layers, SSD FTLs or USB bridge mappings. Returning
++    a consistent read is NOT proof of original data correctness. Only callers
++    with separately authorized CMR maintenance may add these to a write plan.
++    """
++    if size <= 0 or sector <= 0 or size % sector or window < sector or max_reads < 2:
++        raise ValueError('Invalid neighbor inspection budget')
++    window = (window // sector) * sector
++    forbidden = excluded or []
++    probes = []
++    for off, length in targets:
++        for neighbor, nlen in ((max(0, off - window), min(window, off)),
++                               (off + length, min(window, max(0, size - off - length)))):
++            if (nlen < sector or neighbor % sector or
++                    any(neighbor < t_off + t_len and t_off < neighbor + nlen
++                        for t_off, t_len in targets) or
++                    any(isinstance(r, dict) and type(r.get('offset')) is int and
++                        type(r.get('length')) is int and
++                        neighbor < r['offset'] + r['length'] and
++                        r['offset'] < neighbor + nlen for r in forbidden)):
++                continue
++            probes.append((neighbor, nlen))
++    good, rejected, seen = [], [], set()
++    calls = 0
++    for off, length in probes:
++        if (off, length) in seen:
++            continue
++        seen.add((off, length))
++        if calls + 2 > max_reads:
++            rejected.append({'offset': off, 'length': length, 'reason': 'budget_exhausted'})
++            continue
++        try:
++            a = reader.read_at(off, length)
++            b = reader.read_at(off, length)
++            calls += 2
++            if len(a) != length or a != b:
++                rejected.append({'offset': off, 'length': length, 'reason': 'not_repeatable'})
++            else:
++                good.append((off, length))
++        except OSError as exc:
++            calls += 2   # Conservative budget charge; may have done just one.
++            from .adaptive_scan import classify_error
++            rejected.append({'offset': off, 'length': length, 'reason': 'io_error',
++                             'classification': classify_error(exc)})
++    return {'consistent_neighbors': sorted(set(good)), 'rejected_neighbors': rejected,
++            'read_budget_used': calls, 'no_writes': True,
++            'original_bytes_proven_correct': False}
+diff --git a/desktop/driverepair_desktop/health.py b/desktop/driverepair_desktop/health.py
+index cb0db76..4bb42ee 100644
+--- a/desktop/driverepair_desktop/health.py
++++ b/desktop/driverepair_desktop/health.py
+@@ -41,6 +41,10 @@ def health_snapshot(device: Device,
+               else 'smart_passed_limited' if passed is True
+               else 'unknown')
+     nvme = raw.get('nvme_smart_health_information_log') or {}
++    rpm = raw.get('rotation_rate')
++    protocol = str((raw.get('device') or {}).get('protocol') or '').lower()
++    reported_medium = ('ssd' if 'nvme' in protocol or type(rpm) is int and rpm == 0
++                       else 'hdd' if type(rpm) is int and rpm > 0 else 'unknown')
+     temp = raw.get('temperature') or {}
+     ata = raw.get('ata_smart_attributes') or {}
+     attrs = []
+@@ -54,6 +58,8 @@ def health_snapshot(device: Device,
+         'device': device.public(),
+         'smartctl_exit_status': proc.returncode,
+         'smart_status_passed': passed if isinstance(passed, bool) else None,
++        'reported_medium': reported_medium,
++        'rotation_rate_rpm': rpm if type(rpm) is int and rpm > 0 else None,
+         'temperature_c': temp.get('current'),
+         'nvme': {k: nvme.get(k) for k in ('percentage_used', 'media_errors',
+                  'num_err_log_entries', 'unsafe_shutdowns', 'critical_warning', 'power_on_hours')
+@@ -126,6 +132,7 @@ def windows_storage_health(device: Device,
+         'windows_storage': raw,
+         'smartctl_exit_status': None,
+         'smart_status_passed': None,
++        'reported_medium': 'unknown',
+         'temperature_c': None,
+         'nvme': {},
+         'ata_selected_raw_attributes': [],
+diff --git a/desktop/driverepair_desktop/media_profiles.py b/desktop/driverepair_desktop/media_profiles.py
+new file mode 100644
+index 0000000..29fc54e
+--- /dev/null
++++ b/desktop/driverepair_desktop/media_profiles.py
+@@ -0,0 +1,84 @@
++"""Evidence-scoped media profiles for DriveRepair.
++
++A USB bridge is a transport, NOT a recording technology. Unknown media stays
++unknown. Profiles tune *reads*; no profile is itself a write authorization.
++"""
++from __future__ import annotations
++
++from dataclasses import dataclass
++import re
++
++MIB = 1024 * 1024
++
++# Manufacturer datasheet, BarraCuda 2.5 DS1907: ST1000LM048 = SMR.
++# Never extrapolate model families to all Seagate drives.
++KNOWN_SMR_MODELS = frozenset({'ST1000LM048', 'ST500LM030', 'ST500LM034'})
++
++
++@dataclass(frozen=True)
++class MediaProfile:
++    kind: str
++    evidence: str
++    quick_chunk: int
++    full_start_chunk: int
++    full_max_chunk: int
++    read_min_chunk: int
++    quick_fraction: float = 0.10
++    neighbor_rewrite: bool = False
++    maintenance_note: str = ''
++
++
++def identify_profile(*, model: str = '', bus: str = '', media_type: str = '',
++                     recording: str = '', sector: int = 512) -> MediaProfile:
++    """Prefer confirmed recording data, then exact model evidence; never guess CMR.
++
++    media_type may be supplied from a reliable OS storage-property query; it is
++    not inferred from the word 'USB'. recording must be verified independently.
++    """
++    if sector <= 0 or sector & (sector - 1):
++        raise ValueError('Invalid logical sector size')
++    model_id = re.sub(r'[^A-Z0-9]', '', model.upper())
++    bus_id = bus.strip().lower()
++    recording_id = recording.strip().lower()
++    medium = media_type.strip().lower()
++    if recording_id not in {'', 'smr', 'cmr'}:
++        raise ValueError('Unknown recording technology')
++    if recording_id == 'smr' or (not recording_id and any(model_id.startswith(m) for m in KNOWN_SMR_MODELS)):
++        kind, evidence = 'smr', ('confirmed recording' if recording_id else 'manufacturer model datasheet')
++    elif recording_id == 'cmr':
++        kind, evidence = 'cmr', 'confirmed recording'
++    elif bus_id in {'nvme', 'nvm express'}:
++        kind, evidence = 'nvme', 'NVMe protocol'
++    elif medium in {'ssd', 'solid state', 'solid-state'}:
++        kind, evidence = 'ssd', 'reported solid-state medium'
++    elif medium in {'hdd', 'hard disk', 'rotational'}:
++        kind, evidence = 'hdd_unknown_recording', 'reported rotational medium; recording unspecified'
++    else:
++        kind, evidence = 'unknown', 'no authoritative medium/recording identification'
++    # Large, aligned sequential requests for good regions, bounded follow-up
++    # reads for problem areas. Device/adapter max-transfer limits can be lower.
++    specs = {
++        'smr': (16, 4, 16, 256, 'Avoid adjacent random writes; firmware may rewrite entire shingled bands.'),
++        'cmr': (16, 4, 16, 256, 'Qualify every neighbor independently before any authorized write.'),
++        'hdd_unknown_recording': (8, 2, 8, 256, 'Do not assume CMR or write adjacent blocks.'),
++        'ssd': (16, 4, 16, 128, 'Avoid unnecessary refresh writes, which consume flash endurance.'),
++        'nvme': (16, 4, 16, 128, 'Prefer health logs and controller-level maintenance; avoid write amplification.'),
++        'unknown': (8, 1, 8, 256, 'Identify underlying media before choosing write-intensive maintenance.'),
++    }
++    quick, initial, maximum, minimum_kib, note = specs[kind]
++    aligned = lambda n: max(sector, (n // sector) * sector)
++    return MediaProfile(kind, evidence, aligned(quick * MIB), aligned(initial * MIB),
++                        aligned(maximum * MIB), aligned(minimum_kib * 1024),
++                        maintenance_note=note)
++
++
++def quick_coverage_plan(size: int, chunk: int, *, fraction: float = 0.10) -> dict:
++    """Plan >= fraction of unique addresses without keeping a block-sized array."""
++    if size <= 0 or chunk <= 0 or not 0 < fraction <= 1:
++        raise ValueError('Invalid coverage plan')
++    blocks = (size + chunk - 1) // chunk
++    # For the tail, a ceiling on block count alone might not reach 10%.
++    selected = min(blocks, max(1, __import__('math').ceil((size * fraction) / chunk) + 1))
++    return {'samples': selected, 'requested_coverage_pct': fraction * 100,
++            'planned_min_bytes': int(size * fraction), 'chunk': chunk,
++            'estimated_min_read_seconds_at_120_mib_s': size * fraction / (120*MIB)}
+diff --git a/desktop/driverepair_desktop/scanner.py b/desktop/driverepair_desktop/scanner.py
+index bba289c..0c8c43f 100644
+--- a/desktop/driverepair_desktop/scanner.py
++++ b/desktop/driverepair_desktop/scanner.py
+@@ -138,7 +138,7 @@ def open_device_readonly(device: Device) -> Reader:
+     return UnixReader(device)
+ 
+ 
+-def scan_offsets(size: int, chunk: int, mode: str, samples: int):
++def scan_offsets(size: int, chunk: int, mode: str, samples: int, sample_seed: int | None = None):
+     if size <= 0 or chunk <= 0 or samples < 1 or mode not in {"sample", "full", "triage"}:
+         raise ValueError("Invalid scan parameters")
+     blocks = (size + chunk - 1) // chunk
+@@ -155,7 +155,7 @@ def scan_offsets(size: int, chunk: int, mode: str, samples: int):
+         # interior stratum uses a deterministic pseudo-random offset. This
+         # samples locations, not a statistically proven health distribution.
+         n = min(samples, blocks)
+-        rng = random.Random(0xD12E5C4A ^ blocks ^ n)
++        rng = random.Random(0xD12E5C4A ^ blocks ^ n ^ (sample_seed or 0))
+         selected = set()
+         for i in range(n):
+             lo = i * blocks // n
+@@ -171,6 +171,9 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
+                 samples: int = 128, chunk: int = 1024 * 1024, max_errors: int = 16,
+                 compare_suspects: bool = False, adaptive_io: bool = False,
+                 history_hints: list[dict] | None = None,
++                adaptive_min_chunk: int | None = None,
++                adaptive_max_chunk: int | None = None,
++                sample_seed: int | None = None,
+                 progress: Callable[..., None] | None = None) -> dict:
+     if (not 0 < sector <= 1024 * 1024 or size <= 0 or size % sector or
+             chunk < sector or chunk % sector or not 1 <= max_errors <= 10000 or
+@@ -179,9 +182,10 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
+     if adaptive_io and mode == 'full':
+         from .adaptive_scan import adaptive_full_scan
+         return adaptive_full_scan(reader, size=size, sector=sector, chunk=chunk,
+-                                  max_errors=max_errors, progress=progress)
++                                  max_errors=max_errors, progress=progress,
++                                  min_chunk=adaptive_min_chunk, max_chunk=adaptive_max_chunk)
+     blocks = (size + chunk - 1) // chunk
+-    baseline = list(scan_offsets(size, chunk, mode, samples)) if mode != 'full' else None
++    baseline = list(scan_offsets(size, chunk, mode, samples, sample_seed)) if mode != 'full' else None
+     if mode == 'triage' and history_hints:
+         # Anomaly history is only a HINT. Every bookmarked location is re-read;
+         # never reuse historical success as evidence for a current rewrite.
+@@ -371,8 +375,10 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
+         'planned_chunks': planned,
+         'read_error_chunks': failures,
+         'read_error_ranges': failed_ranges,
++        'read_error_ranges_truncated': failures > len(failed_ranges),
+         'slow_regions': slow_regions,
+         'historical_hints_used': len(history_hints or []),
++        'sampling_seed': sample_seed if mode == 'triage' else None,
+         'slow_region_count': max(slow_region_count, len(slow_regions)),
+         'slow_regions_truncated': slow_region_count > 1000,
+         'inconsistent_reads': inconsistent_reads,
+@@ -380,7 +386,10 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
+         'repeat_probe_failed_ranges': repeat_probe_failed_ranges,
+         'extra_suspect_reads': 2 * min(len(set(anomalous_indices)), 64, samples) if compare_suspects and mode == 'triage' else 0,
+         'follow_up_chunks': max(0, completed - (len(baseline) if baseline is not None else blocks)),
+-        'surface_coverage_pct': round(100 * checked / size, 6),
++        'surface_coverage_pct': round(100 * (sum(min(chunk, size - i * chunk) for i in examined)
++                                             if mode == 'triage' else min(size, checked)) / size, 6),
++        'unique_address_bytes': (sum(min(chunk, size - i * chunk) for i in examined)
++                                 if mode == 'triage' else min(size, checked)),
+         'elapsed_seconds': round(time.monotonic() - started, 3),
+         'notes': ('TRIAGE IS A SPOT-CHECK, not a health certification. ' if mode == 'triage' else '') +
+                  'Readability only; no sector repaired, no writes, no correctness guarantee. '
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index 7fa8da7..0f234a4 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b7"
++version = "0.3.3b8"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_gui_workflows.py b/desktop/tests/test_gui_workflows.py
+index 766998c..bce4284 100644
+--- a/desktop/tests/test_gui_workflows.py
++++ b/desktop/tests/test_gui_workflows.py
+@@ -148,9 +148,17 @@ class RealGuiWorkflowTests(unittest.TestCase):
+             button = next(w for w in widgets if isinstance(w, ttk.Button) and w.cget('text') == 'My external drive is slow or failing')
+             button.invoke()
+             root.update_idletasks()
+-            for text in ('Refresh inventory', 'SMART', 'Quick repair', 'Full repair', 'Benchmark (read-only)', 'Rescue to image'):
++            for text in ('Refresh inventory', 'SMART', 'Quick repair', 'Full repair', 'Rescue to image'):
+                 target = next(w for w in widgets if isinstance(w, ttk.Button) and w.cget('text') == text)
+                 self.assertTrue(target.winfo_ismapped(), f'{text} is hidden after navigation')
++            advanced = next(w for w in widgets if isinstance(w, ttk.Checkbutton)
++                            and 'Advanced settings' in w.cget('text'))
++            benchmark = next(w for w in widgets if isinstance(w, ttk.Button)
++                             and w.cget('text') == 'Benchmark (read-only)')
++            self.assertFalse(benchmark.winfo_ismapped())
++            advanced.invoke()
++            root.update_idletasks()
++            self.assertTrue(benchmark.winfo_ismapped())
+         self.open_app(scenario)
+ 
+     def test_direct_repair_and_ram_only_options_are_visible(self):
+@@ -174,7 +182,7 @@ class RealGuiWorkflowTests(unittest.TestCase):
+             self.assertTrue(match, 'RAM-only mode must be offered alongside disk journaling')
+             self.assertTrue(match[0].winfo_ismapped(), 'RAM-only storage selector is hidden')
+             self.assertIn('Disk journal', match[0].get())  # Safe first-run default
+-            match[0].set('Volatile RAM only (NO saved files)')
++            match[0].set('Volatile RAM only (no recovery image/journal)')
+             self.assertIn('Volatile RAM only', match[0].get())
+             # This test intentionally does not select a real disk or authorize a write.
+         self.open_app(scenario)
+diff --git a/desktop/tests/test_guided_repair.py b/desktop/tests/test_guided_repair.py
+index a419710..d8c1d07 100644
+--- a/desktop/tests/test_guided_repair.py
++++ b/desktop/tests/test_guided_repair.py
+@@ -45,9 +45,11 @@ class GuidedPlanningTests(unittest.TestCase):
+     def test_autotune_is_bounded_for_large_disk(self):
+         x = tuned_scan(size=12 * 10**12, sector=4096, mode='quick', bus='usb')
+         self.assertEqual(x['mode'], 'triage')
+-        self.assertLessEqual(x['samples'], 256)
++        self.assertGreater(x['samples'], 256)
++        self.assertGreaterEqual(x['samples'] * x['chunk'], 0.10 * 12 * 10**12)
++        self.assertLessEqual(x['samples'], 100000)
+         self.assertEqual(x['chunk'] % 4096, 0)
+-        self.assertEqual(tuned_scan(size=12 * 10**12, sector=512, mode='full')['chunk'], 4*1024*1024)
++        self.assertGreaterEqual(tuned_scan(size=12 * 10**12, sector=512, mode='full')['chunk'], 1024*1024)
+ 
+     def test_candidates_only_slow_readable_ranges(self):
+         p = plan_targeted_refresh(scan(), sector=512, chunk=1024)
+diff --git a/desktop/tests/test_media_profiles_and_sampling.py b/desktop/tests/test_media_profiles_and_sampling.py
+new file mode 100644
+index 0000000..e50d77f
+--- /dev/null
++++ b/desktop/tests/test_media_profiles_and_sampling.py
+@@ -0,0 +1,123 @@
++"""No hardware access: SMR profiles, 10% sampling, calibration and neighbors."""
++import errno
++import math
++import unittest
++from unittest import mock
++
++from driverepair_desktop.media_profiles import identify_profile, quick_coverage_plan, MIB
++from driverepair_desktop.guided_repair import tuned_scan, inspect_adjacent_regions
++from driverepair_desktop.scanner import scan_offsets, scan_reader
++from driverepair_desktop.adaptive_scan import calibrate_initial_read
++from driverepair_desktop.devices import _windows_devices_from_get_disk
++
++
++class SyntheticReader:
++    def __init__(self, size, corrupt_at=None):
++        self.size = size
++        self.calls = []
++        self.corrupt_at = corrupt_at
++        self.writes = 0
++
++    def read_at(self, off, length):
++        self.calls.append((off, length))
++        if self.corrupt_at is not None and off <= self.corrupt_at < off + length:
++            err = OSError(errno.EINVAL, 'Windows IO')
++            err.winerror = 1117
++            raise err
++        return b'A' * length
++
++
++class MediaProfileTests(unittest.TestCase):
++    def test_seagate_model_confirmed_smr_even_with_usb(self):
++        for label in ('ST1000LM048', 'ST1000LM 048-2E7172'):
++            p = identify_profile(model=label, bus='usb', sector=512)
++            self.assertEqual(p.kind, 'smr')
++            self.assertFalse(p.neighbor_rewrite)
++            self.assertEqual(p.quick_fraction, .1)
++
++    def test_usb_does_not_imply_cmr_or_ssd(self):
++        p = identify_profile(model='mystery drive', bus='usb')
++        self.assertEqual(p.kind, 'unknown')
++        self.assertFalse(p.neighbor_rewrite)
++
++    def test_nvme_and_ssd_do_not_get_adjacent_write_policy(self):
++        for p in (identify_profile(bus='nvme'), identify_profile(media_type='ssd')):
++            self.assertIn(p.kind, ('ssd', 'nvme'))
++            self.assertFalse(p.neighbor_rewrite)
++
++    def test_quick_10_percent_on_one_and_twelve_tb(self):
++        for capacity in (10**12, 12*10**12):
++            x = tuned_scan(size=capacity, sector=512, mode='quick', bus='usb')
++            self.assertEqual(x['requested_coverage_pct'], 10.0)
++            self.assertLessEqual(x['samples'], 100000)
++            offsets = list(scan_offsets(capacity, x['chunk'], 'triage', x['samples']))
++            self.assertEqual(len(offsets), len(set(a for a, _ in offsets)))
++            self.assertGreaterEqual(sum(length for _, length in offsets), capacity // 10)
++            self.assertLess(sum(length for _, length in offsets), capacity * .12)
++
++    def test_sampling_seed_changes_unvisited_regions_without_losing_coverage(self):
++        capacity = 10**12
++        plan = tuned_scan(size=capacity, sector=512, mode='quick', bus='usb')
++        a = list(scan_offsets(capacity, plan['chunk'], 'triage', plan['samples'], 101))
++        b = list(scan_offsets(capacity, plan['chunk'], 'triage', plan['samples'], 202))
++        self.assertNotEqual(a, b)
++        self.assertEqual(a, list(scan_offsets(capacity, plan['chunk'], 'triage', plan['samples'], 101)))
++        self.assertGreaterEqual(sum(length for _, length in a), capacity // 10)
++        self.assertGreaterEqual(sum(length for _, length in b), capacity // 10)
++
++    def test_exact_unique_coverage_not_double_counted(self):
++        capacity = 64*MIB
++        reader = SyntheticReader(capacity)
++        x = tuned_scan(size=capacity, sector=512, mode='quick', bus='usb')
++        out = scan_reader(reader, size=capacity, sector=512, mode=x['mode'],
++                          samples=x['samples'], chunk=x['chunk'], compare_suspects=True)
++        self.assertGreaterEqual(out['surface_coverage_pct'], 10.0)
++        self.assertLessEqual(out['surface_coverage_pct'], 100.0)
++        self.assertEqual(reader.writes, 0)
++        self.assertEqual(out['unique_address_bytes'], out['attempted_bytes'])
++
++    def test_calibration_only_reads_and_bounds(self):
++        reader = SyntheticReader(64*MIB)
++        result = calibrate_initial_read(reader, size=64*MIB, sector=512)
++        self.assertFalse(result['ended_on_error'])
++        self.assertIn(result['chosen_chunk'], {1,2,4,8,16} if False else {MIB,2*MIB,4*MIB,8*MIB,16*MIB})
++        self.assertLessEqual(len(reader.calls), 5)
++        self.assertEqual(reader.writes, 0)
++
++    def test_calibration_stops_on_media_failure(self):
++        reader = SyntheticReader(64*MIB, corrupt_at=2*MIB)
++        result = calibrate_initial_read(reader, size=64*MIB, sector=512)
++        self.assertTrue(result['ended_on_error'])
++        self.assertEqual(result['error_class'], 'io_device_error_unconfirmed_media')
++        self.assertLessEqual(len(reader.calls), 3)
++
++    def test_neighborhood_checks_both_sides_without_writes(self):
++        reader = SyntheticReader(8*MIB)
++        out = inspect_adjacent_regions(reader, size=8*MIB, sector=512,
++                                       targets=[(2*MIB,MIB)], window=256*1024)
++        self.assertEqual(out['consistent_neighbors'], [(2*MIB-256*1024,256*1024),
++                                                        (3*MIB,256*1024)])
++        self.assertEqual(reader.writes, 0)
++        self.assertFalse(out['original_bytes_proven_correct'])
++
++    def test_neighbor_overlapping_error_quarantined(self):
++        reader = SyntheticReader(8*MIB)
++        out = inspect_adjacent_regions(reader, size=8*MIB, sector=512,
++                                       targets=[(2*MIB,MIB)], window=256*1024,
++                                       excluded=[{'offset':3*MIB,'length':512}])
++        self.assertEqual(len(out['consistent_neighbors']), 1)
++        self.assertNotIn((3*MIB,256*1024), out['consistent_neighbors'])
++
++    def test_targeted_windows_identity_query_rejects_system_drive(self):
++        import json
++        def fake_run(cmd, timeout=None):
++            self.assertIn('Get-Disk -Number 2', cmd[-1])
++            self.assertEqual(timeout, 8)
++            return json.dumps({'Number':2,'FriendlyName':'Disk', 'SerialNumber':'SERIAL',
++                              'Size':4096,'LogicalSectorSize':512,'BusType':'USB',
++                              'IsBoot':True,'IsSystem':False,'IsOffline':False}).encode()
++        self.assertEqual(_windows_devices_from_get_disk(fake_run, 2), [])
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/docs/MEDIA_AWARE_SCANNING_0.3.3b8.md b/docs/MEDIA_AWARE_SCANNING_0.3.3b8.md
+new file mode 100644
+index 0000000..2b77323
+--- /dev/null
++++ b/docs/MEDIA_AWARE_SCANNING_0.3.3b8.md
+@@ -0,0 +1,52 @@
++# DriveRepair 0.3.3b8 — Media-aware scans, repairs, and acceptance testing
++
++## What changed and what did not
++
++A USB, Thunderbolt or SATA connection **does not** tell DriveRepair whether the underlying disk is SMR, CMR, SSD or NVMe. The program uses an exact manufacturer-identified model where supported (`ST1000LM048`, `ST500LM030`, `ST500LM034`), then explicit recording/medium evidence; it otherwise reports `unknown`. This version intentionally has no probabilistic “CMR” inference from latency alone. Seagate BarraCuda 2.5 datasheet DS1907 lists the ST1000LM048 1 TB as **SMR, 512 logical / 4096 physical-byte sectors**. Manufacturer reference: https://www.seagate.com/www-content/datasheets/pdfs/barracuda-2-5-DS1907-3-2005US-en_CA.pdf
++
++### Behavior table
++
++| Confirmed medium | First-pass reads | Suspect follow-up | Patient rewrites |
++|---|---|---|---|
++| SMR | Aligned, larger batched reads; avoid repeated random scanning | Bounded smaller reads, delayed from main pass | Only independently reread/journaled target; **no automatic neighbor writes** |
++| CMR | Aligned sequential/stratified reads; adaptive larger reads | Smaller reads plus left/right inspection | Verified targets; optional explicit `--recording cmr --rewrite-neighbors` requires extra consent |
++| SSD / NVMe | Prefer health, endurance, error-log evidence and read-only integrity checks | Bounded smaller reads | No automatic adjacent rewrites; flash wear and FTL translation cannot be “reversed” by host writes |
++| Unknown / USB bridge | Conservative read calibration; do not assume recording type | Record distinct media vs transport errors | No profile alone authorizes writes |
++
++**Caution:** adjacent *logical* addresses may not be on adjacent physical tracks, and an SMR write may trigger a large internal band rewrite. NVMe controller-managed remapping and SSD NAND endurance make “rewrite next door” an unreliable generic repair rule.
++
++## Quick Repair = 10% unique address coverage
++
++Quick Repair deliberately reads **at least 10% of the source logical address space**. It uses a deterministic stratified pseudo-random set of aligned probes distributed across the whole drive, processed in address order to reduce unnecessary seeks. The sample is reproducible; it is not a statistical certificate of the unvisited 90%. Unique coverage is reported separately from bytes read during retries or initial calibration.
++
++At 120 MiB/s, 100 GB of raw data is a theoretical minimum of about 13 minutes, excluding seek, USB reset, retry and throttling overhead. Multi-TB Quick Repair can be much longer. The application should state these costs to users rather than silently reducing the requested percentage.
++
++Full Repair uses a short early *read-only* calibration (up to five progressive reads) to select a reasonable initial transfer size and then dynamically adjusts between bounded media-aware limits. A blocked or failed initial read ends calibration early. Full scanning skips/delays difficult regions for later sector-aligned smaller requests; it never converts a failed read into verified data.
++
++### Left/right checks and reconditioning
++
++For eligible slow but repeatably readable target regions, DriveRepair checks short immediate left and right windows with two separate reads. Error-bearing or inconsistent windows are excluded. This check **does not prove original bytes are correct**, nor does it authorize a write. Only an explicit advanced CMR recording declaration plus `--rewrite-neighbors` permits verified neighbors to be appended to the already explicit in-place repair transaction. SMR, SSD, NVMe and unknown media cannot use that option.
++
++No arbitrary unreadable sector is overwritten or reinitialized. There is no physical platter smoothing, firmware update, defective NAND repair or universal “like new” certification.
++
++## Windows USB-dock reliability
++
++PowerShell `Get-Disk` can hang when an external drive or its bridge is failing; CIM and WMIC may also time out. After an earlier verified selection, a selected-drive query (`Get-Disk -Number N`) now avoids full inventory when possible, **but still needs the OS to respond**. All raw-drive writers require fresh authority, capacity, serial, identity and offline/volume safety checks. A cached GUI selection or a test result **cannot bypass** them. If the post-scan identity query fails, DriveRepair returns the collected scan and a `repair_blocked_identity_recheck` result with zero writes.
++
++For real hardware, first check Windows Event Viewer > System storage/disk events, USB power, cable, and a known-good direct SATA connection if practical. A prior `WinError 1117` means I/O device error, not proven media failure. Do not retry indefinitely on irreplaceable data.
++
++## Public beta acceptance gates (not yet met)
++
++- [ ] Native Windows discovery tests, selected-disk re-identification, USB disconnect / 1117 / timeout injection.
++- [ ] Safe pre-write locking and no-active-volume tests on Windows, macOS and Linux.
++- [ ] Sacrificial SMR/CMR/SSD/NVMe stress tests, including deliberate interruptions and simulated power loss.
++- [ ] Comparison with ddrescue and professional recovery tools on identical failing-media fixtures.
++- [ ] SMART/firmware detection through USB bridges; never flash firmware automatically.
++- [ ] Operator-guided GUI clickthrough across Windows DPI scales and low-resolution laptop displays.
++- [ ] Rust core compilation, mixed Python/Rust integration and a validated BIOS/UEFI recovery ISO.
++
++This code is **engineering beta only**. Synthetic tests cannot establish media repair safety or recovery superiority.
++
++**RAM-only versus history:** RAM-only keeps sector data and transaction state in process RAM and never saves a recovery image or sector journal. An independently selected “Remember bad/slow locations” option may save a small, local, offsets-only diagnostic history on the host computer. It stores no sector bytes, file contents, or write authorization. Disable it when absolutely no diagnostic files are desired.
++
++**Repeat Quick Repair:** Each physical-drive session uses a new recorded random sampling seed. The selected locations are stratified across the disk and processed in address order; a repeat run can inspect different areas. Saved anomaly locations (when enabled) are rechecked separately. A new seed does not establish full-disk integrity. Synthetic image tests retain deterministic sampling.
+diff --git a/scripts/build_desktop.py b/scripts/build_desktop.py
+index 8e9116a..1b712ac 100644
+--- a/scripts/build_desktop.py
++++ b/scripts/build_desktop.py
+@@ -14,7 +14,7 @@ from pathlib import Path
+ 
+ REPO = Path(__file__).resolve().parent.parent
+ DESKTOP = REPO / 'desktop'
+-VERSION = '0.3.3b7'
++VERSION = '0.3.3b8'
+ 
+ 
+ def command(args: list[str], cwd: Path = DESKTOP) -> None:

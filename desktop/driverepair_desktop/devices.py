@@ -149,12 +149,15 @@ def _invoke(run: Callable[..., bytes], command: list[str], timeout: float) -> by
         return run(command)
 
 
-def _windows_devices_from_get_disk(run: Callable[..., bytes]) -> list[Device]:
+def _windows_devices_from_get_disk(run: Callable[..., bytes], number: int | None = None) -> list[Device]:
     # Preferred path when Storage cmdlets are healthy.
-    script = ("Get-Disk | Select-Object Number,FriendlyName,SerialNumber,UniqueId,"
+    prefix = ("Get-Disk -Number " + str(number) + " -ErrorAction Stop"
+              if number is not None else "Get-Disk")
+    script = (prefix + " | Select-Object Number,FriendlyName,SerialNumber,UniqueId,"
               "Size,LogicalSectorSize,BusType,IsBoot,IsSystem,IsOffline,Location | "
               "ConvertTo-Json -Compress -Depth 3")
-    data = _invoke(run, ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], 12)
+    data = _invoke(run, ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                   8 if number is not None else 12)
     records = json.loads(data.decode("utf-8-sig"))
     if isinstance(records, dict):
         records = [records]
@@ -284,6 +287,23 @@ def list_external_devices(platform: str | None = None,
 
 def select_external_device(identifier: str,
                            discover: Callable[[], list[Device]] = list_external_devices) -> Device:
+    # A failing USB disk can stall Get-Disk *all* for 12 s, CIM for 20 s,
+    # and WMIC for 20 s. Ask for the selected disk only first. This still
+    # checks IsBoot/IsSystem/IsOffline and requires model/serial/capacity.
+    # Never use a cached inventory or CIM-only fallback as write authority.
+    if sys.platform == 'win32' and discover is list_external_devices:
+        match = re.fullmatch(r'windows:PhysicalDrive(\d+)', identifier)
+        if match:
+            try:
+                direct = _windows_devices_from_get_disk(_run, number=int(match.group(1)))
+                direct = [d for d in direct if d.id == identifier]
+                if len(direct) == 1:
+                    return direct[0]
+                raise RuntimeError('The selected disk is no longer a verified external, online, non-system disk')
+            except RuntimeError as exc:
+                raise RuntimeError('Selected-disk identity query failed; reconnect the USB dock, '
+                                   'check Windows Disk Management, and retry. No cached device '
+                                   'information can authorize a disk write. ' + str(exc)) from exc
     matches = [device for device in discover() if device.id == identifier]
     if len(matches) != 1:
         raise ValueError("Drive not found in current external-whole-disk inventory. "
