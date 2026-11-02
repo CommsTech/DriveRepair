@@ -191,29 +191,13 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
             return None
         return float(statistics.median(latency_window))
 
-    def _emit_progress(offset: int, length: int, latency_ms: float, failed: bool) -> None:
-        if not progress:
-            return
-        med = _median_ms()
-        info = {
-            'offset': offset,
-            'length': length,
-            'latency_ms': round(latency_ms, 3),
-            'median_ms': None if med is None else round(med, 3),
-            'failed': failed,
-        }
-        try:
-            progress(min(completed, planned), planned, info)
-        except TypeError:
-            # Older 2-arg callbacks (tests / callers) stay compatible.
-            progress(min(completed, planned), planned)
-
     def attempt(offset: int, length: int) -> bool:
         nonlocal checked, readable, failures, completed, status
         checked += length
         completed += 1
         examined.add(offset // chunk)
         error = None
+        disconnect = False
         t0 = time.monotonic()
         try:
             data = reader.read_at(offset, length)
@@ -226,6 +210,7 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
             if exc.errno in {errno.ENODEV, errno.EBADF, errno.EACCES,
                              errno.EPERM, errno.EINVAL, errno.ENOENT}:
                 status = 'aborted_device_or_access_error'
+                disconnect = exc.errno in {errno.ENODEV, errno.ENOENT, errno.EBADF}
         latency_ms = (time.monotonic() - t0) * 1000
         if error:
             failures += 1
@@ -251,7 +236,20 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
                         'median_ms': round(med, 3),
                     })
                     anomalous_indices.append(offset // chunk)
-        _emit_progress(offset, length, latency_ms, error is not None)
+        med = _median_ms()
+        info = {
+            'offset': offset,
+            'length': length,
+            'latency_ms': round(latency_ms, 3),
+            'median_ms': None if med is None else round(med, 3),
+            'failed': error is not None,
+            'disconnect': disconnect,
+        }
+        if progress:
+            try:
+                progress(min(completed, planned), planned, info)
+            except TypeError:
+                progress(min(completed, planned), planned)
         if failures >= max_errors and status == 'completed':
             status = 'aborted_error_limit'
         return error is None
