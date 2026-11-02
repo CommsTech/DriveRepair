@@ -26,11 +26,16 @@ def linux_properties(name: str, *, sys_root: Path = Path('/sys/class/block')) ->
             'zoned':'zoned'}
     result={'source':'Linux sysfs block queue','write_authorized':False}
     for out, filename in fields.items():
-        try: value=(queue/filename).read_text(encoding='ascii').strip()
-        except (FileNotFoundError,OSError):continue
-        if out=='rotational':result['rotational']=value=='1' if value in {'0','1'} else None
-        elif out=='zoned':result['zoned']=value
-        elif value.isdecimal():result[out]=int(value)
+        try:
+            value=(queue/filename).read_text(encoding='ascii').strip()
+        except (FileNotFoundError,OSError):
+            continue
+        if out=='rotational':
+            result['rotational']=value=='1' if value in {'0','1'} else None
+        elif out=='zoned':
+            result['zoned']=value
+        elif value.isdecimal():
+            result[out]=int(value)
     result['notes']='Queue geometry/capabilities may describe a USB bridge. No SMR/CMR inference from rotational flag.'
     return result
 
@@ -54,15 +59,18 @@ def inspect_readonly(device_id: str, *, platform: str | None = None) -> dict:
     platform=platform or sys.platform
     if platform.startswith('linux'):
         match=re.fullmatch(r'linux:/dev/([a-zA-Z0-9._+-]+)',device_id)
-        if not match:raise ValueError('Select a Linux whole disk ID')
+        if not match:
+            raise ValueError('Select a Linux whole disk ID')
         return linux_properties(match.group(1))
     if platform=='darwin':
         match=re.fullmatch(r'macos:(disk\d+)',device_id)
-        if not match:raise ValueError('Select a macOS whole disk ID')
+        if not match:
+            raise ValueError('Select a macOS whole disk ID')
         return macos_properties(match.group(1))
     if platform=='win32':
         match=re.fullmatch(r'windows:PhysicalDrive(\d+)',device_id)
-        if not match:raise ValueError('Select a Windows physical drive ID')
+        if not match:
+            raise ValueError('Select a Windows physical drive ID')
         from .windows_native import probe_physicaldrive
         return probe_physicaldrive(int(match.group(1)))
     raise RuntimeError('Unsupported host platform')

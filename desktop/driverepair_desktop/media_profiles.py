@@ -66,7 +66,8 @@ def identify_profile(*, model: str = '', bus: str = '', media_type: str = '',
         'unknown': (8, 1, 8, 256, 'Identify underlying media before choosing write-intensive maintenance.'),
     }
     quick, initial, maximum, minimum_kib, note = specs[kind]
-    aligned = lambda n: max(sector, (n // sector) * sector)
+    def aligned(n):
+        return max(sector, (n // sector) * sector)
     return MediaProfile(kind, evidence, aligned(quick * MIB), aligned(initial * MIB),
                         aligned(maximum * MIB), aligned(minimum_kib * 1024),
                         maintenance_note=note)
