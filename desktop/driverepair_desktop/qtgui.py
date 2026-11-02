@@ -605,7 +605,7 @@ def launch():
                     self.result.setText('Same drive detected — resuming read-only scan')
                     self.run_command(['scan','--device',matches[0]['id'],'--mode','full',
                                       '--ack-risk','--resume-scan','--scan-checkpoint',pending['checkpoint'],
-                                      '--progress-jsonl','--json'])
+                                      '--progress-jsonl','--cooperative-stop-stdin','--json'])
                 elif len(matches)>1:
                     self._reconnect_timer.stop()
                     self.result.setText('Ambiguous disk identities — manual verification required')
@@ -673,7 +673,7 @@ def launch():
                     args=['health','--device',dev,'--json']
                 elif kind in {'scanquick','scanfull','resume'}:
                     args=['scan','--device',dev,'--mode','full' if kind in ('scanfull','resume') else 'triage',
-                          '--progress-jsonl','--json']
+                          '--progress-jsonl','--cooperative-stop-stdin','--json']
                     if kind=='scanquick':
                         from .guided_repair import tuned_scan
                         plan=tuned_scan(size=int(d['size_bytes']),sector=int(d['sector_size']),
@@ -878,6 +878,7 @@ def launch():
         def job_done(self,exit_code,_status):
             self.consume('stdout')
             self.consume('stderr')
+            user_stop_requested = self._stop_requested
             self.start.setEnabled(True)
             self.stop.setEnabled(False)
             self.metric_labels['eta'].setText('—')
@@ -897,9 +898,24 @@ def launch():
                 result={}
             text=str(result.get('status') or ('Completed' if exit_code==0 else 'Stopped / failed'))
             self.status.setText(text.replace('_',' ').title())
-            if exit_code==0:
+            if user_stop_requested and exit_code!=0:
+                self.result.setText('Stopped by operator — incomplete scan')
+                self.explain.setText('The requested stop has ended the child process. '
+                    'Previously observed errors are retained in the log; unscanned ranges remain unknown. '
+                    'A forced stop does not prove the pending Windows read completed.')
+            elif exit_code==0:
                 self.result.setText('Job finished — review results')
                 self.explain.setText('A completed read or readback match is not proof of file integrity or restored lifespan.')
+            elif result.get('status') == 'repair_blocked_prewrite_access':
+                self.result.setText('Scan preserved — Windows blocked physical repair')
+                self.explain.setText(str(result.get('error') or 'No lockable volume handle')[:280] +
+                    ' · No in-place writes were performed. Read-only rescue is still available. '
+                    'Do not bypass exclusive access on a RAW or unknown partition.')
+                scan = result.get('scan') if isinstance(result.get('scan'), dict) else {}
+                if scan.get('readable_bytes') is not None:
+                    self.metric_labels['read'].setText(display_size(scan['readable_bytes']))
+                if scan.get('read_error_chunks') is not None:
+                    self.metric_labels['errors'].setText(str(scan['read_error_chunks']))
             elif 'device' in text or 'identity' in text or 'access' in text or 'discon' in text or result.get('scan',{}).get('status')=='aborted_device_or_access_error':
                 self.result.setText('Drive connection interrupted')
                 self.explain.setText('Reconnect the same drive, refresh the list, and select “Continue interrupted full scan”. Reverification is mandatory; no write restarts automatically.')
@@ -981,17 +997,33 @@ def launch():
                 self.result.setText('Stop requested — waiting for safe transaction boundary')
                 self.explain.setText('No write is interrupted mid-transaction. A blocked Windows read '
                     'cannot be forced to finish; do not disconnect while a rewrite is active.')
+            elif self._last_job_kind in ('scanquick','scanfull','resume'):
+                self.proc.write(b'STOP\n')
+                self.result.setText('Stop requested — waiting for the active read to finish')
+                self.explain.setText('No additional scan reads are scheduled after STOP is acknowledged. '
+                    'If Windows never returns the active I/O, DriveRepair will escalate to process termination.')
+                QTimer.singleShot(8000,self._escalate_read_only_stop)
             else:
                 self.proc.terminate()
-                QTimer.singleShot(5000,self._finish_read_only_stop)
+                QTimer.singleShot(6000,self._finish_read_only_stop)
                 self.result.setText('Stopping read-only operation…')
             self.stop.setEnabled(False)
+
+        def _escalate_read_only_stop(self):
+            if (self._stop_requested and self.proc and
+                    self.proc.state()!=QProcess.NotRunning and
+                    self._last_job_kind in ('scanquick','scanfull','resume')):
+                self.result.setText('Windows I/O still blocked — requesting process termination')
+                self.note_log('Cooperative read-only STOP was not acknowledged in 8 seconds; '
+                              'requesting subprocess termination, not disk power cycling.')
+                self.proc.terminate()
+                QTimer.singleShot(6000,self._finish_read_only_stop)
 
         def _finish_read_only_stop(self):
             if (self._stop_requested and self.proc and
                     self.proc.state()!=QProcess.NotRunning and
                     self._last_job_kind not in ('carefull','carequick','careresume')):
-                self.note_log('Read-only process ignored terminate; forcing child exit after 5 s.')
+                self.note_log('Read-only subprocess did not exit after termination; forcing exit. The last kernel I/O result is UNKNOWN.')
                 self.proc.kill()
     app=QApplication.instance() or QApplication(sys.argv)
     app.setFont(QFont('Segoe UI', 10))

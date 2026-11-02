@@ -101,7 +101,7 @@ def _windows_lock_paths(partitions, *, allow_mounted: bool) -> list[str]:
     volume_paths = []
     for partition in partitions:
         if not isinstance(partition, dict) or not isinstance(partition.get('Paths'), list):
-            raise RuntimeError('Unrecognized patient partition access paths')
+            raise RuntimeError('Cannot verify patient partition access paths; no physical writes permitted')
         guids, letters = [], []
         for path in partition['Paths']:
             if path is None or path == '':
@@ -123,8 +123,18 @@ def _windows_lock_paths(partitions, *, allow_mounted: bool) -> list[str]:
             volume_paths.append(guids[0])
         elif letters:
             volume_paths.append(letters[0])
-        elif partition['Paths']:
-            raise RuntimeError('Unrecognized partition without an accessible volume handle')
+        else:
+            # A partition with no mount letter/GUID is NOT equivalent to a
+            # partition-free disk.  It may be RAW, encrypted, reserved, or
+            # simply invisible through this USB bridge.  Without a volume
+            # handle we cannot prove exclusive access.  Fail closed.
+            number = partition.get('PartitionNumber', '?')
+            kind = str(partition.get('Type') or 'unknown')[:80]
+            raise RuntimeError(
+                f'Partition {number} ({kind}) has no accessible lockable Windows volume '
+                'handle. No write was attempted. Use read-only rescue or a validated '
+                'offline recovery environment; do not bypass exclusive access checks.'
+            )
     if len(volume_paths) != len(set(volume_paths)):
         raise RuntimeError('Duplicate volume handles detected')
     return volume_paths
@@ -201,7 +211,8 @@ class WindowsReadWriter:
             f"$errs = @(); $parts = @(Get-Partition -DiskNumber {int(disk_number)} "
             "-ErrorAction SilentlyContinue -ErrorVariable +errs); "
             "if ($errs.Count -gt 0) { throw 'Unable to establish complete patient partition inventory' }; "
-            "@($parts | ForEach-Object { [pscustomobject]@{ Paths=@($_.AccessPaths) } }) | "
+            "@($parts | ForEach-Object { [pscustomobject]@{ PartitionNumber=$_.PartitionNumber; "
+            "Type=[string]$_.Type; Paths=@($_.AccessPaths) } }) | "
             "ConvertTo-Json -Compress -Depth 4"
         )
         try:
