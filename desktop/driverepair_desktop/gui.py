@@ -478,10 +478,42 @@ def launch() -> None:
         pbar["value"] = max(0, min(1000, int(pct * 10)))
         lat = stats["latency_ms"]
         med = stats["median_ms"]
+        # Scan / refresh share this path — fill the summary cards so STARTING is not sticky.
+        if phase == "SCANNING" or event.get("speed_bps") is not None:
+            for label, text in zip(summary_labels, ('BYTES READ', 'UNREADABLE / UNKNOWN',
+                                                    'CURRENT SPEED', 'TIME REMAINING')):
+                label.configure(text=text)
+            recovered_var.set(fmt_bytes(stats["rewritten"]) if stats["rewritten"] else '—')
+            speed_bps = event.get("speed_bps")
+            if speed_bps:
+                speed_var.set(f'{fmt_bytes(int(speed_bps))}/s')
+            eta_s = event.get("eta_seconds")
+            if eta_s is not None:
+                eta_var.set(format_duration(float(eta_s)) if float(eta_s) > 0 else 'Finishing…')
+            if phase == "SCANNING":
+                capacity_var.set('Read-only scan — no destination image')
+                destination_var.set('Destination: not used for scan')
+                legend_var.set('Scan map · . pending   o readable sample   S slow   X unreadable')
+                readiness = event.get('repair_readiness') or {}
+                blockers = readiness.get('blockers') or []
+                if blockers:
+                    warning_var.set('Repair not authorized: ' + '; '.join(blockers[:3]))
+                    warning_label.configure(fg=C['warn'])
+                else:
+                    warning_var.set(
+                        'Metrics present for triage only — not a refresh/repair authorization.'
+                    )
+                    warning_label.configure(fg=C['muted'])
+        if event.get('failed'):
+            errors_var.set('read errors observed')
+        elif phase == "SCANNING" and stats.get('latency_ms') is not None:
+            # Keep unreadable card honest unless failures arrive.
+            if errors_var.get() in {'—', ''}:
+                errors_var.set('none yet')
         metric_var.set(
             f"{pct:5.1f}% done\n"
             f"lat {('—' if lat is None else f'{lat:.0f} ms'):>8}   med {('—' if med is None else f'{med:.0f} ms'):>8}\n"
-            f"rewritten {stats['rewritten'] / (1024 * 1024):.2f} MiB"
+            f"processed {stats['rewritten'] / (1024 * 1024):.2f} MiB"
         )
         symbol = "o"
         if event.get("failed"):
@@ -525,7 +557,14 @@ def launch() -> None:
             if typed != selected_id:
                 messagebox.showerror("Not authorized", "Device ID confirmation did not match; no write started.")
                 return
-        if args and args[0].startswith('rescue-'):
+        # Rescue AND scan/refresh/benchmark need JSONL progress so the dashboard
+        # does not sit forever on STARTING while the child is actively I/O bound.
+        progressive = {
+            'rescue-image', 'rescue-external', 'rescue-system',
+            'scan', 'scan-image', 'refresh-external', 'refresh-image',
+            'benchmark-external', 'last-resort-system-refresh',
+        }
+        if args and args[0] in progressive and '--progress-jsonl' not in args:
             args = [*args, '--progress-jsonl', '--no-live-dashboard']
         command = recovery_command(args)
         last_result = None
@@ -1195,16 +1234,24 @@ def launch() -> None:
                     write(str(value))
                 elif kind == "stderr":
                     line = str(value).rstrip("\n")
-                    if line.startswith("{"):
+                    # Progress JSONL drives the dashboard; keep it out of Advanced log.
+                    payload = line.strip()
+                    json_start = payload.find('{"type":"progress"')
+                    if json_start >= 0:
+                        payload = payload[json_start:]
+                    if payload.startswith("{"):
                         try:
-                            event = json.loads(line)
+                            event = json.loads(payload)
                             if event.get("type") == "progress":
                                 apply_progress(event)
                                 continue
                         except json.JSONDecodeError:
                             pass
-                    if line.strip():
-                        write(line + "\n")
+                    # Ignore bare carriage-return SCAN paints; dashboard already shows %.
+                    stripped = line.strip().lstrip('\r')
+                    if stripped.startswith('SCAN  ') or not stripped:
+                        continue
+                    write(line + "\n")
                 elif kind == 'deleted_error':
                     catalog_source['path'] = ''
                     candidate_status.set('Preview failed: ' + str(value))

@@ -22,8 +22,8 @@ from .scanner import ImageReader, open_device_readonly, scan_reader
 from .benchmark import read_benchmark, compare_benchmarks
 from .carving import carve_image
 from .archive_recovery import salvage_zip
-from .health import health_snapshot
-from .recovery import (rescue_reader, inspect_rescue_status,
+from .health import health_snapshot, try_health_snapshot, ScanHealthTracker
+from .recovery import (inspect_rescue_status,
                        _rescue_writer_lock, _rescue_reader_locked)
 from .fat32_undelete import undelete_fat32, list_deleted_fat32
 from .filesystem_repair import check_ext_image, repair_ext_image
@@ -84,6 +84,10 @@ def parser() -> argparse.ArgumentParser:
                          help="Stop after this many failing reads (default: 16)")
         cmd.add_argument("--ack-risk", action="store_true",
                          help="Required for full hardware scans; reading failing disks can worsen damage")
+        cmd.add_argument("--progress-jsonl", action="store_true",
+                         help="Emit throttled JSON progress lines on stderr for GUI consumers")
+        cmd.add_argument("--no-live-dashboard", action="store_true",
+                         help="Reserved for GUI child processes (scan has no TTY dashboard)")
         cmd.add_argument("--json", action="store_true")
     rescue_status = sub.add_parser(
         'rescue-status', help='READ-ONLY: inspect recovery journal (image size is NOT progress)')
@@ -1197,14 +1201,82 @@ def run(argv: list[str] | None = None) -> int:
             sector = 512 if size % 512 == 0 else 1
             context = {"image_test_file": os.path.basename(image)}
 
+        smart = None
+        bus = ""
+        if args.command == "scan":
+            bus = device.bus
+            smart = try_health_snapshot(device)
+            if smart is None:
+                print("SMART unavailable on this path — media health stays UNKNOWN until evidence arrives.",
+                      file=sys.stderr)
+            else:
+                print(f"SMART baseline: {smart.get('status')} (does not authorize repair).",
+                      file=sys.stderr)
+        health = ScanHealthTracker(bus=bus, smart=smart)
         try:
             print("READ-ONLY scan. This DOES NOT repair disks or verify data integrity.",
                   file=sys.stderr)
-            def report(current: int, total: int) -> None:
-                if current == total or current == 1 or current % max(1, total // 10) == 0:
-                    pct = int(100 * current / max(1, total))
+            scan_emitter = ProgressEmitter(enabled=bool(getattr(args, "progress_jsonl", False)),
+                                           min_interval_s=0.2)
+            scan_started = time.perf_counter()
+            last_human = [0.0]
+
+            def report(current: int, total: int, info: dict | None = None) -> None:
+                total = max(1, total)
+                pct = 100.0 * current / total
+                chunk = args.chunk_mib * 1024 * 1024
+                info = info or {}
+                offset = int(info.get('offset', min(size, max(0, (current - 1) * chunk)) if current else 0))
+                latency_ms = info.get('latency_ms')
+                median_ms = info.get('median_ms')
+                failed = bool(info.get('failed'))
+                disconnect = bool(info.get('disconnect'))
+                elapsed = max(1e-6, time.perf_counter() - scan_started)
+                bytes_done = min(size, current * chunk)
+                speed = bytes_done / elapsed
+                eta = ((size - bytes_done) / speed) if speed > 0 and current < total else 0.0
+                health_view = health.observe(
+                    latency_ms=None if latency_ms is None else float(latency_ms),
+                    median_ms=None if median_ms is None else float(median_ms),
+                    failed=failed,
+                    disconnect=disconnect,
+                )
+                scan_emitter.emit({
+                    "phase": "SCANNING",
+                    "probe_index": current,
+                    "probe_total": total,
+                    "refresh_index": current,
+                    "refresh_total": total,
+                    "offset": offset,
+                    "size": size,
+                    "rewritten_bytes": bytes_done,
+                    "verified_bytes": 0 if failed else bytes_done,
+                    "latency_ms": latency_ms,
+                    "median_ms": median_ms,
+                    "failed": failed,
+                    "message": (
+                        f"Read-only {args.mode} scan {current}/{total}"
+                        + (f"  lat {latency_ms:.0f} ms" if latency_ms is not None else "")
+                        + (f"  med {median_ms:.0f} ms" if median_ms is not None else "")
+                    ),
+                    "health": health_view,
+                    "eta_seconds": eta,
+                    "speed_bps": speed,
+                    "repair_readiness": health.repair_readiness(),
+                }, force=(current <= 1 or current >= total or failed
+                          or health_view["mechanical"] in {"WATCH", "FAIL"}
+                          or health_view["media"] in {"WARN", "FAIL"}
+                          or health_view["transport"] in {"WARN", "FAIL"}))
+                # When JSONL is on (GUI child), do not also paint a \r TTY bar —
+                # it concatenates onto JSON lines and floods the Advanced log.
+                if scan_emitter.enabled:
+                    return
+                now = time.perf_counter()
+                if (current == total or current == 1 or current % max(1, total // 10) == 0
+                        or now - last_human[0] >= 2.0):
+                    last_human[0] = now
                     bar = cui.progress_bar(current, total, 20)
-                    print(f"\rSCAN  {current}/{total} {pct:3d}% {bar}   ", end="",
+                    print(f"\rSCAN  {current}/{total} {pct:5.1f}% {bar}   ", end="",
                           file=sys.stderr, flush=True)
             result = scan_reader(reader, size=size, sector=sector,
                                  mode=args.mode, samples=args.samples,
@@ -1215,6 +1287,14 @@ def run(argv: list[str] | None = None) -> int:
         finally:
             reader.close()
 
+        result["health"] = health.public()
+        result["repair_readiness"] = health.repair_readiness()
+        if smart is not None:
+            result["smart_baseline"] = {
+                "status": smart.get("status"),
+                "temperature_c": smart.get("temperature_c"),
+                "ata_selected_raw_attributes": smart.get("ata_selected_raw_attributes"),
+            }
         if args.command == "scan":
             # A changed/disappeared device after scan means we must not report success.
             try:

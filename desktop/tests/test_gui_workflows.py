@@ -192,12 +192,15 @@ class RealGuiWorkflowTests(unittest.TestCase):
                         action = next(w for w in all_widgets(container) if isinstance(w,ttk.Button) and w.cget('text') == 'Rescue')
                         action.invoke()
                     except Exception as exc:
-                        errors.append(str(exc)); close_window(root); return
+                        errors.append(str(exc))
+                        close_window(root)
+                        return
                     check(time.monotonic()+12)
                 def check(deadline):
                     if errors or time.monotonic() > deadline:
                         errors.append('Rescue did not complete in time' if not errors else '')
-                        close_window(root); return
+                        close_window(root)
+                        return
                     # Sparse/preallocated images can reach their FINAL LOGICAL SIZE
                     # before recovery commits any bytes. Journal, not file length,
                     # is the authoritative completion criterion.

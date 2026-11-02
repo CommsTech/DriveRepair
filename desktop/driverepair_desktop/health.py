@@ -58,3 +58,144 @@ def health_snapshot(device: Device,
                  'SMART pass does not rule out media defects or future failure. '
                  'No self-test, erase, remap, refresh, or repair was started.',
     }
+
+
+def try_health_snapshot(device: Device,
+                        run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> dict | None:
+    """Best-effort SMART probe. Returns None when tooling/USB bridge cannot answer."""
+    try:
+        return health_snapshot(device, run=run)
+    except RuntimeError:
+        return None
+
+
+def media_from_smart(snapshot: dict | None) -> str:
+    """Map a SMART snapshot to media OK|WARN|FAIL|UNKNOWN without inventing certainty."""
+    if not snapshot:
+        return "UNKNOWN"
+    status = snapshot.get("status")
+    if status == "failure_reported":
+        return "FAIL"
+    attrs = {
+        int(item.get("id")): item.get("raw_value")
+        for item in (snapshot.get("ata_selected_raw_attributes") or [])
+        if item.get("id") is not None
+    }
+    # 5 reallocated, 187 reported UNC, 197 current pending, 198 offline UNC.
+    wear = [attrs.get(i) for i in (5, 187, 197, 198)]
+    if any(isinstance(v, (int, float)) and v > 0 for v in wear):
+        return "WARN"
+    nvme = snapshot.get("nvme") or {}
+    if isinstance(nvme.get("media_errors"), (int, float)) and nvme["media_errors"] > 0:
+        return "WARN"
+    if isinstance(nvme.get("critical_warning"), (int, float)) and nvme["critical_warning"]:
+        return "FAIL"
+    if status == "smart_passed_limited":
+        return "OK"
+    return "UNKNOWN"
+
+
+def transport_from_smart(snapshot: dict | None) -> str:
+    if not snapshot:
+        return "UNKNOWN"
+    attrs = {
+        int(item.get("id")): item.get("raw_value")
+        for item in (snapshot.get("ata_selected_raw_attributes") or [])
+        if item.get("id") is not None
+    }
+    # 199 UltraDMA CRC — common USB/SATA transport noise signal.
+    crc = attrs.get(199)
+    if isinstance(crc, (int, float)) and crc > 0:
+        return "WARN"
+    return "UNKNOWN"
+
+
+class ScanHealthTracker:
+    """Sticky media/transport/mechanical state for live scan progress.
+
+    Mechanical is a latency proxy. Media/transport prefer SMART when present and
+    otherwise stay UNKNOWN unless reads prove a hard failure/disconnect.
+    Metrics never authorize in-place refresh by themselves.
+    """
+
+    def __init__(self, *, bus: str = "", smart: dict | None = None) -> None:
+        self.bus = (bus or "").lower()
+        self.smart = smart
+        self.media = media_from_smart(smart)
+        self.transport = transport_from_smart(smart)
+        self.mechanical = "UNKNOWN"
+        self.read_errors = 0
+        self.ok_reads = 0
+        self.slow_events = 0
+        self.disconnects = 0
+        self.last_latency_ms: float | None = None
+        self.last_median_ms: float | None = None
+
+    def observe(self, *, latency_ms: float | None, median_ms: float | None,
+                failed: bool, disconnect: bool = False) -> dict:
+        if latency_ms is not None:
+            self.last_latency_ms = float(latency_ms)
+        if median_ms is not None:
+            self.last_median_ms = float(median_ms)
+        if disconnect:
+            self.disconnects += 1
+            self.transport = "FAIL"
+            self.mechanical = "FAIL"
+        elif failed:
+            self.read_errors += 1
+            if self.media in {"UNKNOWN", "OK"}:
+                self.media = "WARN" if self.read_errors < 3 else "FAIL"
+            if self.mechanical in {"UNKNOWN", "OK", "WATCH"}:
+                self.mechanical = "FAIL"
+            if self.bus == "usb" and self.transport == "UNKNOWN" and self.read_errors >= 3:
+                self.transport = "WARN"
+        else:
+            self.ok_reads += 1
+            if self.transport == "UNKNOWN" and self.ok_reads >= 8:
+                # Sustained successful reads: transport path is at least working now.
+                self.transport = "OK"
+            if (latency_ms is not None and median_ms is not None
+                    and latency_ms >= max(float(median_ms) * 4, 50.0)):
+                self.slow_events += 1
+                if self.mechanical != "FAIL":
+                    self.mechanical = "WATCH"
+            elif latency_ms is not None and self.mechanical != "FAIL":
+                if self.mechanical != "WATCH":
+                    self.mechanical = "OK"
+        return self.public()
+
+    def public(self) -> dict:
+        return {
+            "media": self.media,
+            "transport": self.transport,
+            "mechanical": self.mechanical,
+        }
+
+    def repair_readiness(self) -> dict:
+        blockers: list[str] = []
+        if self.last_median_ms is None or self.ok_reads < 16:
+            blockers.append("insufficient latency samples for mechanical baseline")
+        if self.media == "UNKNOWN":
+            blockers.append("media health unknown (SMART unavailable/inconclusive on this path)")
+        if self.media == "FAIL":
+            blockers.append("media FAIL — prefer image rescue; do not in-place refresh")
+        if self.transport == "FAIL":
+            blockers.append("transport FAIL — stabilize USB/dock before any write workflow")
+        if self.mechanical == "FAIL":
+            blockers.append("mechanical FAIL proxy — abort write workflows")
+        if self.mechanical == "WATCH":
+            blockers.append("mechanical WATCH (slow regions) — refresh may stress media further")
+        status = ("blocked" if blockers
+                  else "metrics_present_not_a_repair_authorization")
+        return {
+            "status": status,
+            "blockers": blockers,
+            "samples_ok": self.ok_reads,
+            "samples_failed": self.read_errors,
+            "slow_events": self.slow_events,
+            "smart_status": None if not self.smart else self.smart.get("status"),
+            "notes": (
+                "These metrics support triage only. In-place refresh still requires explicit "
+                "destructive acknowledgements and never claims restored lifespan."
+            ),
+        }
