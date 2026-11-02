@@ -376,13 +376,42 @@ def select_external_device(identifier: str,
     if sys.platform == 'win32' and discover is list_external_devices:
         match = re.fullmatch(r'windows:PhysicalDrive(\d+)', identifier)
         if match:
+            number = int(match.group(1))
             try:
-                direct = _windows_devices_from_cim(_run, number=int(match.group(1)))
+                direct = _windows_devices_from_cim(_run, number=number)
                 direct = [d for d in direct if d.id == identifier]
                 if len(direct) == 1:
                     return direct[0]
             except (RuntimeError, json.JSONDecodeError, ValueError, TypeError, OSError):
                 pass
+            try:
+                matches = [device for device in discover() if device.id == identifier]
+                if len(matches) == 1:
+                    return matches[0]
+            except (RuntimeError, ValueError, TypeError, OSError):
+                pass
+            # Last-resort READ path when WMI/Get-Disk are wedged after heavy USB I/O.
+            # Native IOCTL does not prove non-boot; write gate still requires Get-Disk.
+            try:
+                from .windows_native import probe_physicaldrive
+                info = probe_physicaldrive(number)
+                bus = str(info.get('bus') or '').lower()
+                if bus not in {'usb', 'firewire', 'thunderbolt'} and not str(bus).startswith('bus_type_7'):
+                    raise RuntimeError(f'Native probe bus {bus!r} is not an external USB-class bus')
+                size = _positive_int(info.get('size_bytes'))
+                sector = _positive_int(info.get('logical_sector_bytes'), 512)
+                model = str(info.get('model') or f'PhysicalDrive{number}').strip()
+                serial = str(info.get('serial') or '').strip()
+                if not size or not sector or size % sector:
+                    raise RuntimeError('Native probe returned unusable geometry')
+                return Device(
+                    identifier, rf'\\.\PhysicalDrive{number}', model, size, sector,
+                    'usb', serial, '', 'native-ioctl',
+                )
+            except (RuntimeError, OSError, ValueError, TypeError):
+                pass
+            raise ValueError("Drive not found in current external-whole-disk inventory. "
+                             "Run 'list' again. Internal drives and partitions are excluded.")
     matches = [device for device in discover() if device.id == identifier]
     if len(matches) != 1:
         raise ValueError("Drive not found in current external-whole-disk inventory. "
