@@ -1,28 +1,24 @@
-**0.3.3b7 ENGINEERING CANDIDATE: PRIVATE TESTS ONLY.** Adaptive read-only full scans, partial guided maintenance and staged desktop GUI were updated. Native Windows USB hardware writes, Rust builds, BIOS/UEFI boot validation and third-party beta penetration testing remain open. See `docs/ADAPTIVE_SCANNING_AND_SETUP.md`.
+**0.3.3b8 ENGINEERING CANDIDATE: PRIVATE TESTS ONLY.** Media-aware profiles (SMR/CMR/SSD/NVMe), >=10% stratified Quick Repair coverage, bounded Get-Disk identity recheck. Physical write qualification and public beta remain open. See `docs/MEDIA_AWARE_SCANNING_0.3.3b8.md`.
 
 # Status — 2026-11-02
 
-PRIVATE TEST — **0.3.3b7** adaptive scan + staged Start job UX; Seagate 1 TB USB still sacrificial write-verify release gate.
+PRIVATE TEST — **0.3.3b8** media-aware scanning/repair; Seagate ST1000LM048 treated as **SMR** (datasheet).
 
 ## Product
 
-- Version `0.3.3b7`: adaptive full scan (grow/shrink reads, defer unreadable as UNKNOWN), WinError 1117 classification, bounded repair batches, optional anomaly history, staged **Start job** / **Stop job**, prerequisite preflight (explicit WinGet smartctl only)
-- Retains 0.3.3b4–b6 Direct Repair / error-aware / probe-region / firmware advisory
+- Version `0.3.3b8`: media profiles; Quick Repair >=10% unique address coverage with recorded seed; Full Repair read-only transfer calibration + adaptive scan; <=1 MiB targeted write extents; optional CMR neighbor rewrite only with explicit `--recording cmr --rewrite-neighbors`
+- Windows identity: bounded `Get-Disk -Number N` first; fail closed / `repair_blocked_identity_recheck` if revalidation fails
+- ST1000LM048: neighbor rewrites disabled (SMR); do not equate refresh with platter smoothing
 - Admin GUI debug tracking via `DRIVEREPAIR_GUI_DEBUG=1`
 
-## Current Seagate evidence (user Windows runs)
-
-- Quick Repair: ~0.0138% coverage; refreshed/verified ~1.8 MiB at two end regions
-- Full Scan (pre-adaptive): stopped at offset `77561069568` (~errno=22 / possible WinError 1117) ~7.75% — re-test with adaptive Full scan + optional `probe-region`
-- Do **not** start jobs until clicking **Start job**
-
-## Seagate ST1000LM048 1 TB (USB / PhysicalDrive2)
+## Seagate ST1000LM048 1 TB (USB)
 
 | Step | State |
 |------|--------|
-| Wipe / prior repair runs | Lab evidence under DriveRepairLab |
-| Adaptive full scan + elevated verify | Pending controlled hardware validation |
+| Media class | **SMR** (manufacturer datasheet) |
+| Discovery timeouts / WinError 1117 | Observed; transport vs media unproven |
+| Elevated full-surface verify | Still release gate |
 | Public release | **Blocked** |
 
 Lab: `D:\DriveRepairLab\seagate_st1000lm048_wipe_refresh_20261101\`
-Artifacts: `docs/releases/0.3.3b7/`
+Artifacts: `docs/releases/0.3.3b8/`

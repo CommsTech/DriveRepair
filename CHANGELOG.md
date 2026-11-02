@@ -1,3 +1,14 @@
+## 0.3.3b8 (2026-11-02) — Media-aware guided scanning
+
+- Exact-model SMR classification (Seagate ST1000LM048), conservative unknown profiles, NVMe/SSD distinctions.
+- Quick Repair 10% unique-address coverage with bounded stratified random sampling, per-hardware-session recorded seeds, honest coverage metadata.
+- Measured early-read transfer-size calibration and full-scan adaptive growth/shrink; 1117 deferred retries remain separate from source writes.
+- Bounded read-only left/right inspection of eligible repair regions; optional CMR-only advanced neighbor rewrites after independent repeated reads.
+- Smaller targeted rewrite extents than the large scan chunks; no raw-drive writes permitted by these profiles alone.
+- Selected-disk Windows Get-Disk query to reduce whole-enumeration timeouts; retain identity fail-closed behavior and scan results if recheck fails.
+- GUI media information, simple-by-default settings, explicit Start job and conditional dependency-install button.
+- Expanded synthetic regression suite. **No Windows USB-dock, flash, firmware or boot-hardware validation.**
+
 ## 0.3.3b7 — Adaptive I/O, error continuation, staged UI and dependency readiness
 
 - Full scans adapt read sizes (bounded to 8 MiB); Windows native I/O error 1117 is differentiated from invalid requests.

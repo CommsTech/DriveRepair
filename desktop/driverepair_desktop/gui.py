@@ -19,6 +19,7 @@ from pathlib import Path
 from .rescue_display import RescueDisplayState, format_duration
 from .console_ui import fmt_bytes
 from .preferences import load_preferences, save_preferences, DEFAULTS
+from .media_profiles import identify_profile
 
 
 # Industrial dark palette (high-contrast status colors, no purple/glow stack).
@@ -202,6 +203,7 @@ def launch() -> None:
     capacity_var = tk.StringVar(value="Free space: not checked")
     warning_var = tk.StringVar(value="Progress is from committed recovery state; unscanned media stays unknown.")
     advanced_open = tk.BooleanVar(value=False)
+    expert_settings = tk.BooleanVar(value=False)
     last_result: dict | None = None
 
     shell = ttk.Frame(root, padding=16)
@@ -220,7 +222,7 @@ def launch() -> None:
     prereq_row.pack(fill='x', pady=(3, 0))
     ttk.Label(prereq_row, textvariable=prerequisite_text, style='Muted.TLabel').pack(side='left')
     prereq_install = ttk.Button(prereq_row, text='Install SMART tools', state='disabled')
-    prereq_install.pack(side='right')
+    # Shown only when an optional dependency is missing.
 
     # Keep a large, live dashboard during recovery, but do not fill the
     # Start Here screen with empty telemetry before a job exists.
@@ -400,6 +402,7 @@ def launch() -> None:
     tab_refresh = workflow_tab('refresh', ' In-place refresh ')
     tab_fs = workflow_tab('filesystem', ' Clone repair ')
 
+    # Plain-language landing page; advanced controls remain accessible.
     # Guided workflows: no unnecessary expertise or hidden destructive defaults.
     ttk.Label(tab_start, text='What would you like to do?',
               font=('Segoe UI', 16, 'bold')).pack(anchor='w', pady=(4, 12))
@@ -852,10 +855,15 @@ def launch() -> None:
         selected.set(item[0] if item else 'No external drive selected')
         if item and item[0] in inventory:
             d = inventory[item[0]]
+            profile = identify_profile(model=d.model, bus=d.bus, sector=d.sector_size)
+            detected_medium.set(f'{profile.kind.upper()} · {profile.evidence}. {profile.maintenance_note}')
             health_var.set(f'{d.model} · {d.size_bytes/10**9:.2f} GB · {d.bus.upper()} · '
                            'Health not checked (SMART recommended)')
     tree.bind('<<TreeviewSelect>>', select_device)
     ttk.Label(tab_drive, textvariable=selected).pack(anchor="w")
+    detected_medium = tk.StringVar(value='Select a drive to identify its media profile.')
+    ttk.Label(tab_drive, textvariable=detected_medium, style='Muted.TLabel',
+              wraplength=920).pack(anchor='w', pady=(2, 8))
 
     def refresh_devices() -> None:
         if busy:
@@ -880,7 +888,7 @@ def launch() -> None:
 
     # The main recovery page must offer the no-image / no-output choice.
     quick_repair_storage = tk.StringVar(value=(
-        'Volatile RAM only (NO saved files)' if prefs['repair_storage'] == 'memory'
+        'Volatile RAM only (no recovery image/journal)' if prefs['repair_storage'] == 'memory'
         else 'Disk journal (crash recoverable)'))
     remember_weak_regions = tk.BooleanVar(value=True)
     guided_repair_policy = tk.StringVar(value=(
@@ -931,8 +939,8 @@ def launch() -> None:
                     flags += ['--journal-backend', 'memory', '--ack-volatile-journal']
                 else:
                     flags += ['--journal-backend', 'disk', '--journal', journal]
-                    if remember_weak_regions.get():
-                        flags.append('--remember-anomalies')
+                if remember_weak_regions.get():
+                    flags.append('--remember-anomalies')
                 start(['care-external', '--device', dev, '--mode', mode,
                        *flags, '--json'],
                       f'{mode.title()} scan + targeted in-place repair', risky=True, destructive=True)
@@ -963,6 +971,9 @@ def launch() -> None:
                         ("Rescue to image", "rescue"),
                         ("Resume rescue", "resume")]:
         ttk.Button(bf, text=label, command=lambda k=kind: device_action(k)).pack(side="left", padx=(0, 6))
+    ttk.Label(tab_drive, text='Quick Repair samples 10% of the disk; Full Repair visits the full surface. '
+              'Choose the operation, check the settings, then press Start job below.',
+              style='Muted.TLabel', wraplength=980).pack(anchor='w', pady=(2, 8))
     policy_row = ttk.Frame(tab_drive)
     policy_row.pack(fill='x', pady=(4, 2))
     ttk.Label(policy_row, text='Repair policy:').pack(side='left')
@@ -972,13 +983,14 @@ def launch() -> None:
                  width=52).pack(side='left', padx=(6, 12))
     ttk.Checkbutton(policy_row, text='Allow repair of verified candidates on SMART warning (high risk)',
                     variable=ack_media_warn).pack(side='left')
-    ttk.Checkbutton(tab_drive, text='Remember bad/slow disk locations (private metadata only; disk journal mode)',
-                    variable=remember_weak_regions).pack(anchor='w', pady=(1, 4))
+    history_checkbox = ttk.Checkbutton(tab_drive, text='Remember bad/slow disk locations (optional local metadata; no sector bytes)',
+                    variable=remember_weak_regions)
+    history_checkbox.pack(anchor='w', pady=(1, 4))
     storage = ttk.Frame(tab_drive)
     storage.pack(fill='x', pady=(2, 8))
     ttk.Label(storage, text='Temporary region storage:').pack(side='left')
     ttk.Combobox(storage, textvariable=quick_repair_storage, state='readonly', width=42,
-                 values=['Volatile RAM only (NO saved files)',
+                 values=['Volatile RAM only (no recovery image/journal)',
                          'Disk journal (crash recoverable)']).pack(side='left', padx=8)
     ttk.Label(storage, text='No image created; RAM-only loses crash recovery.',
               style='Muted.TLabel').pack(side='left')
@@ -1046,6 +1058,19 @@ def launch() -> None:
                command=investigate_error_region).pack(side='left')
     ttk.Label(tools_row, text='Use a byte offset reported by a stopped Full Scan.',
               style='Muted.TLabel').pack(side='left', padx=8)
+    expert_frames = (policy_row, history_checkbox, secondary, tools_row)
+    def show_expert_settings() -> None:
+        if expert_settings.get():
+            for panel in expert_frames:
+                if not panel.winfo_manager():
+                    panel.pack(fill='x', pady=(3, 4))
+        else:
+            for panel in expert_frames:
+                panel.pack_forget()
+    ttk.Checkbutton(tab_drive, text='Advanced settings · firmware, benchmarks, risk policies',
+                    variable=expert_settings, command=show_expert_settings).pack(anchor='w', pady=(2, 8))
+    # Show device selection, goal, journal choice and Start by default.
+    show_expert_settings()
     unknown_health_override = tk.BooleanVar(value=False)
     ttk.Checkbutton(secondary, text="Permit manual risk override if SMART is unavailable",
                     variable=unknown_health_override).pack(side="left", padx=(4, 0))
@@ -1696,10 +1721,13 @@ def launch() -> None:
                     if tools.get('smart_health_available'):
                         prerequisite_text.set('SMART tools ready · Core scanning works without optional forensic tools')
                         prereq_install.configure(state='disabled')
+                        prereq_install.pack_forget()
                     else:
                         prerequisite_text.set('SMART not installed · Health checks limited; recovery still available')
                         prereq_install.configure(state=('normal' if tools.get('install_support') == 'winget'
                                                          else 'disabled'))
+                        if not prereq_install.winfo_manager():
+                            prereq_install.pack(side='right')
                 elif kind == 'smartctl_install':
                     prerequisite_text.set('SMART installation finished; rechecking…')
                     check_prerequisites()

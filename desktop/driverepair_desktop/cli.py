@@ -55,7 +55,8 @@ from .tsk_recovery import list_deleted_tsk, recover_selected_tsk
 from .forensics import image_evidence_manifest
 from .filesystems import detect_filesystems, recover_image
 from .sensors import SensorSuite
-from .guided_repair import tuned_scan, plan_targeted_refresh, investigate_failed_ranges
+from .guided_repair import (tuned_scan, plan_targeted_refresh, investigate_failed_ranges,
+                            inspect_adjacent_regions)
 from .maintenance import (firmware_inventory, windows_volume_facts,
                           volume_optimization_plan, execute_optimization)
 from .health import media_from_smart
@@ -128,7 +129,7 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument('--mode', choices=['quick', 'full'], default='quick')
         cmd.add_argument('--adaptive-io', action=argparse.BooleanOptionalAction, default=True)
         cmd.add_argument('--remember-anomalies', action='store_true',
-                         help='Store small, private offset hints for future triage (disk journal only)')
+                         help='Opt-in tiny local offset history (NO sector bytes; independent of RAM/disk journal)')
         cmd.add_argument('--journal', help='Required for disk/ramdisk journal only; not used in volatile RAM mode')
         cmd.add_argument('--journal-backend', choices=['disk', 'memory'], default='disk',
                          help='disk=crash-recoverable; memory=no files, NO crash recovery (high risk)')
@@ -136,6 +137,10 @@ def parser() -> argparse.ArgumentParser:
                          help='I accept loss of active region data on crash/power failure')
         cmd.add_argument('--resume', action='store_true', help='Resume the targeted refresh journal without rescanning')
         cmd.add_argument('--max-regions', type=int, default=64)
+        cmd.add_argument('--recording', choices=['auto', 'cmr', 'smr'], default='auto',
+                         help='Advanced: externally verified recording technology; auto never assumes CMR')
+        cmd.add_argument('--rewrite-neighbors', action='store_true',
+                         help='Advanced high-risk: confirmed CMR only, reread both sides before adding writes')
         cmd.add_argument('--repair-policy', choices=['preserve', 'balanced'], default='balanced',
                          help='Balanced retries read errors without rewriting unknown bytes')
         cmd.add_argument('--ack-media-warning', action='store_true',
@@ -1209,8 +1214,8 @@ def _run_care(args) -> int:
     """
     is_hardware = args.command == 'care-external'
     ram_only = args.journal_backend == 'memory'
-    if ram_only and getattr(args, 'remember_anomalies', False):
-        raise ValueError('RAM-only no-file mode cannot persist anomaly history')
+    # An explicitly opted-in, small offsets-only history file is independent
+    # of a RAM-only REGION journal. No sector bytes or recovery image are saved.
     if ram_only and args.resume:
         raise ValueError('RAM-only operations cannot resume after an application crash')
     if ram_only and not args.ack_volatile_journal:
@@ -1262,8 +1267,14 @@ def _run_care(args) -> int:
         scan_started = time.monotonic()
         if not args.resume:
             settings = tuned_scan(size=size, sector=sector, mode=args.mode,
-                                  bus=selected.bus if is_hardware else '')
+                                  bus=selected.bus if is_hardware else '',
+                                  model=selected.model if is_hardware else '',
+                                  media_type=(snapshot or {}).get('reported_medium', ''),
+                                  recording='' if args.recording == 'auto' else args.recording)
             chunk = settings['chunk']
+            # Large read requests identify weak areas; rewrite only a small,
+            # separately verified and journaled subregion (SMR write amplification).
+            repair_chunk = min(1024 * 1024, chunk)
             hints = (load_hints(selected.fingerprint, size, sector)
                      if is_hardware and args.remember_anomalies else [])
             reader = open_device_readonly(selected) if is_hardware else ImageReader(args.image)
@@ -1292,12 +1303,33 @@ def _run_care(args) -> int:
                                   'median_ms': info.get('median_ms'),
                                   'message': 'Checking regions before targeted recovery / repair'},
                                  force=index == total or bool(info.get('failed')))
+                calibration = None
+                if args.mode == 'full' and args.adaptive_io:
+                    from .adaptive_scan import calibrate_initial_read
+                    calibration = calibrate_initial_read(
+                        reader, size=size, sector=sector,
+                        max_chunk=settings.get('max_chunk', 8*1024*1024),
+                        min_chunk=settings.get('min_chunk', 1024*1024))
+                    if calibration['ended_on_error']:
+                        # A larger request failed: stay at/below the last good size.
+                        chunk = min(chunk, calibration['chosen_chunk'])
+                    else:
+                        # Tiny cached reads can measure artificially fast; do not
+                        # demote a healthy multi-TB scan below its media profile.
+                        chunk = max(chunk, calibration['chosen_chunk'])
+                import secrets
+                sampling_seed = secrets.randbits(64) if is_hardware and args.mode == 'quick' else None
                 scan = scan_reader(reader, size=size, sector=sector,
                                    mode=settings['mode'], samples=settings['samples'],
                                    chunk=chunk, max_errors=settings['max_errors'],
                                    compare_suspects=(args.mode == 'quick'),
                                    adaptive_io=bool(args.adaptive_io),
-                                   history_hints=hints, progress=scan_progress)
+                                   adaptive_min_chunk=settings.get('min_chunk'),
+                                   adaptive_max_chunk=settings.get('max_chunk'),
+                                   history_hints=hints, sample_seed=sampling_seed,
+                                   progress=scan_progress)
+                if calibration is not None:
+                    scan['initial_io_calibration'] = calibration
                 if (args.repair_policy == 'balanced' and
                         scan.get('read_error_ranges') and not scan.get('error_investigation') and
                         scan.get('status') in {'completed_with_read_errors', 'aborted_error_limit'}):
@@ -1315,16 +1347,31 @@ def _run_care(args) -> int:
             finally:
                 reader.close()
             if is_hardware:
-                latest = select_external_device(args.device)
-                assert_stable_identity(selected, latest)
+                # Keep read-only scan findings even when the USB bridge freezes
+                # during the *post-scan* identity query. Such a query must still
+                # block all writes; a cached identity is never authorization.
                 if args.remember_anomalies:
                     try:
                         scan['anomaly_history'] = save_hints(selected.fingerprint, size, sector, scan)
                     except OSError as exc:
                         scan['anomaly_history'] = {'saved_hints': 0,
                                                    'warning': f'Optional history not saved: {type(exc).__name__}'}
+                try:
+                    latest = select_external_device(args.device)
+                    assert_stable_identity(selected, latest)
+                except (RuntimeError, ValueError) as exc:
+                    result = {'status': 'repair_blocked_identity_recheck', 'scan': scan,
+                              'writes_performed': False,
+                              'reason': 'Device identity unavailable after scan',
+                              'next_step': 'Reconnect/verify USB dock and rerun selected-disk identity preflight; '
+                                           'previous scan findings remain read-only hints, never write permission.',
+                              'detail': str(exc)[:1000]}
+                    print(json.dumps(result, indent=2) if args.json else result, flush=True)
+                    return 2
+            scan['media_profile'] = {k: settings[k] for k in
+                ('profile', 'profile_evidence', 'media_note', 'requested_coverage_pct') if k in settings}
             plan = plan_targeted_refresh(
-                scan, sector=sector, chunk=chunk, max_regions=args.max_regions,
+                scan, sector=sector, chunk=repair_chunk, max_regions=args.max_regions,
                 smart=snapshot, hardware=is_hardware,
                 allow_unknown_health=args.ack_unknown_health,
                 allow_media_warning=args.ack_media_warning,
@@ -1343,6 +1390,34 @@ def _run_care(args) -> int:
                 print(json.dumps(result, indent=2) if args.json else result, flush=True)
                 return 0
             targets = plan['targets']
+            # Check immediate left/right sectors as separate READ-ONLY evidence.
+            # SMR/SSD/unknown technologies do not receive automatic neighbor
+            # rewrites. Advanced CMR-only rewrites require explicit option and
+            # verified repeatable data; the journal engine checks once more.
+            adjacent_reader = (open_device_readonly(selected) if is_hardware
+                               else ImageReader(args.image))
+            try:
+                neighbors = inspect_adjacent_regions(
+                    adjacent_reader, size=size, sector=sector, targets=targets,
+                    excluded=(scan.get('read_error_ranges') or []) +
+                             (scan.get('inconsistent_reads') or []) +
+                             (scan.get('repeat_probe_failed_ranges') or []),
+                    window=min(256 * 1024, repair_chunk), max_reads=64)
+            finally:
+                adjacent_reader.close()
+            scan['neighbor_checks'] = neighbors
+            if args.rewrite_neighbors:
+                if settings.get('profile') != 'cmr' or args.recording != 'cmr':
+                    raise ValueError('Adjacent rewrite requires explicit verified CMR recording; '
+                                     'disabled for SMR, SSD and unknown media')
+                targets = sorted(set(targets + neighbors['consistent_neighbors']))
+                if len(targets) > 256 or any(a[0]+a[1] > b[0]
+                                             for a, b in zip(targets, targets[1:])):
+                    raise ValueError('Neighbor writes exceed transaction budget or overlap')
+                plan['targets'] = targets
+                plan['neighbor_write_regions'] = len(neighbors['consistent_neighbors'])
+            else:
+                plan['neighbor_write_regions'] = 0
         else:
             # Resume uses the exact original chunk and target queue recorded in the
             # journal, not a fresh scan that could silently change what is rewritten.

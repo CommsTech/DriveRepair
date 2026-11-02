@@ -14,18 +14,34 @@ from collections import deque
 from .health import media_from_smart, transport_from_smart
 
 
-def tuned_scan(*, size: int, sector: int, mode: str, bus: str = "") -> dict:
-    """Deterministic bounded-memory defaults; performance claims need hardware tests."""
-    if mode not in {"quick", "full"} or size <= 0 or sector <= 0:
-        raise ValueError("Invalid assisted scan request")
-    # Large disks need larger sequential reads, not millions of progress events.
-    chunk = 4 * 1024 * 1024 if mode == "full" and size >= 512 * 1024**3 else 1024 * 1024
-    chunk = max(sector, (chunk + sector - 1) // sector * sector)
-    samples = 256 if size >= 1024**4 else 128
-    if mode == "quick" and bus.lower() in {"usb", "7", "12", "firewire"}:
-        samples = min(samples, 128)  # avoid exhausting marginal USB docks
-    return {"mode": "triage" if mode == "quick" else "full",
-            "chunk": chunk, "samples": samples, "max_errors": 16}
+def tuned_scan(*, size: int, sector: int, mode: str, bus: str = "",
+               model: str = "", media_type: str = "", recording: str = "") -> dict:
+    """Media-aware read settings; quick mode samples >=10% of the disk.
+
+    The quick scan intentionally takes meaningful time on multi-TB devices:
+    sampling 10% of a 12 TB drive is ~1.2 TB of I/O. This is NOT a 2-second
+    screening test. Historical problem regions are additional read-only hints.
+    """
+    from .media_profiles import identify_profile, quick_coverage_plan
+    if mode not in {'quick', 'full'} or size <= 0 or sector <= 0 or size % sector:
+        raise ValueError('Invalid assisted scan request')
+    profile = identify_profile(model=model, bus=bus, media_type=media_type,
+                               recording=recording, sector=sector)
+    if mode == 'quick':
+        quick_chunk = profile.quick_chunk
+        # Bound the progress queue for multi-TB scans without accepting a
+        # smaller-than-requested percentage. An expensive 10% read is honest.
+        while quick_coverage_plan(size, quick_chunk)['samples'] > 100000:
+            quick_chunk *= 2
+        plan = quick_coverage_plan(size, quick_chunk)
+        return {'mode': 'triage', 'chunk': quick_chunk,
+                'samples': plan['samples'], 'max_errors': 10000,
+                'requested_coverage_pct': 10.0, 'profile': profile.kind,
+                'profile_evidence': profile.evidence, 'media_note': profile.maintenance_note}
+    return {'mode': 'full', 'chunk': profile.full_start_chunk, 'samples': 128,
+            'max_errors': 10000, 'max_chunk': profile.full_max_chunk,
+            'min_chunk': profile.read_min_chunk, 'profile': profile.kind,
+            'profile_evidence': profile.evidence, 'media_note': profile.maintenance_note}
 
 
 def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
@@ -232,3 +248,59 @@ def plan_targeted_refresh(scan: dict, *, sector: int, chunk: int,
                   "are manufactured. Unresolved data requires separate rescue or explicit "
                   "destructive sector reinitialization, not automatic overwrites."),
     }
+
+
+def inspect_adjacent_regions(reader, *, size: int, sector: int,
+                             targets: list[tuple[int, int]],
+                             excluded: list[dict] | None = None,
+                             window: int = 256 * 1024,
+                             max_reads: int = 64) -> dict:
+    """Read BOTH sides of verified target regions; no source writes.
+
+    Adjoining LBAs are not necessarily physically adjacent tracks, especially
+    through SMR translation layers, SSD FTLs or USB bridge mappings. Returning
+    a consistent read is NOT proof of original data correctness. Only callers
+    with separately authorized CMR maintenance may add these to a write plan.
+    """
+    if size <= 0 or sector <= 0 or size % sector or window < sector or max_reads < 2:
+        raise ValueError('Invalid neighbor inspection budget')
+    window = (window // sector) * sector
+    forbidden = excluded or []
+    probes = []
+    for off, length in targets:
+        for neighbor, nlen in ((max(0, off - window), min(window, off)),
+                               (off + length, min(window, max(0, size - off - length)))):
+            if (nlen < sector or neighbor % sector or
+                    any(neighbor < t_off + t_len and t_off < neighbor + nlen
+                        for t_off, t_len in targets) or
+                    any(isinstance(r, dict) and type(r.get('offset')) is int and
+                        type(r.get('length')) is int and
+                        neighbor < r['offset'] + r['length'] and
+                        r['offset'] < neighbor + nlen for r in forbidden)):
+                continue
+            probes.append((neighbor, nlen))
+    good, rejected, seen = [], [], set()
+    calls = 0
+    for off, length in probes:
+        if (off, length) in seen:
+            continue
+        seen.add((off, length))
+        if calls + 2 > max_reads:
+            rejected.append({'offset': off, 'length': length, 'reason': 'budget_exhausted'})
+            continue
+        try:
+            a = reader.read_at(off, length)
+            b = reader.read_at(off, length)
+            calls += 2
+            if len(a) != length or a != b:
+                rejected.append({'offset': off, 'length': length, 'reason': 'not_repeatable'})
+            else:
+                good.append((off, length))
+        except OSError as exc:
+            calls += 2   # Conservative budget charge; may have done just one.
+            from .adaptive_scan import classify_error
+            rejected.append({'offset': off, 'length': length, 'reason': 'io_error',
+                             'classification': classify_error(exc)})
+    return {'consistent_neighbors': sorted(set(good)), 'rejected_neighbors': rejected,
+            'read_budget_used': calls, 'no_writes': True,
+            'original_bytes_proven_correct': False}

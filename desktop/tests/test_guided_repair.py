@@ -45,9 +45,11 @@ class GuidedPlanningTests(unittest.TestCase):
     def test_autotune_is_bounded_for_large_disk(self):
         x = tuned_scan(size=12 * 10**12, sector=4096, mode='quick', bus='usb')
         self.assertEqual(x['mode'], 'triage')
-        self.assertLessEqual(x['samples'], 256)
+        self.assertGreater(x['samples'], 256)
+        self.assertGreaterEqual(x['samples'] * x['chunk'], 0.10 * 12 * 10**12)
+        self.assertLessEqual(x['samples'], 100000)
         self.assertEqual(x['chunk'] % 4096, 0)
-        self.assertEqual(tuned_scan(size=12 * 10**12, sector=512, mode='full')['chunk'], 4*1024*1024)
+        self.assertGreaterEqual(tuned_scan(size=12 * 10**12, sector=512, mode='full')['chunk'], 1024*1024)
 
     def test_candidates_only_slow_readable_ranges(self):
         p = plan_targeted_refresh(scan(), sector=512, chunk=1024)

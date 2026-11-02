@@ -148,9 +148,17 @@ class RealGuiWorkflowTests(unittest.TestCase):
             button = next(w for w in widgets if isinstance(w, ttk.Button) and w.cget('text') == 'My external drive is slow or failing')
             button.invoke()
             root.update_idletasks()
-            for text in ('Refresh inventory', 'SMART', 'Quick repair', 'Full repair', 'Benchmark (read-only)', 'Rescue to image'):
+            for text in ('Refresh inventory', 'SMART', 'Quick repair', 'Full repair', 'Rescue to image'):
                 target = next(w for w in widgets if isinstance(w, ttk.Button) and w.cget('text') == text)
                 self.assertTrue(target.winfo_ismapped(), f'{text} is hidden after navigation')
+            advanced = next(w for w in widgets if isinstance(w, ttk.Checkbutton)
+                            and 'Advanced settings' in w.cget('text'))
+            benchmark = next(w for w in widgets if isinstance(w, ttk.Button)
+                             and w.cget('text') == 'Benchmark (read-only)')
+            self.assertFalse(benchmark.winfo_ismapped())
+            advanced.invoke()
+            root.update_idletasks()
+            self.assertTrue(benchmark.winfo_ismapped())
         self.open_app(scenario)
 
     def test_direct_repair_and_ram_only_options_are_visible(self):
@@ -174,7 +182,7 @@ class RealGuiWorkflowTests(unittest.TestCase):
             self.assertTrue(match, 'RAM-only mode must be offered alongside disk journaling')
             self.assertTrue(match[0].winfo_ismapped(), 'RAM-only storage selector is hidden')
             self.assertIn('Disk journal', match[0].get())  # Safe first-run default
-            match[0].set('Volatile RAM only (NO saved files)')
+            match[0].set('Volatile RAM only (no recovery image/journal)')
             self.assertIn('Volatile RAM only', match[0].get())
             # This test intentionally does not select a real disk or authorize a write.
         self.open_app(scenario)

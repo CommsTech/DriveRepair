@@ -224,3 +224,56 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
     if investigation is not None:
         result['error_investigation'] = investigation
     return result
+
+
+def calibrate_initial_read(reader, *, size: int, sector: int,
+                           max_chunk: int = 16 * 1024 * 1024,
+                           min_chunk: int = 1024 * 1024) -> dict:
+    """Small, read-only transfer-size calibration; never a health certification.
+
+    Tests increasing aligned reads in sequential locations, avoiding repeatedly
+    reading one cached region. Returns the best *observed* good size; later
+    full-scan scheduling still adapts as the drive's state changes. Stops on
+    first failure to avoid hammering a suspected bad region.
+    """
+    if size <= 0 or sector <= 0 or size % sector:
+        raise ValueError('Invalid device geometry')
+    candidates = []
+    c = max(sector, min_chunk // sector * sector)
+    while c <= max_chunk:
+        candidates.append(c)
+        c *= 2
+    readings = []
+    at = 0
+    for request in candidates[:5]:
+        length = min(request, size - at)
+        length -= length % sector
+        if length <= 0:
+            break
+        t0 = time.monotonic()
+        try:
+            received = reader.read_at(at, length)
+            if len(received) != length:
+                raise OSError(errno.EIO, 'short calibration read')
+        except OSError as exc:
+            return {'chosen_chunk': _choose_calibrated(readings, min_chunk),
+                    'measurements': readings, 'ended_on_error': True,
+                    'error_class': classify_error(exc),
+                    'extra_probe_bytes': at}
+        seconds = max(time.monotonic() - t0, 0.000001)
+        readings.append({'chunk': length, 'seconds': round(seconds, 6),
+                         'bytes_per_second': round(length / seconds)})
+        at += length
+    return {'chosen_chunk': _choose_calibrated(readings, min_chunk),
+            'measurements': readings, 'ended_on_error': False,
+            'extra_probe_bytes': at}
+
+
+def _choose_calibrated(records: list[dict], fallback: int) -> int:
+    if not records:
+        return fallback
+    fastest = max(float(r['bytes_per_second']) for r in records)
+    # Favor larger requests when their observed rate is within 95% of best,
+    # reducing syscall overhead without chasing tiny timing fluctuations.
+    return max(int(r['chunk']) for r in records
+               if float(r['bytes_per_second']) >= fastest * .95)

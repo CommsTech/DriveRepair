@@ -1,3 +1,20 @@
+## 0.3.3b8 media-aware scanning and UI
+
+Quick Repair now samples **at least 10% of unique disk addresses**, not 128
+isolated MiB. This can take many minutes on a 1 TB drive and hours on very
+large disks. Full Repair dynamically chooses bounded transfer sizes and returns
+to error regions with smaller reads; neither mode promises original file
+correctness. The selected media profile is shown in the GUI. ST1000LM048 is
+manufacturer-documented SMR; no automatic adjacent-block rewrites are allowed
+for SMR, SSD, NVMe or unidentified recording types. CMR-specific adjacent
+rewrites require advanced CLI confirmation and journal readback checks.
+
+Selecting a workflow only stages it. Press **Start job** after reviewing the
+selected disk and recovery-storage setting. Advanced tuning is collapsed by
+default. If Windows discovery stalls, do not bypass device identity for a raw
+write; use the report from the completed read-only scan and investigate the USB
+dock or Windows Storage service. See `docs/MEDIA_AWARE_SCANNING_0.3.3b8.md`.
+
 ## No image required: targeted in-place repair (experimental)
 
 The **Diagnose / Rescue** page now shows **Quick repair**, **Full repair**,
@@ -231,6 +248,10 @@ Tk GUI telemetry/legend tests; Windows and macOS GUI/hardware checks remain pend
 
 Run `firmware-info --device ...` to inspect installed firmware when possible (not update availability); run `probe-region` for bounded, read-only investigation of a known failing offset; run `optimize-volume --device ... --letter E` for advisory Windows volume optimization. Physical optimization requires additional explicit authorization and healthy independent evidence. The GUI now remembers non-sensitive journal/policy selections but always reconfirms write risks. See [Maintenance guide](../docs/MAINTENANCE_AND_FIRMWARE.md).
 
-### Adaptive full-surface scans and explicit Start (0.3.3b7)
+### Adaptive full-surface scans and explicit Start (0.3.3b8)
 
 On the desktop app, choose a workflow and review its options, then click the **Start job** button at the bottom. It changes to **Stop job** while working. Full scans use adaptive I/O and defer hard regions; triage scans are sampled and do not certify the whole disk. The optional **Remember bad/slow disk locations** checkbox saves only local offset metadata and is unavailable in no-file RAM-only operations. On launch, a local tool check identifies whether `smartctl` is available; Windows users may choose the consent-based WinGet installation button. For limitations and exact CLI examples, see `../docs/ADAPTIVE_SCANNING_AND_SETUP.md`.
+
+**RAM-only versus history:** RAM-only keeps sector data and transaction state in process RAM and never saves a recovery image or sector journal. An independently selected “Remember bad/slow locations” option may save a small, local, offsets-only diagnostic history on the host computer. It stores no sector bytes, file contents, or write authorization. Disable it when absolutely no diagnostic files are desired.
+
+**Repeat Quick Repair:** Each physical-drive session uses a new recorded random sampling seed. The selected locations are stratified across the disk and processed in address order; a repeat run can inspect different areas. Saved anomaly locations (when enabled) are rechecked separately. A new seed does not establish full-disk integrity. Synthetic image tests retain deterministic sampling.
