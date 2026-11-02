@@ -73,7 +73,14 @@ class WindowsReader:
         self.handle = self.kernel.CreateFileW(device.path, 0x80000000, 0x3,
                                               None, 3, 0, None)
         if self.handle == ctypes.c_void_p(-1).value or self.handle is None:
-            raise ctypes.WinError(ctypes.get_last_error())
+            error = ctypes.get_last_error()
+            if error == 5:  # ERROR_ACCESS_DENIED
+                raise PermissionError(
+                    "Windows denied read access to the physical drive (WinError 5). "
+                    "Try launching DriveRepair as Administrator; security policy or "
+                    "another restriction may still prevent access. No scan was performed."
+                )
+            raise ctypes.WinError(error)
 
     def read_at(self, offset: int, count: int) -> bytes:
         from ctypes import wintypes

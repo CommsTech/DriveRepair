@@ -128,7 +128,8 @@ class WindowsReadWriter:
                 raise PermissionError(
                     "Windows refused GENERIC_WRITE on the physical drive (WinError 5). "
                     "Re-run DriveRepair from an elevated Administrator terminal for "
-                    "in-place refresh. Read-only scan/rescue-image do not require this."
+                    "in-place refresh. Read-only physical-drive scans may also require "
+                    "Administrator access; image-file operations do not."
                 )
             raise ctypes.WinError(err)
         self._volume_handles: list[int] = []
