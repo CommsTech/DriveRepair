@@ -1,4 +1,4 @@
-# DriveRepair desktop — 0.3.3b2
+# DriveRepair desktop — 0.3.3b3
 
 A privacy-first guided Python 3.10+ desktop UI/CLI, with incremental Rust recovery-core migration. This is not a signed standalone native installer. The GUI requires Tk. Raw-device repair remains experimental; do not operate on irreplaceable disks.
 
@@ -166,3 +166,29 @@ Start in GUI → **Recover OS drive → Last resort**. See
 [`../docs/ONE_DRIVE_RECOVERY.md`](../docs/ONE_DRIVE_RECOVERY.md) for required
 checks and exact CLI flags. The experimental feature is not approved for
 irreplaceable data or automatic operation.
+
+### Graphical workflow controls (0.3.3b3)
+
+Run `python -m driverepair_desktop gui`, or `python DriveRepair-0.3.3b3.pyz gui`.
+The **Start here** buttons navigate to their named workflow pages; select a disk
+row before Quick scan, SMART, or Rescue in **Diagnose / Rescue**. Windows and Linux
+external raw-disk rescue require an independently verified destination and elevated
+access; they remain unvalidated on physical hardware in this release. The recovery dashboard
+is hidden while idle to leave room for the workflows. Toggle **Show recovery
+dashboard** to reveal it; the dashboard appears automatically during a job.
+
+When running the portable `.pyz`, GUI child recovery jobs execute using the
+same `.pyz` rather than requiring a separate installed Python package.
+If an unexpected button callback fails, DriveRepair displays an error and
+records details in **Advanced details / engine log** instead of doing nothing.
+
+Run GUI integration tests on Linux with a display:
+
+```bash
+cd desktop
+xvfb-run -a python -m unittest discover -s tests -p test_gui_workflows.py -v
+```
+
+These tests use synthetic disk-image files only; they do **not** open patient
+block devices or validate raw-drive writes. Windows/macOS still require real
+user-interface and physical-device qualification before release.

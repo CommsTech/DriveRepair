@@ -2,7 +2,7 @@
 
 **Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
 
-**Current build: 0.3.3b2 / engineering beta candidate — NOT approved for public hardware-repair use.**
+**Current build: 0.3.3b3 / engineering beta candidate — NOT approved for public hardware-repair use.**
 The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
 
 **If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
@@ -187,3 +187,18 @@ python -m driverepair_desktop rescue-status --output PATH/TO/recovery.img --json
 ```
 
 The `clean_rescue_complete` field is authoritative for *completed OS reads*, not independent file-content integrity. Windows lab scripts no longer chain physical refresh automatically. See [rescue progress and lab safety](docs/RESCUE_PROGRESS_AND_LAB_SAFETY.md).
+
+### Guided GUI reliability hotfix (0.3.3b3)
+
+- Fixed all seven **Start here** workflow buttons. The old callbacks attempted
+  to select nested Tk Canvas frames, which are not notebook-managed tabs.
+- Hide unused recovery telemetry until a job starts; users can toggle the
+  dashboard at any time. On small windows, scroll individual workflow pages.
+- Portable Python zipapps now launch image rescues from their own archive.
+- Unexpected interface callbacks produce visible error messages and log details.
+- Verified actual button invocation, navigation, image rescue, and byte-exact
+  output under a virtual Tk display; no physical disks were modified.
+- Windows/macOS physical-drive workflows and Rust/boot components remain
+  outside the scope of this GUI-only fix and are not release-certified.
+
+For reproducing and verifying the Windows workflow-button fix, see [GUI acceptance tests](docs/GUI_QA.md).
