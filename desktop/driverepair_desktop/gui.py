@@ -151,11 +151,14 @@ def launch() -> None:
                     foreground=C["text"], borderwidth=0, rowheight=26)
     style.configure("Treeview.Heading", background=C["panel"], foreground=C["muted"])
     style.configure("Horizontal.TProgressbar", troughcolor=C["panel2"], background=C["accent"])
+    style.configure('Wide.Vertical.TScrollbar', width=24, arrowsize=22,
+                    background=C['panel2'], troughcolor=C['bg'])
 
     prefs = load_preferences()
     q: queue.Queue[tuple[str, object]] = queue.Queue()
     process: subprocess.Popen[str] | None = None
     busy = False
+    staged_job = None  # Workflow selection NEVER starts disk I/O.
     map_width, map_height = 64, 12
     rescue_metrics = RescueDisplayState()
     map_cells = ["."] * (map_width * map_height)
@@ -185,9 +188,10 @@ def launch() -> None:
     integrity_output = tk.StringVar()
     integrity_summary = tk.StringVar(value="No integrity check run. Readable bytes are NOT necessarily correct bytes.")
     journal_dir = tk.StringVar(value=str(Path.home() / "DriveRepairJournal"))
-    status = tk.StringVar(value="Recovery engine idle — presentation layer only draws throttled progress")
+    status = tk.StringVar(value="Ready — choose a workflow, review settings, then select Start job")
+    prerequisite_text = tk.StringVar(value='Checking optional drive-health tools…')
     phase_var = tk.StringVar(value="IDLE")
-    health_var = tk.StringVar(value="Media unknown · Transport unknown · Mechanical unknown (no diagnostic yet)")
+    health_var = tk.StringVar(value="Drive health: not checked yet · Select a disk and run SMART")
     metric_var = tk.StringVar(value="—")
     msg_var = tk.StringVar(value="Select a workflow. Disk I/O runs in a child process.")
     recovered_var = tk.StringVar(value="—")
@@ -209,6 +213,14 @@ def launch() -> None:
     ttk.Label(header, text="  Recovery Workstation", style="Muted.TLabel").pack(side="left", pady=(10, 0))
     ttk.Label(header, text="Privacy-first · Recovery evidence · Cross-platform",
               style="Muted.TLabel").pack(side="right", pady=(12, 0))
+
+    # Startup local prerequisite check. No network, package install, or elevation
+    # happens without explicit user action.
+    prereq_row = ttk.Frame(shell)
+    prereq_row.pack(fill='x', pady=(3, 0))
+    ttk.Label(prereq_row, textvariable=prerequisite_text, style='Muted.TLabel').pack(side='left')
+    prereq_install = ttk.Button(prereq_row, text='Install SMART tools', state='disabled')
+    prereq_install.pack(side='right')
 
     # Keep a large, live dashboard during recovery, but do not fill the
     # Start Here screen with empty telemetry before a job exists.
@@ -284,7 +296,7 @@ def launch() -> None:
         }[symbol], width=2, height=1).pack(side='left', padx=(0, 4))
         tk.Label(item, text=caption, bg=C['panel'], fg=C['muted'],
                  font=('Segoe UI', 8)).pack(side='left')
-    canvas = tk.Canvas(map_frame, height=115, bg=C["panel2"], highlightthickness=0)
+    canvas = tk.Canvas(map_frame, height=88, bg=C["panel2"], highlightthickness=0)
     canvas.pack(fill="x", padx=10, pady=(0, 10))
 
     color_for = {".": C["pending"], "o": C["ok"], "?": C["current"],
@@ -341,7 +353,8 @@ def launch() -> None:
     def workflow_tab(name: str, title: str):
         container = ttk.Frame(notebook)
         scroller = tk.Canvas(container, bg=C['bg'], highlightthickness=0, borderwidth=0)
-        scrollbar = ttk.Scrollbar(container, orient='vertical', command=scroller.yview)
+        scrollbar = ttk.Scrollbar(container, orient='vertical', command=scroller.yview,
+                                  style='Wide.Vertical.TScrollbar')
         scroller.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side='right', fill='y')
         scroller.pack(side='left', fill='both', expand=True)
@@ -353,6 +366,30 @@ def launch() -> None:
         workflow_pages[name] = container  # Notebook owns the CONTAINER, not the page frame.
         tab_canvases[name] = scroller
         return page
+
+    def scroll_active_page(event):
+        # Avoid scrolling the recovery log or inventory while pointer is outside
+        # the notebook. Windows events use delta=120 per notch; X11 uses buttons.
+        if not notebook.winfo_ismapped():
+            return
+        under = root.winfo_containing(root.winfo_pointerx(), root.winfo_pointery())
+        if under is None:
+            return
+        active = root.nametowidget(notebook.select())
+        current = under
+        while current is not None and current is not root:
+            if current is active:
+                steps = -int(event.delta / 120) if getattr(event, 'delta', 0) else 0
+                if steps == 0:
+                    steps = -1 if getattr(event, 'num', 0) == 4 else 1
+                for canvas_item in tab_canvases.values():
+                    if str(canvas_item.master) == str(active):
+                        canvas_item.yview_scroll(steps, 'units')
+                        return 'break'
+            current = getattr(current, 'master', None)
+    root.bind_all('<MouseWheel>', scroll_active_page, add='+')
+    root.bind_all('<Button-4>', scroll_active_page, add='+')
+    root.bind_all('<Button-5>', scroll_active_page, add='+')
 
     tab_start = workflow_tab('start', ' Start here ')
     tab_drive = workflow_tab('drive', ' Diagnose / Rescue ')
@@ -424,7 +461,7 @@ def launch() -> None:
     log_holder = tk.Frame(shell, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
     tk.Label(log_holder, text="Operation log", bg=C["panel"], fg=C["muted"],
              font=("Segoe UI", 9)).pack(anchor="w", padx=8, pady=(6, 0))
-    log = tk.Text(log_holder, height=8, wrap="word", state="disabled",
+    log = tk.Text(log_holder, height=6, wrap="word", state="disabled",
                   bg=C["panel2"], fg=C["text"], insertbackground=C["text"],
                   font=("Consolas", 9), relief="flat", borderwidth=0)
     log.pack(fill="both", expand=True, padx=8, pady=6)
@@ -544,11 +581,16 @@ def launch() -> None:
         stats["verified"] = int(event.get("verified_bytes") or stats["verified"])
         health = event.get("health") or stats["health"]
         stats["health"] = health
-        health_var.set(
-            f"media {health.get('media', '?')} · transport {health.get('transport', '?')} · "
-            f"mechanical* {health.get('mechanical', '?')}  "
-            f"(*latency primary; opt-in acoustic/IMU are soft WATCH/STOP only)"
-        )
+        if all(str(health.get(k, 'UNKNOWN')).upper() == 'UNKNOWN'
+               for k in ('media', 'transport', 'mechanical')):
+            health_var.set('Drive health not established · SMART or physical testing needed')
+        else:
+            health_var.set(
+                f"Media {health.get('media', 'unknown')} · "
+                f"Transport {health.get('transport', 'unknown')} · "
+                f"Mechanical indicator {health.get('mechanical', 'unknown')} "
+                '(latency estimate, not a physical sensor)'
+            )
         # Percent from probe or refresh indices.
         pi, pt = int(event.get("probe_index") or 0), int(event.get("probe_total") or 0)
         ri, rt = int(event.get("refresh_index") or 0), int(event.get("refresh_total") or 0)
@@ -645,6 +687,36 @@ def launch() -> None:
             map_dirty = True
 
     def start(args: list[str], title: str, *, risky: bool = False, destructive: bool = False) -> None:
+        """Stage a job for confirmation. Invoking workflow controls cannot run I/O."""
+        nonlocal staged_job
+        if busy:
+            messagebox.showwarning('Busy', 'Stop the current job before selecting another.')
+            return
+        staged_job = (list(args), str(title), bool(risky), bool(destructive))
+        status.set(f'READY: {title} — review the settings, then click Start job')
+        phase_var.set('READY TO START')
+        msg_var.set(f'{title} is selected but NOT running')
+        cancel_button.configure(text='Start job', command=launch_pending, state='normal')
+
+    def launch_pending() -> None:
+        nonlocal staged_job
+        if busy or staged_job is None:
+            return
+        args, title, risky, destructive = staged_job
+        if '--ack-media-warning' in args:
+            if not messagebox.askyesno('SMART media warning',
+                    'The drive has a media warning. Rewrites can worsen damage. Continue?'):
+                return
+        if '--journal-backend' in args and 'memory' in args:
+            if not messagebox.askyesno('No-backup RAM-only operation',
+                    'Only the current region is held in process memory. A crash, USB reset or '
+                    'power loss could permanently lose it. No saved recovery journal exists. Continue?'):
+                return
+        launch_job(args, title, risky=risky, destructive=destructive)
+        if busy:
+            staged_job = None
+
+    def launch_job(args: list[str], title: str, *, risky: bool = False, destructive: bool = False) -> None:
         nonlocal process, busy, last_result
         if busy:
             messagebox.showwarning("Busy", "A job is already active.")
@@ -711,7 +783,7 @@ def launch() -> None:
         reset_map()
         set_dashboard_visible(True)
         busy = True
-        cancel_button.configure(state="normal")
+        cancel_button.configure(text='Stop job', command=cancel, state='normal')
 
         def worker() -> None:
             nonlocal process
@@ -775,8 +847,14 @@ def launch() -> None:
         tree.heading(key, text=key.upper())
         tree.column(key, width=width, stretch=(key == "model"))
     tree.pack(fill="x", pady=8)
-    tree.bind("<<TreeviewSelect>>", lambda e: selected.set(
-        tree.selection()[0] if tree.selection() else "No external drive selected"))
+    def select_device(_event=None):
+        item = tree.selection()
+        selected.set(item[0] if item else 'No external drive selected')
+        if item and item[0] in inventory:
+            d = inventory[item[0]]
+            health_var.set(f'{d.model} · {d.size_bytes/10**9:.2f} GB · {d.bus.upper()} · '
+                           'Health not checked (SMART recommended)')
+    tree.bind('<<TreeviewSelect>>', select_device)
     ttk.Label(tab_drive, textvariable=selected).pack(anchor="w")
 
     def refresh_devices() -> None:
@@ -804,6 +882,7 @@ def launch() -> None:
     quick_repair_storage = tk.StringVar(value=(
         'Volatile RAM only (NO saved files)' if prefs['repair_storage'] == 'memory'
         else 'Disk journal (crash recoverable)'))
+    remember_weak_regions = tk.BooleanVar(value=True)
     guided_repair_policy = tk.StringVar(value=(
         'Balanced: bounded error recovery + weak regions' if prefs['repair_policy'] == 'balanced'
         else 'Preserve data: no read error retries'))
@@ -834,24 +913,7 @@ def launch() -> None:
                 if dev not in inventory:
                     raise ValueError("Refresh disk inventory before selecting this patient")
                 mode = "quick" if kind == "sample" else "full"
-                if not messagebox.askyesno(
-                    "Guided scan and repair",
-                    "DriveRepair will scan and investigate isolated read errors with a "
-                    "strict retry budget. It may refresh slow regions AND error regions "
-                    "only when TWO independent reads agree and the write engine "
-                    "checks again. Unknown bytes will NEVER be overwritten. "
-                    "Unstable USB connections and critical hardware faults still block writes. "
-                    "Continue to the authorization screen?",
-                ):
-                    return
                 volatile = quick_repair_storage.get().startswith('Volatile RAM')
-                if volatile and not messagebox.askyesno(
-                    'LAST RESORT: RAM ONLY / NO BACKUP',
-                    'This writes the source drive in place. The original bytes are held '
-                    'in process RAM for ONE region at a time. No image or journal files '
-                    'will be saved. A crash, power failure, or USB reset can permanently '
-                    'destroy the active region. A UPS is not a backup. Continue?'):
-                    return
                 journal = str(Path(journal_dir.get()).expanduser()) + (
                     f'-guided-{inventory[dev].fingerprint[:12]}-{time.time_ns()}')
                 flags = [
@@ -863,22 +925,14 @@ def launch() -> None:
                 if unknown_health_override.get():
                     flags.append('--ack-unknown-health')
                 if ack_media_warn.get():
-                    if not messagebox.askyesno('Repair on SMART warning',
-                        'SMART reports a warning. This drive may be physically deteriorating. '
-                        'Rewriting may worsen it. Accept this additional risk?'):
-                        return
                     flags.append('--ack-media-warning')
                 flags += ['--repair-policy', 'balanced' if guided_repair_policy.get().startswith('Balanced') else 'preserve']
                 if volatile:
-                    if not messagebox.askyesno(
-                        'USB dock power risk',
-                        'Your USB dock can lose power even if your laptop has battery '
-                        'or UPS protection. A power interruption can permanently '
-                        'lose the active region. Do you acknowledge this risk?'):
-                        return
                     flags += ['--journal-backend', 'memory', '--ack-volatile-journal']
                 else:
                     flags += ['--journal-backend', 'disk', '--journal', journal]
+                    if remember_weak_regions.get():
+                        flags.append('--remember-anomalies')
                 start(['care-external', '--device', dev, '--mode', mode,
                        *flags, '--json'],
                       f'{mode.title()} scan + targeted in-place repair', risky=True, destructive=True)
@@ -918,6 +972,8 @@ def launch() -> None:
                  width=52).pack(side='left', padx=(6, 12))
     ttk.Checkbutton(policy_row, text='Allow repair of verified candidates on SMART warning (high risk)',
                     variable=ack_media_warn).pack(side='left')
+    ttk.Checkbutton(tab_drive, text='Remember bad/slow disk locations (private metadata only; disk journal mode)',
+                    variable=remember_weak_regions).pack(anchor='w', pady=(1, 4))
     storage = ttk.Frame(tab_drive)
     storage.pack(fill='x', pady=(2, 8))
     ttk.Label(storage, text='Temporary region storage:').pack(side='left')
@@ -1349,7 +1405,13 @@ def launch() -> None:
                    '--chunk-mib', '1', '--json'],
                   'Read-only RAM/power preflight')
         except ValueError as exc:
-            messagebox.showerror('RAM preflight', str(exc))
+            if not offline_ram_power.get().strip():
+                messagebox.showinfo('RAM-only alternative',
+                    'This check applies to Linux tmpfs journaling, which requires live UPS/battery telemetry. '
+                    'Volatile process-RAM mode (available under In-place refresh) does not require telemetry, '
+                    'but cannot survive a crash or dock reset.')
+            else:
+                messagebox.showerror('RAM preflight', str(exc))
 
     ram_actions = ttk.Frame(tab_system)
     ram_actions.pack(anchor='w', pady=8)
@@ -1369,6 +1431,7 @@ def launch() -> None:
     mode_var = tk.StringVar(value="adaptive")
     backend_var = tk.StringVar(value="disk")
     power_var = tk.StringVar(value="")
+    no_power_telemetry_ack = tk.BooleanVar(value=False)
     after_var = tk.StringVar(value="ask")
     samples_var = tk.StringVar(value="128")
     chunk_var = tk.StringVar(value="8")
@@ -1389,7 +1452,10 @@ def launch() -> None:
     ttk.Label(opts, text="Samples").pack(side="left", padx=(12, 0))
     ttk.Entry(opts, textvariable=samples_var, width=6).pack(side="left", padx=6)
 
-    row(tab_refresh, "RAM power source (nut:UPSNAME or battery)", power_var)
+    row(tab_refresh, "UPS/battery telemetry (ramdisk backend only)", power_var)
+    ttk.Checkbutton(tab_refresh,
+        text='Volatile process RAM: I understand there is no verified UPS telemetry or crash recovery',
+        variable=no_power_telemetry_ack).pack(anchor='w', pady=(4, 3))
     ttk.Label(tab_refresh, text="ramdisk: Linux tmpfs (can survive app crash). "
               "memory: process RAM only, no files and no resume (Windows/Linux). "
               "Both are volatile; a UPS does not eliminate risk.",
@@ -1415,6 +1481,8 @@ def launch() -> None:
                 raise ValueError('Rescan device inventory before attempting patient writes')
             args.extend(["--confirm-identity", inventory[dev].fingerprint[:12]])
             if backend_var.get() == 'memory':
+                if not no_power_telemetry_ack.get():
+                    raise ValueError('Check the volatile process-RAM risk acknowledgment; UPS telemetry is optional in this mode')
                 if not messagebox.askyesno('NO BACKUP: PROCESS-RAM ONLY',
                         'No image, journal files, or recovery checkpoints will be saved. '
                         'A crash, USB reset, or power loss can permanently destroy '
@@ -1522,7 +1590,8 @@ def launch() -> None:
     statusbar = ttk.Frame(shell)
     statusbar.pack(fill="x", pady=(8, 0))
     ttk.Label(statusbar, textvariable=status).pack(side="left", fill="x", expand=True)
-    cancel_button = ttk.Button(statusbar, text="Stop job", command=cancel, state="disabled")
+    cancel_button = ttk.Button(statusbar, text="Start job", command=launch_pending, state="disabled",
+                               style="Accent.TButton")
     cancel_button.pack(side="right")
     ttk.Button(statusbar, text='Save report…', command=save_report).pack(side='right', padx=6)
     ttk.Button(statusbar, text='Open destination', command=open_destination).pack(side='right', padx=6)
@@ -1534,6 +1603,33 @@ def launch() -> None:
     statusbar.pack(side='bottom', fill='x', pady=(8, 0))
     log_controls.pack(side='bottom', fill='x', pady=(8, 0))
     notebook.pack(fill='both', expand=True)
+
+    def check_prerequisites() -> None:
+        from .dependencies import detect
+        def worker():
+            try:
+                q.put(('prerequisites', detect()))
+            except Exception as exc:
+                q.put(('prerequisite_error', str(exc)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def install_smart_tools() -> None:
+        if not messagebox.askyesno('Install optional SMART tools',
+            'Allow Windows Package Manager to install smartmontools from the official package ID? '
+            'This changes installed software and may require administrator approval. '
+            'No drive firmware is modified. Continue?'):
+            return
+        prereq_install.configure(state='disabled')
+        prerequisite_text.set('Installing smartmontools through Windows Package Manager…')
+        def worker():
+            try:
+                from .dependencies import install_smartctl_windows
+                q.put(('smartctl_install', install_smartctl_windows(approved=True)))
+            except Exception as exc:
+                q.put(('prerequisite_error', str(exc)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    prereq_install.configure(command=install_smart_tools)
 
     poll_after_id = None
     def poll() -> None:
@@ -1595,6 +1691,21 @@ def launch() -> None:
                             device.model, f'{device.size_bytes / 10**9:.2f} GB',
                             device.bus, info['serial_suffix'], info['identity_hint'], device.id))
                     status.set(f'Found {len(value)} Linux whole disk(s), including internal')
+                elif kind == 'prerequisites':
+                    tools = value
+                    if tools.get('smart_health_available'):
+                        prerequisite_text.set('SMART tools ready · Core scanning works without optional forensic tools')
+                        prereq_install.configure(state='disabled')
+                    else:
+                        prerequisite_text.set('SMART not installed · Health checks limited; recovery still available')
+                        prereq_install.configure(state=('normal' if tools.get('install_support') == 'winget'
+                                                         else 'disabled'))
+                elif kind == 'smartctl_install':
+                    prerequisite_text.set('SMART installation finished; rechecking…')
+                    check_prerequisites()
+                elif kind == 'prerequisite_error':
+                    prerequisite_text.set('SMART tool setup requires attention · See Advanced details')
+                    write('SMART prerequisite check: ' + str(value) + '\n')
                 elif kind == "devices":
                     inventory.clear()
                     inventory.update({d.id: d for d in value})
@@ -1628,7 +1739,7 @@ def launch() -> None:
                     title, code = value
                     process = None
                     busy = False
-                    cancel_button.configure(state="disabled")
+                    cancel_button.configure(text='Start job', command=launch_pending, state='disabled')
                     phase_var.set("COMPLETED / REVIEW RESULTS" if code == 0 else f"STOPPED / ERROR {code}")
                     incomplete = bool(last_result and last_result.get('status') in {
                         'completed_with_missing_data', 'in_progress', 'retry_in_progress',
@@ -1811,15 +1922,14 @@ def launch() -> None:
 
     root.report_callback_exception = report_ui_error
     if debug_log_path is not None:
-        advanced_open.set(True)
-        show_advanced()
         write(f'Debug tracking ON — mirroring engine/UI output to:\n  {debug_log_path}\n')
-        status.set(f'Debug tracking ON → {debug_log_path}')
+        status.set('Debug logging available in Advanced Details · Choose a workflow to begin')
     # The recovery dashboard is available on demand but initially hidden so
     # the goal buttons and drive controls fit on normal laptop displays.
-    set_dashboard_visible(bool(prefs["dashboard"]) if debug_log_path is None else True)
+    set_dashboard_visible(bool(prefs["dashboard"]))
     root.protocol("WM_DELETE_WINDOW", on_close)
     canvas.bind("<Configure>", lambda e: redraw_map(force=True))
     poll()
+    check_prerequisites()
     refresh_devices()
     root.mainloop()

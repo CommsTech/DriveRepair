@@ -61,7 +61,10 @@ class HealthTests(unittest.TestCase):
         device = Device('windows:PhysicalDrive2', r'\\.\PhysicalDrive2', 'Seagate', 1000, 512, 'usb')
 
         def runner(cmd, **kw):
-            if cmd and cmd[0] == 'smartctl':
+            # Force SMART path miss even when smartctl.exe exists on PATH/Program Files.
+            if cmd and (str(cmd[0]).lower().endswith('smartctl')
+                        or str(cmd[0]).lower().endswith('smartctl.exe')
+                        or cmd[0] == 'smartctl'):
                 raise FileNotFoundError('smartctl')
             payload = json.dumps({
                 'disk_health': 'Healthy',
@@ -72,7 +75,8 @@ class HealthTests(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, stdout=payload)
 
         with mock.patch('driverepair_desktop.health.sys.platform', 'win32'):
-            snap = try_health_snapshot(device, run=runner)
+            with mock.patch('driverepair_desktop.dependencies.smartctl_path', return_value=None):
+                snap = try_health_snapshot(device, run=runner)
         self.assertIsNotNone(snap)
         self.assertEqual(snap['status'], 'windows_health_limited')
         self.assertEqual(media_from_smart(snap), 'OK')

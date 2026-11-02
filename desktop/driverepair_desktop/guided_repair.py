@@ -60,11 +60,15 @@ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
                 reads += 1
                 good = len(two) == length and one == two
         except OSError as exc:
+            # WinError 1117 is ERROR_IO_DEVICE, and Python may report errno=22.
+            # The Win32 code takes precedence over the generic errno.
             # An inaccessible/disconnected drive is NOT a recoverable bad sector.
             # Do not turn further reads into a candidate after the identity or
             # transport becomes uncertain.
-            if exc.errno in {errno.ENODEV, errno.ENXIO, errno.EBADF,
-                             errno.EACCES, errno.EPERM, errno.ENOENT, errno.EINVAL}:
+            if (getattr(exc, 'winerror', None) in {5, 6, 21, 1167} or
+                    (getattr(exc, 'winerror', None) is None and exc.errno in {
+                        errno.ENODEV, errno.ENXIO, errno.EBADF, errno.EACCES,
+                        errno.EPERM, errno.ENOENT, errno.EINVAL})):
                 device_unstable = True
                 unresolved.append({'offset': off, 'length': length})
                 break
@@ -124,8 +128,11 @@ def plan_targeted_refresh(scan: dict, *, sector: int, chunk: int,
         reasons.append('Unstable reads without usable offsets: cannot isolate suspect data')
     if scan.get("mode") not in {"triage", "full"}:
         reasons.append("Assisted repair requires triage or full scan")
-    if scan.get('slow_regions_truncated'):
-        reasons.append('Slow-region list truncated; refuse a partial silent repair')
+    if scan.get('read_error_ranges_truncated'):
+        reasons.append('Error map truncated; inspect the full result before writes')
+    # A truncated slow-region map is not grounds to rewrite unknown bytes.
+    # But independently observed candidate regions may still be treated in a
+    # bounded subset, explicitly reported as PARTIAL maintenance.
     if not 1 <= max_regions <= 256:
         raise ValueError("Region budget must be 1–256")
     if hardware:
@@ -194,10 +201,15 @@ def plan_targeted_refresh(scan: dict, *, sector: int, chunk: int,
     if any(a[0] + a[1] > b[0] for a, b in zip(regions, regions[1:])):
         return {"status": "blocked", "reasons": ["Overlapping suspect regions"],
                 "targets": [], "candidate_count": len(regions)}
-    if len(regions) > max_regions:
-        return {"status": "blocked", "reasons": ["Too many suspect regions for safe bounded maintenance"],
-                "targets": [], "candidate_count": len(regions)}
-    unresolved = (scan_incomplete or bool(unstable_ranges) or
+    all_candidates_count = len(regions)
+    # Incremental work: choose a bounded set, never silently rewrite an
+    # unbounded number of regions after one scan. Remaining candidates need a
+    # later explicitly authorized cycle and a new pre-write verification.
+    limited_candidates = len(regions) > max_regions
+    if limited_candidates:
+        regions = regions[:max_regions]
+    unresolved = (scan_incomplete or limited_candidates or bool(scan.get('slow_regions_truncated')) or
+                  bool(scan.get('skipped_untested_ranges')) or bool(unstable_ranges) or
                   (bool(scan.get('read_error_chunks')) and (
                       not investigation or investigation.get('unresolved_regions') or
                       investigation.get('uninvestigated_original_ranges') or
@@ -211,6 +223,8 @@ def plan_targeted_refresh(scan: dict, *, sector: int, chunk: int,
         "status": "partial_candidates_with_unresolved_data" if regions and unresolved else
                   "candidates_found" if regions else "no_candidates",
         "reasons": [], "targets": regions, "candidate_count": len(regions),
+        "remaining_candidate_count": all_candidates_count - len(regions),
+        "incremental_batch": limited_candidates,
         "unresolved_data": bool(unresolved),
         "notes": ("Rewritten candidates are repeatably readable, NOT bit-perfect by proof. "
                   "Unknown/unreadable regions are EXCLUDED. The write engine rereads "

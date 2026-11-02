@@ -18,7 +18,8 @@ from .devices import Device
 
 def health_snapshot(device: Device,
                     run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> dict:
-    cmd = ['smartctl', '--json', '--all', device.path]
+    from .dependencies import smartctl_path
+    cmd = [smartctl_path() or 'smartctl', '--json', '--all', device.path]
     try:
         proc = run(cmd, capture_output=True, timeout=30, check=False)
     except FileNotFoundError as exc:
