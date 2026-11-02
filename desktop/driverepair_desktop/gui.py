@@ -478,10 +478,26 @@ def launch() -> None:
         pbar["value"] = max(0, min(1000, int(pct * 10)))
         lat = stats["latency_ms"]
         med = stats["median_ms"]
+        # Scan / refresh share this path — fill the summary cards so STARTING is not sticky.
+        if phase == "SCANNING" or event.get("speed_bps") is not None:
+            for label, text in zip(summary_labels, ('BYTES READ', 'UNREADABLE / UNKNOWN',
+                                                    'CURRENT SPEED', 'TIME REMAINING')):
+                label.configure(text=text)
+            recovered_var.set(fmt_bytes(stats["rewritten"]) if stats["rewritten"] else '—')
+            speed_bps = event.get("speed_bps")
+            if speed_bps:
+                speed_var.set(f'{fmt_bytes(int(speed_bps))}/s')
+            eta_s = event.get("eta_seconds")
+            if eta_s is not None:
+                eta_var.set(format_duration(float(eta_s)) if float(eta_s) > 0 else 'Finishing…')
+            if phase == "SCANNING":
+                capacity_var.set('Read-only scan — no destination image')
+                destination_var.set('Destination: not used for scan')
+                legend_var.set('Scan map · . pending   o readable sample   S slow   X unreadable')
         metric_var.set(
             f"{pct:5.1f}% done\n"
             f"lat {('—' if lat is None else f'{lat:.0f} ms'):>8}   med {('—' if med is None else f'{med:.0f} ms'):>8}\n"
-            f"rewritten {stats['rewritten'] / (1024 * 1024):.2f} MiB"
+            f"processed {stats['rewritten'] / (1024 * 1024):.2f} MiB"
         )
         symbol = "o"
         if event.get("failed"):
@@ -525,7 +541,14 @@ def launch() -> None:
             if typed != selected_id:
                 messagebox.showerror("Not authorized", "Device ID confirmation did not match; no write started.")
                 return
-        if args and args[0].startswith('rescue-'):
+        # Rescue AND scan/refresh/benchmark need JSONL progress so the dashboard
+        # does not sit forever on STARTING while the child is actively I/O bound.
+        progressive = {
+            'rescue-image', 'rescue-external', 'rescue-system',
+            'scan', 'scan-image', 'refresh-external', 'refresh-image',
+            'benchmark-external', 'last-resort-system-refresh',
+        }
+        if args and args[0] in progressive and '--progress-jsonl' not in args:
             args = [*args, '--progress-jsonl', '--no-live-dashboard']
         command = recovery_command(args)
         last_result = None
