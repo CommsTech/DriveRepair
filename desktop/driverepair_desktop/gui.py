@@ -561,7 +561,7 @@ def launch() -> None:
         # does not sit forever on STARTING while the child is actively I/O bound.
         progressive = {
             'rescue-image', 'rescue-external', 'rescue-system',
-            'scan', 'scan-image', 'refresh-external', 'refresh-image',
+            'scan', 'scan-image', 'care-image', 'care-external', 'refresh-external', 'refresh-image',
             'benchmark-external', 'last-resort-system-refresh',
         }
         if args and args[0] in progressive and '--progress-jsonl' not in args:
@@ -578,13 +578,21 @@ def launch() -> None:
         errors_var.set('—')
         speed_var.set('—')
         eta_var.set('—')
-        capacity_var.set('Free space: checking…')
+        in_place = bool(args and args[0] in {'care-external', 'care-image',
+                         'refresh-external', 'refresh-system', 'refresh-image'})
+        capacity_var.set('No image needed for in-place repair' if in_place
+                         else 'Free space: checking…')
         warning_var.set('Recovery may stress failing hardware. This display is not a drive-health verdict.')
         warning_label.configure(fg=C['muted'])
         for label, text in zip(summary_labels, ('DATA SAVED TO IMAGE', 'UNREADABLE / UNKNOWN',
                                                 'CURRENT SPEED', 'TIME REMAINING')):
             label.configure(text=text)
-        legend_var.set('Activity map · . unscanned  o read to image  ? in progress  X unreadable/unknown')
+        if in_place:
+            summary_labels[0].configure(text='BYTES REWRITTEN / VERIFIED')
+            destination_var.set('Destination: original selected drive')
+            legend_var.set('Repair map · . unscanned  o read  S slow  X unreadable (skipped)')
+        else:
+            legend_var.set('Activity map · . unscanned  o read to image  ? in progress  X unreadable/unknown')
         reset_map()
         set_dashboard_visible(True)
         busy = True
@@ -677,16 +685,63 @@ def launch() -> None:
             raise ValueError("Select an external drive from the inventory.")
         return value
 
+    # The main recovery page must offer the no-image / no-output choice.
+    quick_repair_storage = tk.StringVar(value='Volatile RAM only (NO saved files)')
+
     def device_action(kind: str) -> None:
         try:
             dev = chosen_device()
             if kind == "health":
                 start(["health", "--device", dev, "--json"], "SMART health")
-            elif kind == "sample":
-                start(["scan", "--device", dev, "--mode", "triage", "--json"], "Quick triage scan", risky=True)
-            elif kind == "full":
-                start(["scan", "--device", dev, "--mode", "full", "--ack-risk", "--json"],
-                      "Full scan", risky=True)
+            elif kind in {"sample", "full"}:
+                if sys.platform not in {"win32"} and not sys.platform.startswith("linux"):
+                    raise ValueError("Raw-drive refresh is not qualified for macOS. "
+                                     "Read-only scans and image recovery remain available.")
+                if dev not in inventory:
+                    raise ValueError("Refresh disk inventory before selecting this patient")
+                mode = "quick" if kind == "sample" else "full"
+                if not messagebox.askyesno(
+                    "Guided scan and repair",
+                    "DriveRepair will scan, then attempt to refresh ONLY slow regions "
+                    "that are readable and consistent. It will NOT overwrite unreadable "
+                    "data or repair already-corrupted files. If the drive shows errors, "
+                    "writes will be blocked. Continue to the authorization screen?",
+                ):
+                    return
+                volatile = quick_repair_storage.get().startswith('Volatile RAM')
+                if volatile and not messagebox.askyesno(
+                    'LAST RESORT: RAM ONLY / NO BACKUP',
+                    'This writes the source drive in place. The original bytes are held '
+                    'in process RAM for ONE region at a time. No image or journal files '
+                    'will be saved. A crash, power failure, or USB reset can permanently '
+                    'destroy the active region. A UPS is not a backup. Continue?'):
+                    return
+                journal = str(Path(journal_dir.get()).expanduser()) + (
+                    f'-guided-{inventory[dev].fingerprint[:12]}-{time.time_ns()}')
+                flags = [
+                    "--ack-risk", "--ack-destructive", "--ack-no-backup",
+                    "--ack-data-loss-risk", "--ack-usb-bridge-risk",
+                    "--ack-unvalidated-hardware", "--confirm-identity",
+                    inventory[dev].fingerprint[:12],
+                ]
+                if unknown_health_override.get():
+                    flags.append('--ack-unknown-health')
+                if volatile:
+                    if not messagebox.askyesno(
+                        'USB dock power risk',
+                        'Your USB dock can lose power even if your laptop has battery '
+                        'or UPS protection. A power interruption can permanently '
+                        'lose the active region. Do you acknowledge this risk?'):
+                        return
+                    flags += ['--journal-backend', 'memory', '--ack-volatile-journal']
+                else:
+                    flags += ['--journal-backend', 'disk', '--journal', journal]
+                start(['care-external', '--device', dev, '--mode', mode,
+                       *flags, '--json'],
+                      f'{mode.title()} scan + targeted in-place repair', risky=True, destructive=True)
+            elif kind == "diagnose":
+                start(["scan", "--device", dev, "--mode", "triage", "--json"],
+                      "Read-only quick diagnosis", risky=True)
             elif kind == "benchmark":
                 start(["benchmark-external", "--device", dev, "--ack-risk", "--json"],
                       "Benchmark", risky=True)
@@ -706,16 +761,38 @@ def launch() -> None:
     bf.pack(anchor="w", pady=8)
     ttk.Button(bf, text="Refresh inventory", command=refresh_devices).pack(side="left", padx=(0, 6))
     for label, kind in [("SMART", "health"),
-                        ("Quick scan (diagnose)", "sample"),
-                        ("Full scan (diagnose)", "full"),
-                        ("Benchmark", "benchmark"),
+                        ("Quick repair", "sample"),
+                        ("Full repair", "full"),
                         ("Rescue to image", "rescue"),
                         ("Resume rescue", "resume")]:
         ttk.Button(bf, text=label, command=lambda k=kind: device_action(k)).pack(side="left", padx=(0, 6))
+    storage = ttk.Frame(tab_drive)
+    storage.pack(fill='x', pady=(2, 8))
+    ttk.Label(storage, text='Temporary region storage:').pack(side='left')
+    ttk.Combobox(storage, textvariable=quick_repair_storage, state='readonly', width=42,
+                 values=['Volatile RAM only (NO saved files)',
+                         'Disk journal (crash recoverable)']).pack(side='left', padx=8)
+    ttk.Label(storage, text='No image created; RAM-only loses crash recovery.',
+              style='Muted.TLabel').pack(side='left')
+    secondary = ttk.Frame(tab_drive)
+    secondary.pack(fill="x", pady=(0, 6))
+    ttk.Button(secondary, text="Read-only quick check",
+               command=lambda: device_action("diagnose")).pack(side="left", padx=(0, 8))
+    ttk.Button(secondary, text="Benchmark (read-only)",
+               command=lambda: device_action("benchmark")).pack(side="left", padx=(0, 8))
+    unknown_health_override = tk.BooleanVar(value=False)
+    ttk.Checkbutton(secondary, text="Permit manual risk override if SMART is unavailable",
+                    variable=unknown_health_override).pack(side="left", padx=(4, 0))
+    ttk.Label(tab_drive,
+              text="Guided repair auto-tunes scanning, then journals/rewrites/verifies only safely readable slow regions. "
+                   "It will stop and recommend rescue if read errors or health warnings are found. "
+                   "A clean scan does not prove file integrity; no identified problem means no write.",
+              style="Muted.TLabel", wraplength=890).pack(anchor="w", pady=(2, 12))
     ttk.Label(
         tab_drive,
-        text='Scans only measure readability/latency — they never rewrite the patient disk. '
-             'Use Rescue to image to copy data off, or In-place refresh only when you accept write risk.',
+        text='Read-only check diagnoses. Quick repair and Full repair scan and then rewrite/verify '
+             'ONLY slow, consistently readable regions after approval. Full surface rewrite is '
+             'available on the In-place refresh tab. None of these repairs missing file bytes.',
         style='Muted.TLabel', wraplength=980,
     ).pack(anchor='w', pady=(4, 0))
     row(tab_drive, "Rescue image output", dest_file, pick_output)
@@ -1091,7 +1168,7 @@ def launch() -> None:
     ttk.Combobox(opts, textvariable=mode_var, values=["adaptive", "full"], width=10,
                  state="readonly").pack(side="left", padx=6)
     ttk.Label(opts, text="Journal").pack(side="left", padx=(12, 0))
-    ttk.Combobox(opts, textvariable=backend_var, values=["disk", "ramdisk"], width=10,
+    ttk.Combobox(opts, textvariable=backend_var, values=["disk", "ramdisk", "memory"], width=10,
                  state="readonly").pack(side="left", padx=6)
     ttk.Label(opts, text="After").pack(side="left", padx=(12, 0))
     ttk.Combobox(opts, textvariable=after_var, values=["ask", "keep", "delete"], width=8,
@@ -1103,14 +1180,16 @@ def launch() -> None:
     ttk.Entry(opts, textvariable=samples_var, width=6).pack(side="left", padx=6)
 
     row(tab_refresh, "RAM power source (nut:UPSNAME or battery)", power_var)
-    ttk.Label(tab_refresh, text="RAM mode is Linux-only and VOLATILE even with UPS. "
-              "Use a tmpfs/ramfs mount with swap disabled; both host and dock need battery backup.",
+    ttk.Label(tab_refresh, text="ramdisk: Linux tmpfs (can survive app crash). "
+              "memory: process RAM only, no files and no resume (Windows/Linux). "
+              "Both are volatile; a UPS does not eliminate risk.",
               style="Muted.TLabel", wraplength=920).pack(anchor="w")
 
     def run_refresh() -> None:
         try:
             dev = chosen_device()
-            journal = require(journal_dir, "journal directory")
+            journal = (require(journal_dir, 'journal directory')
+                       if backend_var.get() != 'memory' else 'RAM_ONLY_NO_FILES')
             samples = max(8, min(4096, int(samples_var.get())))
             args = [
                 "refresh-external", "--device", dev, "--journal", journal,
@@ -1125,6 +1204,19 @@ def launch() -> None:
             if dev not in inventory:
                 raise ValueError('Rescan device inventory before attempting patient writes')
             args.extend(["--confirm-identity", inventory[dev].fingerprint[:12]])
+            if backend_var.get() == 'memory':
+                if not messagebox.askyesno('NO BACKUP: PROCESS-RAM ONLY',
+                        'No image, journal files, or recovery checkpoints will be saved. '
+                        'A crash, USB reset, or power loss can permanently destroy '
+                        'the active region. A UPS cannot eliminate this risk. Continue?'):
+                    return
+                if not messagebox.askyesno('USB dock risk',
+                        'Do you understand the USB dock may lose power independently '
+                        'and leave data irrecoverably damaged?'):
+                    return
+                args += ['--ack-volatile-journal', '--ack-dock-power-backed']
+                index = args.index('--journal')
+                del args[index:index + 2]  # no path, no journal files
             if backend_var.get() == 'ramdisk':
                 if not messagebox.askyesno('VOLATILE RAM JOURNAL',
                         'Host restart, RAM loss or dock failure can permanently damage the disk. '
@@ -1140,7 +1232,7 @@ def launch() -> None:
         except Exception as exc:  # noqa: BLE001 — show sample parse errors
             messagebox.showerror("Input", str(exc))
 
-    ttk.Button(tab_refresh, text="Start Adaptive / Full refresh", style="Accent.TButton",
+    ttk.Button(tab_refresh, text="Repair this disk in place (no image)", style="Accent.TButton",
                command=run_refresh).pack(anchor="w", pady=10)
     ttk.Label(
         tab_refresh,
@@ -1348,6 +1440,23 @@ def launch() -> None:
                             'INCOMPLETE IMAGE: some areas remain missing or unverified. Keep the recovery journal.'
                         )
                         warning_label.configure(fg=C['warn'])
+                    elif 'targeted refresh' in str(title).lower():
+                        outcome = (last_result or {}).get('status', 'unknown')
+                        plan = (last_result or {}).get('repair_plan') or {}
+                        if outcome == 'completed_targeted_refresh':
+                            repaired = ((last_result or {}).get('repair') or {}).get('verified_bytes', 0)
+                            warning_var.set(f'Targeted refresh verified {fmt_bytes(int(repaired))}. '
+                                            'Data correctness and hardware lifespan are NOT certified.')
+                            warning_label.configure(fg=C['ok'])
+                        elif outcome == 'completed_no_refresh_needed':
+                            warning_var.set('No safe slow-region candidates detected. Nothing was rewritten; '
+                                            'a passing scan does not prove file integrity.')
+                            warning_label.configure(fg=C['muted'])
+                        else:
+                            reasons = '; '.join(plan.get('reasons') or [])
+                            warning_var.set('Repair was not performed or was incomplete. '
+                                            + (reasons or 'Keep the journal and review the report.'))
+                            warning_label.configure(fg=C['warn'])
                     elif code == 0 and is_scan:
                         readiness = (last_result or {}).get('repair_readiness') or {}
                         blockers = readiness.get('blockers') or []

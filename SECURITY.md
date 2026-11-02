@@ -4,7 +4,7 @@
 
 | Version | Security review |
 |---|---|
-| `main` / 0.3.1b1 engineering candidate | Best effort; **not authorized for unrestricted public physical repair** |
+| `main` / 0.3.3b4 engineering candidate | Best effort; **not authorized for unrestricted public physical repair** |
 
 ## Product security posture
 
@@ -21,6 +21,12 @@
 - Experimental original-media refresh **can write patient sectors**; it is
   *not* yet qualified for public beta on valuable physical drives. A rolling
   journal is not an entire-disk backup, and a UPS does not eliminate its risk.
+- **Volatile process-RAM-only repair** has no image, no saved preimage,
+  no checkpoint and no crash-recovery capability. It is an explicitly opted-in
+  LAST-RESORT mode. A partial write during application/OS/power failure may
+  irreversibly damage previously readable file data. Windows raw writes still
+  require an exclusive handle and locked/offline patient volumes. This option
+  has only synthetic qualification, not a real USB-dock power-loss test.
 - Old custom BIOS/UEFI bootloader crates are experimental; destructive USB
   provisioning scripts are hard-disabled. A Debian live-ISO build recipe
   exists but is not yet built/boot-verified.

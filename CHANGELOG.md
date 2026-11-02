@@ -1,3 +1,17 @@
+## 0.3.3b4 — Direct repair / volatile RAM-only prototype
+
+- Added a visible no-image **Quick repair / Full repair** workflow with a
+  temporary-storage choice on the main drive page.
+- Process-memory journal now saves **no filesystem files or metadata** and is
+  never resumable after process exit. Requires extra explicit risk acceptance
+  for physical disk use; disk journaling remains the safer choice.
+- Added immediate best-effort rollback on volatile write failure and critical
+  fail-closed status if a restore cannot be verified.
+- Advanced In-place refresh GUI supports process RAM-only, including Windows
+  and Linux, subject to offline patient and exclusive lock requirements.
+- Added synthetic regression, no-journal-artifact, damaged-write and real Tk
+  interface tests. Hardware release gating unchanged.
+
 ## 0.3.3b3 — Guided GUI clickability and portable recovery hotfix (2026-11-01)
 
 - Fixed all seven Start Here buttons: Notebook.select now receives its owned

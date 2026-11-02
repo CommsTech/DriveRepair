@@ -8,6 +8,7 @@ destructive acknowledgements.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 import os
 import shutil
@@ -53,6 +54,7 @@ from .tsk_recovery import list_deleted_tsk, recover_selected_tsk
 from .forensics import image_evidence_manifest
 from .filesystems import detect_filesystems, recover_image
 from .sensors import SensorSuite
+from .guided_repair import tuned_scan, plan_targeted_refresh
 
 
 def parser() -> argparse.ArgumentParser:
@@ -89,6 +91,32 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument("--no-live-dashboard", action="store_true",
                          help="Reserved for GUI child processes (scan has no TTY dashboard)")
         cmd.add_argument("--json", action="store_true")
+    # Guided workflow: scan, identify slow *readable* regions, then explicitly
+    # authorized journaled targeted refresh. No writes on read errors, bad
+    # transport, inconsistent bytes or failing media counters.
+    for name in ('care-image', 'care-external'):
+        cmd = sub.add_parser(name, help='Guided quick/full scan and bounded, explicitly approved targeted refresh')
+        cmd.add_argument('--image' if name == 'care-image' else '--device', required=True)
+        cmd.add_argument('--mode', choices=['quick', 'full'], default='quick')
+        cmd.add_argument('--journal', help='Required for disk/ramdisk journal only; not used in volatile RAM mode')
+        cmd.add_argument('--journal-backend', choices=['disk', 'memory'], default='disk',
+                         help='disk=crash-recoverable; memory=no files, NO crash recovery (high risk)')
+        cmd.add_argument('--ack-volatile-journal', action='store_true',
+                         help='I accept loss of active region data on crash/power failure')
+        cmd.add_argument('--resume', action='store_true', help='Resume the targeted refresh journal without rescanning')
+        cmd.add_argument('--max-regions', type=int, default=64)
+        cmd.add_argument('--ack-risk', action='store_true')
+        cmd.add_argument('--ack-destructive', action='store_true')
+        cmd.add_argument('--ack-no-backup', action='store_true')
+        cmd.add_argument('--ack-data-loss-risk', action='store_true')
+        cmd.add_argument('--ack-usb-bridge-risk', action='store_true')
+        cmd.add_argument('--ack-unvalidated-hardware', action='store_true')
+        cmd.add_argument('--ack-unknown-health', action='store_true',
+                         help='Allow missing SMART evidence (still no repair on observed errors)')
+        cmd.add_argument('--confirm-identity', help='12-character fingerprint from list --json (physical writes only)')
+        cmd.add_argument('--progress-jsonl', action='store_true')
+        cmd.add_argument('--no-live-dashboard', action='store_true')
+        cmd.add_argument('--json', action='store_true')
     rescue_status = sub.add_parser(
         'rescue-status', help='READ-ONLY: inspect recovery journal (image size is NOT progress)')
     rescue_status.add_argument('--output', required=True, help='Existing rescued image file')
@@ -270,13 +298,14 @@ def parser() -> argparse.ArgumentParser:
     ):
         cmd = sub.add_parser(name, help=help_text)
         cmd.add_argument('--image' if name == 'refresh-image' else '--device', required=True)
-        cmd.add_argument('--journal', required=True,
-                         help='Directory for the rolling journal; keep OFF the patient')
+        cmd.add_argument('--journal',
+                         help='Journal location for disk/ramdisk; OMIT for memory-only')
         cmd.add_argument('--mode', choices=['adaptive', 'full'], default='adaptive',
                          help='adaptive=refresh slow readable regions; full=whole surface (high risk)')
         cmd.add_argument('--journal-backend', choices=['hybrid', 'disk', 'memory', 'ramdisk'], default='disk',
                          help='disk=safest; ramdisk=Linux tmpfs plus verified live power, VOLATILE; '
-                              'hybrid/memory=only synthetic images; process-local RAM is unsafe on raw drives')
+                              'memory=NO saved files and NO crash recovery (explicit last-resort only); '
+                              'hybrid=testing only')
         cmd.add_argument('--resume', action='store_true')
         cmd.add_argument('--chunk-mib', type=int, choices=[1, 2, 4, 8, 16, 32, 64], default=1)
         cmd.add_argument('--max-errors', type=int, default=4096)
@@ -767,8 +796,15 @@ def _run_extras(args) -> int:
         is_system = args.command == 'refresh-system'
         if args.consistency_reads < 2:
             raise ValueError('--consistency-reads must be >= 2')
-        if is_device and args.journal_backend not in {'disk', 'ramdisk'}:
-            raise ValueError('Physical refresh supports only disk or explicitly verified ramdisk journaling')
+        if is_device and args.journal_backend not in {'disk', 'ramdisk', 'memory'}:
+            raise ValueError('Physical refresh supports disk, verified Linux ramdisk, or explicitly accepted volatile RAM only')
+        if args.journal_backend == 'memory':
+            if args.resume:
+                raise ValueError('Volatile RAM mode cannot resume after a crash or application exit')
+            if is_device and not getattr(args, 'ack_volatile_journal', False):
+                raise ValueError('Volatile RAM mode requires --ack-volatile-journal (power/crash loss of current region)')
+        if args.journal_backend != 'memory' and not args.journal:
+            raise ValueError('This journal backend requires a separate storage directory')
         if is_device and args.no_verify:
             raise ValueError('Physical-device refresh cannot disable read-back verification')
         # Paint something immediately — device open / identity checks can take seconds.
@@ -809,6 +845,9 @@ def _run_extras(args) -> int:
             for other in inventory:
                 if other.id != selected.id and other.serial == selected.serial:
                     raise RuntimeError('Multiple disks report the same hardware serial; identity is ambiguous')
+            if args.journal_backend == 'memory' and selected.bus.lower() in {'usb', 'firewire', 'thunderbolt'}:
+                if not args.ack_dock_power_backed:
+                    raise ValueError('Volatile RAM mode on a USB dock requires --ack-dock-power-backed')
             if args.journal_backend == 'ramdisk':
                 if not args.ack_volatile_journal:
                     raise ValueError('RAM journal requires --ack-volatile-journal')
@@ -822,8 +861,14 @@ def _run_extras(args) -> int:
                     raise RuntimeError(
                         f'Volatile journal power/RAM preflight failed: {exc}'
                     ) from exc
-            _validate_live_refresh_preflight(selected, args.journal,
-                                             ramdisk=args.journal_backend == 'ramdisk')
+            if args.journal_backend == 'memory':
+                # No backing filesystem is used; still prove the patient is
+                # offline and refuse mounted Windows or Linux disk writes.
+                if sys.platform.startswith('linux'):
+                    _verify_linux_patient_not_in_use(selected)
+            else:
+                _validate_live_refresh_preflight(selected, args.journal,
+                                                 ramdisk=args.journal_backend == 'ramdisk')
             reread = (select_linux_any_disk(args.device) if is_system
                       else select_external_device(args.device))
             assert_stable_identity(selected, reread)
@@ -948,7 +993,7 @@ def _run_extras(args) -> int:
 
             result = refresh_media(
                 media, size=size, sector=sector, source_token=source_token,
-                journal=args.journal, chunk=args.chunk_mib * 1024 * 1024,
+                journal=args.journal or 'RAM_ONLY_NO_FILES', chunk=args.chunk_mib * 1024 * 1024,
                 mode=args.mode, verify=not args.no_verify, resume=args.resume,
                 max_errors=args.max_errors, consistency_reads=args.consistency_reads,
                 adaptive_samples=args.adaptive_samples, slow_multiplier=args.slow_multiplier,
@@ -966,8 +1011,16 @@ def _run_extras(args) -> int:
                       else select_external_device(args.device))
             if latest.fingerprint != source_token:
                 result['status'] = 'aborted_device_identity_changed'
+        # A RAM-only journal has no path or persistent data to retain.
+        if args.journal_backend == 'memory':
+            result['journal_retained'] = False
+            result['journal_deleted'] = False
+            result['volatile_ram_only'] = True
+            result['journal'] = None
+            keep = 'memory'
+        else:
+            keep = args.after_run
         # Journal retention policy after a finished run.
-        keep = args.after_run
         if keep == 'ask' and not args.json and sys.stdin.isatty():
             answer = input(f"Keep refresh journal at {args.journal}? [y/N]: ").strip().lower()
             keep = 'keep' if answer in {'y', 'yes'} else 'delete'
@@ -1113,6 +1166,159 @@ def _run_extras(args) -> int:
                                          'unknown', 'completed_with_missing_data'} else 2
 
 
+def _run_care(args) -> int:
+    """One guided operation; never infer write authorization from a scan result.
+
+    This is *media refresh*, not arbitrary flipped-bit repair. The existing
+    rolling-journal engine owns every write. No error-bearing source is rewritten.
+    """
+    is_hardware = args.command == 'care-external'
+    ram_only = args.journal_backend == 'memory'
+    if ram_only and args.resume:
+        raise ValueError('RAM-only operations cannot resume after an application crash')
+    if ram_only and not args.ack_volatile_journal:
+        raise ValueError('RAM-only operation requires --ack-volatile-journal')
+    if not ram_only and not args.journal:
+        raise ValueError('Disk journal directory required unless RAM-only mode is selected')
+    journal_path = args.journal if not ram_only else 'RAM_ONLY_NO_FILES'
+    selected = select_external_device(args.device) if is_hardware else None
+    require_destructive_acknowledgements(
+        ack_risk=args.ack_risk, ack_destructive=args.ack_destructive,
+        ack_no_backup=args.ack_no_backup, ack_data_loss_risk=args.ack_data_loss_risk,
+        ack_usb_bridge_risk=args.ack_usb_bridge_risk if is_hardware else True,
+        bus=selected.bus if is_hardware else 'file',
+        ack_unvalidated_hardware=args.ack_unvalidated_hardware,
+        require_unvalidated=is_hardware,
+    )
+    if is_hardware:
+        if args.confirm_identity != selected.fingerprint[:12]:
+            raise ValueError('Confirm selected device with --confirm-identity from list --json')
+        if not selected.serial:
+            raise RuntimeError('Missing hardware serial; physical write identity not reliable')
+        for dev in list_external_devices():
+            if dev.id != selected.id and dev.serial == selected.serial:
+                raise RuntimeError('Duplicate disk serials: refusing raw write')
+        assert_patient_idle_windows(selected)
+        if ram_only:
+            if sys.platform.startswith('linux'):
+                _verify_linux_patient_not_in_use(selected)
+        else:
+            _validate_live_refresh_preflight(selected, journal_path)
+        latest = select_external_device(args.device)
+        assert_stable_identity(selected, latest)
+        size, sector, token = selected.size_bytes, selected.sector_size, selected.fingerprint
+        snapshot = try_health_snapshot(selected)
+    else:
+        token, size = _refresh_image_token(args.image)
+        sector = 512 if size % 512 == 0 else 1
+        snapshot = None
+
+    # Lock only after the journal's separate-storage location was validated.
+    # Volatile mode creates ZERO files, including no sidecar lock. Physical
+    # writers still use exclusive block/volume access. Do not claim restart safety.
+    with (nullcontext() if ram_only else _rescue_writer_lock(journal_path)):
+        emitter = ProgressEmitter(enabled=bool(args.progress_jsonl), min_interval_s=0.2)
+        plan = None
+        scan = None
+        targets = None
+        chunk = 1024 * 1024
+        if not args.resume:
+            settings = tuned_scan(size=size, sector=sector, mode=args.mode,
+                                  bus=selected.bus if is_hardware else '')
+            chunk = settings['chunk']
+            reader = open_device_readonly(selected) if is_hardware else ImageReader(args.image)
+            try:
+                def scan_progress(index, total, info=None):
+                    info = info or {}
+                    emitter.emit({'phase': 'SCANNING', 'probe_index': index,
+                                  'probe_total': total, 'refresh_index': index,
+                                  'refresh_total': total, 'size': size,
+                                  'offset': info.get('offset', 0),
+                                  'failed': info.get('failed', False),
+                                  'latency_ms': info.get('latency_ms'),
+                                  'median_ms': info.get('median_ms'),
+                                  'message': 'Checking drive for recoverable slow regions'},
+                                 force=index == total or bool(info.get('failed')))
+                scan = scan_reader(reader, size=size, sector=sector,
+                                   mode=settings['mode'], samples=settings['samples'],
+                                   chunk=chunk, max_errors=settings['max_errors'],
+                                   compare_suspects=(args.mode == 'quick'),
+                                   progress=scan_progress)
+            finally:
+                reader.close()
+            if is_hardware:
+                latest = select_external_device(args.device)
+                assert_stable_identity(selected, latest)
+            plan = plan_targeted_refresh(
+                scan, sector=sector, chunk=chunk, max_regions=args.max_regions,
+                smart=snapshot, hardware=is_hardware,
+                allow_unknown_health=args.ack_unknown_health,
+            )
+            if plan['status'] == 'blocked':
+                result = {'status': 'repair_blocked', 'scan': scan, 'repair_plan': plan,
+                          'next_step': 'Rescue to a different drive/image before any in-place writes'}
+                print(json.dumps(result, indent=2) if args.json else result, flush=True)
+                return 2
+            if not plan['targets']:
+                result = {'status': 'completed_no_refresh_needed', 'scan': scan, 'repair_plan': plan,
+                          'notes': 'No verified repair candidates. Scan alone does not prove integrity.'}
+                print(json.dumps(result, indent=2) if args.json else result, flush=True)
+                return 0
+            targets = plan['targets']
+        else:
+            # Resume uses the exact original chunk and target queue recorded in the
+            # journal, not a fresh scan that could silently change what is rewritten.
+            with open(os.path.join(journal_path, 'meta.json'), encoding='utf-8') as f:
+                journal_meta = json.load(f)
+            if journal_meta.get('mode') != 'targeted' or type(journal_meta.get('chunk')) is not int:
+                raise ValueError('Not a guided targeted-refresh journal')
+            chunk = journal_meta['chunk']
+
+        # Select the patient again immediately before RW; fail closed if renumbered.
+        if is_hardware:
+            assert_stable_identity(selected, select_external_device(args.device))
+            writer = open_device_readwrite(selected)
+        else:
+            if _refresh_image_token(args.image) != (token, size):
+                raise RuntimeError('Image identity changed between scan and refresh')
+            writer = ImageReadWriter(args.image)
+        try:
+            def identity_check():
+                if is_hardware:
+                    assert_stable_identity(selected, select_external_device(args.device))
+                elif _refresh_image_token(args.image) != (token, size):
+                    raise RuntimeError('Image patient changed identity')
+
+            def progress(event):
+                idx = event.get('refresh_index', 0)
+                total = event.get('refresh_total', len(targets or []))
+                emitter.emit({'phase': 'REFRESH', 'refresh_index': idx,
+                              'refresh_total': total, 'size': size,
+                              'offset': event.get('offset', 0),
+                              'rewritten_bytes': event.get('rewritten_bytes', 0),
+                              'verified_bytes': event.get('verified_bytes', 0),
+                              'message': 'Journaled targeted refresh; comparing readback'},
+                             force=idx == total)
+            repair = refresh_media(
+                writer, size=size, sector=sector, source_token=token,
+                journal=journal_path, chunk=chunk, mode='targeted', targets=targets,
+                journal_backend=args.journal_backend, consistency_reads=2, verify=True,
+                resume=args.resume, max_errors=16, progress=progress,
+                identity_check=identity_check, pre_write_check=identity_check,
+            )
+        finally:
+            writer.close()
+        if ram_only:
+            repair['journal'] = None
+        result = {'status': ('completed_targeted_refresh' if repair['status'] == 'completed'
+                             else 'repair_incomplete'), 'scan': scan,
+                  'repair_plan': plan, 'repair': repair,
+                  'volatile_ram_only': ram_only,
+                  'notes': 'Rewriting consistently readable regions does not restore unreadable files or physical lifespan.'}
+        print(json.dumps(result, indent=2) if args.json else result, flush=True)
+        return 0 if result['status'] == 'completed_targeted_refresh' else 2
+
+
 def run(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
@@ -1139,6 +1345,8 @@ def run(argv: list[str] | None = None) -> int:
                                'Boot trusted live media first; do not run on an active system disk.'}
             print(json.dumps(report, indent=2))
             return 0 if free >= selected.size_bytes else 2
+        if args.command in {'care-image', 'care-external'}:
+            return _run_care(args)
         if args.command in {'rescue-status', 'rescue-image', 'rescue-external', 'rescue-system', 'benchmark-image',
                             'benchmark-external', 'carve-image', 'salvage-zip',
                             'undelete-fat32', 'list-deleted-fat32',

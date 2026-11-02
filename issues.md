@@ -1,4 +1,4 @@
-# Issues — 2026-11-02
+# Issues — 2026-11-01
 
 ## Open forge issues
 - ~~#97 unused `rescue_reader` import~~ — fixed on remediation branch
@@ -9,4 +9,5 @@
 - Details: `docs/FINDINGS_REMEDIATION_20261102.md`
 
 ## Still blocked for public release
-- Seagate ST1000LM048 full elevated surface verify
+- Seagate ST1000LM048 full elevated surface verify (Direct Repair / refresh-external)
+- RAM-only and physical power-loss / USB disconnect qualification outstanding per 0.3.3b4 report

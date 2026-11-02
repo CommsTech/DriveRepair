@@ -146,9 +146,31 @@ class RealGuiWorkflowTests(unittest.TestCase):
             button = next(w for w in widgets if isinstance(w, ttk.Button) and w.cget('text') == 'My external drive is slow or failing')
             button.invoke()
             root.update_idletasks()
-            for text in ('Refresh inventory', 'SMART', 'Quick scan', 'Full scan', 'Benchmark', 'Rescue (Linux/Windows)'):
+            for text in ('Refresh inventory', 'SMART', 'Quick repair', 'Full repair', 'Benchmark (read-only)', 'Rescue to image'):
                 target = next(w for w in widgets if isinstance(w, ttk.Button) and w.cget('text') == text)
                 self.assertTrue(target.winfo_ismapped(), f'{text} is hidden after navigation')
+        self.open_app(scenario)
+
+    def test_direct_repair_and_ram_only_options_are_visible(self):
+        def scenario(root, errors):
+            widgets = list(all_widgets(root))
+            navigate = next(w for w in widgets if isinstance(w, ttk.Button)
+                            and w.cget('text') == 'My external drive is slow or failing')
+            navigate.invoke()
+            root.update_idletasks()
+            all_visible = list(all_widgets(root))
+            labels = {str(w.cget('text')) for w in all_visible
+                      if isinstance(w, ttk.Button)}
+            self.assertIn('Quick repair', labels)
+            self.assertIn('Full repair', labels)
+            self.assertIn('Read-only quick check', labels)
+            comboboxes = [w for w in all_visible if isinstance(w, ttk.Combobox)]
+            match = [w for w in comboboxes if any('Volatile RAM only' in str(opt)
+                     for opt in w.cget('values'))]
+            self.assertTrue(match, 'RAM-only mode must be offered alongside disk journaling')
+            self.assertTrue(match[0].winfo_ismapped(), 'RAM-only storage selector is hidden')
+            self.assertIn('Volatile RAM only', match[0].get())
+            # This test intentionally does not select a real disk or authorize a write.
         self.open_app(scenario)
 
     def test_quick_scan_requires_an_explicit_selected_drive(self):
@@ -158,7 +180,7 @@ class RealGuiWorkflowTests(unittest.TestCase):
                             and w.cget('text') == 'My external drive is slow or failing')
             navigate.invoke()
             quick = next(w for w in widgets if isinstance(w, ttk.Button)
-                         and w.cget('text') == 'Quick scan')
+                         and w.cget('text') == 'Quick repair')
             with mock.patch.object(messagebox, 'showerror') as show:
                 quick.invoke()
                 show.assert_called_once()

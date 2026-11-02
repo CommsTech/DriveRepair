@@ -2,10 +2,38 @@
 
 **Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
 
-**Current build: 0.3.3b3 / engineering beta candidate — NOT approved for public hardware-repair use.**
+**Current build: 0.3.3b4 / engineering beta candidate — NOT approved for public hardware-repair use.**
 The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
 
 **If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
+
+## Direct disk repair without a backup image (0.3.3b4)
+
+Open **Diagnose / Rescue**, select the external drive by model, capacity and
+fingerprint, then use **Quick repair** (sample and investigate suspicious
+regions) or **Full repair** (read the full surface before selecting safe
+refresh targets). The primary screen now offers **Volatile RAM only (NO saved
+files)** or a disk-backed journal. No recovery image or copy is created during
+in-place maintenance. For a whole-drive rewrite, use **In-place refresh** and
+select `full`; this is significantly riskier, particularly on failing hardware.
+
+- RAM-only holds the current sector-region and transaction state **in the
+  running process**. It writes **no patient bytes to any backup image or
+  journal files**. It also has **NO resume** after application crash/reboot;
+  a partial write could be unrecoverable. A UPS does not fix this limitation.
+- Windows and Linux have experimental in-place raw-device access with explicit
+  device, risk and volatile-journal confirmation. The patient must be offline,
+  unmounted and exclusive to this tool. macOS destructive hardware access is
+  disabled pending safe volume locking and physical QA.
+- A read error or inconsistent region is **not rewritten**. Repeatedly reading
+  the same corrupted bits does not recover their correct original value.
+  If SMART indicates failure or reads are unreliable, stop and rescue/replace.
+- Successful readback means the new recording matches the bytes just read;
+  it **does not** prove original file correctness or restore hardware lifespan.
+- The code has been tested on synthetic images only. **Do not run RAM-only
+  repair on valuable, sole-copy data or a failing disk for public beta.**
+
+See [direct repair and RAM-only operations](docs/NO_IMAGE_RAM_REPAIR.md).
 
 ## Graphical recovery dashboard (0.3.2b1)
 
@@ -188,7 +216,7 @@ python -m driverepair_desktop rescue-status --output PATH/TO/recovery.img --json
 
 The `clean_rescue_complete` field is authoritative for *completed OS reads*, not independent file-content integrity. Windows lab scripts no longer chain physical refresh automatically. See [rescue progress and lab safety](docs/RESCUE_PROGRESS_AND_LAB_SAFETY.md).
 
-### Guided GUI reliability hotfix (0.3.3b3)
+### Guided GUI reliability hotfix (0.3.3b4)
 
 - Fixed all seven **Start here** workflow buttons. The old callbacks attempted
   to select nested Tk Canvas frames, which are not notebook-managed tabs.

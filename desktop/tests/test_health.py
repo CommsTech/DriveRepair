@@ -1,6 +1,7 @@
 import json
 import subprocess
 import unittest
+from unittest import mock
 from driverepair_desktop.devices import Device
 from driverepair_desktop.health import health_snapshot
 
@@ -70,7 +71,8 @@ class HealthTests(unittest.TestCase):
             }).encode()
             return subprocess.CompletedProcess(cmd, 0, stdout=payload)
 
-        snap = try_health_snapshot(device, run=runner)
+        with mock.patch('driverepair_desktop.health.sys.platform', 'win32'):
+            snap = try_health_snapshot(device, run=runner)
         self.assertIsNotNone(snap)
         self.assertEqual(snap['status'], 'windows_health_limited')
         self.assertEqual(media_from_smart(snap), 'OK')
