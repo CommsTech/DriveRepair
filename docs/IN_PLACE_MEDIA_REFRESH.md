@@ -23,7 +23,13 @@ On restart, an interrupted `SAVED`/`WRITING` region is restored from the journal
 | `adaptive` (default) | Probe latency; refresh unusually slow but consistently readable regions |
 | `full` | Sequential whole-surface refresh (high risk; long on multi-TB USB) |
 
-Unreadable or inconsistent sectors are **never** auto-rewritten.
+Unreadable or inconsistent sectors are **never** auto-rewritten. The separate
+**Guided Quick/Full repair** first investigates known error ranges with a bounded
+read-only split/retry strategy. Only repeatably readable regions are candidates
+for the journaled writer; unknown bytes remain untouched. A partial result is
+not reported as success. A failing USB connection or critical media health
+blocks physical writes. Destructive zero reinitialization of unreadable bytes
+is not an implemented, qualified operation.
 
 ## Live dashboard
 
@@ -36,9 +42,9 @@ Non-JSON runs show a terminal dashboard (phase, bar, surface map, latency, healt
 
 | Backend | Region bytes | Meta | Resume strength | Speed |
 |---|---|---|---|---|
-| `disk` (default; required for hardware) | disk, fsynced + directory-fsynced | disk | Crash-resumable if journal disk survives | Slower |
+| `disk` (default; strongly recommended for hardware) | disk, fsynced + directory-fsynced | disk | Crash-resumable if journal disk survives | Slower |
 | `hybrid` (image tests only) | RAM | disk | NOT crash-safe for an in-flight write | Fast |
-| `memory` (image tests only) | RAM | disk checkpoint | NOT crash-safe for an in-flight write | Fastest |
+| `memory` (explicit experimental last resort; Windows/Linux with guardrails) | Process RAM only | NONE | NO crash resume; active region may be destroyed by crash | Avoids journal storage writes |
 
 `--after-run keep|delete|ask` controls whether the journal directory is removed after a successful run.
 
@@ -57,7 +63,7 @@ Patient: Seagate ST12000N ~12 TB via USB dock (`windows:PhysicalDrive2`, fake 
 - Adaptive queue head is not removed until VERIFIED/COMMITTED, preserving recovery work on interruption.
 - VERIFIED resume rechecks the region and commits exactly once; WRITING resume restores original bytes and verifies before retrying.
 - Image refresh tokens exclude `mtime`, which necessarily changes during successful in-place operations.
-- Hardware refresh rejects RAM-only journal backends, disabled readback, macOS raw mode, and unverified journal storage separation.
+- Hardware refresh rejects unsafe journal configurations, disabled readback, macOS raw mode, and unverified journal storage separation. A separate volatile process-memory option exists behind additional explicit acknowledgments on Windows/Linux; it cannot resume after a crash.
 - Live Linux requires the source to have a serial, no mounted children/holders, and a demonstrably separate journal filesystem. Windows requires a distinct locally mapped journal disk and no drive letters mounted on the patient.
 - GUI defaults to disk journaling and requires the user to type the selected device ID before starting.
 - Fault-injection tests cover torn writes, failed readback, VERIFY/COMMIT resume, and adaptive queue resume. Physical USB power-loss/disconnect verification is **NOT PROVEN**.

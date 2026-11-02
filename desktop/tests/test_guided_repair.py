@@ -157,7 +157,7 @@ class GuidedCLIIntegrationTests(unittest.TestCase):
                 with contextlib.redirect_stdout(out):
                     code=run(['care-image','--image',image,'--journal',journal,'--json',*self.acks])
             self.assertEqual(code,2)
-            self.assertEqual(json.loads(out.getvalue())['status'],'repair_blocked')
+            self.assertEqual(json.loads(out.getvalue())['status'],'recovery_required')
             self.assertFalse(os.path.exists(journal))
 
     def test_no_suspects_writes_nothing(self):

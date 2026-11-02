@@ -198,7 +198,8 @@ def launch() -> None:
     tk.Label(dest_line, textvariable=capacity_var, bg=C["bg"], fg=C["muted"],
              font=("Segoe UI", 9)).pack(side="right")
     warning_label = tk.Label(overview, textvariable=warning_var, anchor="w", bg=C["panel"],
-                             fg=C["muted"], font=("Segoe UI", 9), padx=10, pady=5)
+                             fg=C["muted"], font=("Segoe UI", 9), padx=10, pady=5,
+                             wraplength=1090, justify='left')
     warning_label.pack(fill="x", pady=(0, 8))
 
     # Sector map
@@ -207,6 +208,21 @@ def launch() -> None:
     legend_var = tk.StringVar(value="Activity map  ·  . unscanned   o read to image   ? in progress   X unreadable/failed")
     tk.Label(map_frame, textvariable=legend_var,
              bg=C["panel"], fg=C["muted"], font=("Segoe UI", 9)).pack(anchor="w", padx=10, pady=(8, 2))
+    # The map shows COLORS, not glyphs. Use explicit colored swatches and plain
+    # language so users never have to guess what S/o/X corresponds to.
+    legend_row = tk.Frame(map_frame, bg=C['panel'])
+    legend_row.pack(anchor='w', fill='x', padx=10, pady=(0, 5))
+    for symbol, caption in [('.', 'Not scanned'), ('o', 'Read successfully'),
+                            ('?', 'In progress'), ('S', 'Slow region'),
+                            ('!', 'Needs investigation'), ('X', 'Read error / unknown')]:
+        item = tk.Frame(legend_row, bg=C['panel'])
+        item.pack(side='left', padx=(0, 14))
+        tk.Label(item, bg={
+            '.': C['pending'], 'o': C['ok'], '?': C['current'],
+            'S': C['slow'], '!': C['warn'], 'X': C['fail']
+        }[symbol], width=2, height=1).pack(side='left', padx=(0, 4))
+        tk.Label(item, text=caption, bg=C['panel'], fg=C['muted'],
+                 font=('Segoe UI', 8)).pack(side='left')
     canvas = tk.Canvas(map_frame, height=115, bg=C["panel2"], highlightthickness=0)
     canvas.pack(fill="x", padx=10, pady=(0, 10))
 
@@ -232,15 +248,21 @@ def launch() -> None:
                     fill=color_for.get(sym, C["pending"]), outline="",
                 )
 
-    def mark_map(offset: int, size: int, symbol: str) -> None:
+    def mark_map(offset: int, size: int, symbol: str, length: int = 0) -> None:
         nonlocal map_dirty
         if size <= 0:
             return
-        idx = min(len(map_cells) - 1, int(offset * len(map_cells) / size))
-        rank = {".": 0, "o": 1, "S": 2, "!": 3, "X": 4}
-        if rank.get(symbol, 0) >= rank.get(map_cells[idx], 0):
-            map_cells[idx] = symbol
-            map_dirty = True
+        # A full read spans a RANGE, not one pixel. Mark every map cell whose
+        # range intersects the read; samples still leave the rest unknown.
+        offset = min(max(0, int(offset)), size - 1)
+        end = min(size, offset + max(1, int(length)))
+        first = min(len(map_cells) - 1, offset * len(map_cells) // size)
+        last = min(len(map_cells) - 1, max(0, end - 1) * len(map_cells) // size)
+        rank = {".": 0, "o": 1, "?": 1, "S": 2, "!": 3, "X": 4}
+        for idx in range(first, last + 1):
+            if rank.get(symbol, 0) >= rank.get(map_cells[idx], 0):
+                map_cells[idx] = symbol
+                map_dirty = True
 
     def reset_map() -> None:
         nonlocal map_dirty
@@ -478,42 +500,70 @@ def launch() -> None:
         pbar["value"] = max(0, min(1000, int(pct * 10)))
         lat = stats["latency_ms"]
         med = stats["median_ms"]
-        # Scan / refresh share this path — fill the summary cards so STARTING is not sticky.
-        if phase == "SCANNING" or event.get("speed_bps") is not None:
-            for label, text in zip(summary_labels, ('BYTES READ', 'UNREADABLE / UNKNOWN',
+        # Scan/repair telemetry uses actual attempted/readable bytes from the
+        # engine. Do NOT use bytes-written counters for a read-only scan.
+        if phase in {'SCANNING', 'INVESTIGATING'}:
+            for label, text in zip(summary_labels, ('BYTES READ', 'READ ERRORS',
                                                     'CURRENT SPEED', 'TIME REMAINING')):
                 label.configure(text=text)
-            recovered_var.set(fmt_bytes(stats["rewritten"]) if stats["rewritten"] else '—')
-            speed_bps = event.get("speed_bps")
-            if speed_bps:
+            attempted = int(event.get('attempted_bytes', 0))
+            readable = int(event.get('readable_bytes', 0))
+            stats['scan_attempted'] = max(stats.get('scan_attempted', 0), attempted)
+            stats['scan_readable'] = max(stats.get('scan_readable', 0), readable)
+            recovered_var.set(fmt_bytes(stats['scan_readable']))
+            error_count = int(event.get('read_error_chunks') or 0)
+            errors_var.set(f'{error_count} failed region(s)' if error_count else '0 observed')
+            speed_bps = event.get('speed_bps')
+            if speed_bps is not None and float(speed_bps) > 0:
                 speed_var.set(f'{fmt_bytes(int(speed_bps))}/s')
-            eta_s = event.get("eta_seconds")
-            if eta_s is not None:
+            elif phase == 'INVESTIGATING':
+                speed_var.set('Targeted retries')
+            elif stats.get('started') and attempted:
+                elapsed = max(0.01, time.monotonic() - stats['started'])
+                speed_var.set(f'{fmt_bytes(int(attempted / elapsed))}/s')
+            eta_s = event.get('eta_seconds')
+            if phase == 'INVESTIGATING':
+                eta_var.set('Bounded retries')
+            elif eta_s is not None:
                 eta_var.set(format_duration(float(eta_s)) if float(eta_s) > 0 else 'Finishing…')
-            if phase == "SCANNING":
-                capacity_var.set('Read-only scan — no destination image')
-                destination_var.set('Destination: not used for scan')
-                legend_var.set('Scan map · . pending   o readable sample   S slow   X unreadable')
-                readiness = event.get('repair_readiness') or {}
-                blockers = readiness.get('blockers') or []
-                if blockers:
-                    warning_var.set('Repair not authorized: ' + '; '.join(blockers[:3]))
-                    warning_label.configure(fg=C['warn'])
-                else:
-                    warning_var.set(
-                        'Metrics present for triage only — not a refresh/repair authorization.'
-                    )
-                    warning_label.configure(fg=C['muted'])
-        if event.get('failed'):
+            capacity_var.set('Read-only investigation — no output image')
+            destination_var.set('Destination: not used during scan')
+            legend_var.set('Scan map · colors identify sampled areas; other areas remain untested')
+            warning_var.set('Read errors trigger bounded investigation; unknown bytes are NEVER overwritten automatically.')
+            warning_label.configure(fg=C['warn'] if error_count else C['muted'])
+        elif phase == 'REFRESH':
+            for label, text in zip(summary_labels, ('BYTES REWRITTEN / VERIFIED',
+                                                    'UNREADABLE / UNKNOWN',
+                                                    'CURRENT SPEED', 'TIME REMAINING')):
+                label.configure(text=text)
+            recovered_var.set(f"{fmt_bytes(stats['rewritten'])} / {fmt_bytes(stats['verified'])}")
+            remaining_errors = int(event.get('read_error_chunks') or 0)
+            errors_var.set(f'{remaining_errors} original error region(s)' if remaining_errors
+                           else 'None reported')
+            speed_bps = event.get('speed_bps')
+            if speed_bps and float(speed_bps) > 0:
+                speed_var.set(f'{fmt_bytes(int(speed_bps))}/s')
+            if event.get('eta_seconds') is not None:
+                eta_var.set(format_duration(float(event['eta_seconds'])))
+            elif not speed_bps:
+                eta_var.set('Measuring…')
+            destination_var.set('Destination: selected patient disk (in-place rewrite)')
+            capacity_var.set('No image destination')
+        elif event.get('speed_bps') is not None:
+            speed_bps = event.get('speed_bps')
+            if speed_bps and float(speed_bps) > 0:
+                speed_var.set(f'{fmt_bytes(int(speed_bps))}/s')
+            if event.get('eta_seconds') is not None:
+                eta_var.set(format_duration(float(event['eta_seconds'])))
+        if event.get('failed') and phase not in {'SCANNING', 'INVESTIGATING'}:
             errors_var.set('read errors observed')
-        elif phase == "SCANNING" and stats.get('latency_ms') is not None:
-            # Keep unreadable card honest unless failures arrive.
-            if errors_var.get() in {'—', ''}:
-                errors_var.set('none yet')
+        measure = (f"read {stats.get('scan_attempted', 0) / (1024 * 1024):.2f} MiB"
+                   if phase in {'SCANNING', 'INVESTIGATING'} else
+                   f"rewritten {stats['rewritten'] / (1024 * 1024):.2f} MiB")
         metric_var.set(
             f"{pct:5.1f}% done\n"
             f"lat {('—' if lat is None else f'{lat:.0f} ms'):>8}   med {('—' if med is None else f'{med:.0f} ms'):>8}\n"
-            f"processed {stats['rewritten'] / (1024 * 1024):.2f} MiB"
+            f"{measure}"
         )
         symbol = "o"
         if event.get("failed"):
@@ -523,7 +573,8 @@ def launch() -> None:
         elif lat is not None and med is not None and lat >= max(med * 2, 1):
             symbol = "S"
         if stats["size"]:
-            mark_map(stats["offset"], stats["size"], symbol)
+            mark_map(stats["offset"], stats["size"], symbol,
+                     event.get('read_length', 0))
         compact = event.get("map")
         if isinstance(compact, str) and compact:
             for i, ch in enumerate(compact):
@@ -573,6 +624,8 @@ def launch() -> None:
         phase_var.set("STARTING")
         msg_var.set(title)
         stats["started"] = time.monotonic()
+        stats['scan_attempted'] = 0
+        stats['scan_readable'] = 0
         rescue_metrics.__init__()
         recovered_var.set('—')
         errors_var.set('—')
@@ -687,6 +740,8 @@ def launch() -> None:
 
     # The main recovery page must offer the no-image / no-output choice.
     quick_repair_storage = tk.StringVar(value='Volatile RAM only (NO saved files)')
+    guided_repair_policy = tk.StringVar(value='Balanced: bounded error recovery + weak regions')
+    ack_media_warn = tk.BooleanVar(value=False)
 
     def device_action(kind: str) -> None:
         try:
@@ -702,10 +757,12 @@ def launch() -> None:
                 mode = "quick" if kind == "sample" else "full"
                 if not messagebox.askyesno(
                     "Guided scan and repair",
-                    "DriveRepair will scan, then attempt to refresh ONLY slow regions "
-                    "that are readable and consistent. It will NOT overwrite unreadable "
-                    "data or repair already-corrupted files. If the drive shows errors, "
-                    "writes will be blocked. Continue to the authorization screen?",
+                    "DriveRepair will scan and investigate isolated read errors with a "
+                    "strict retry budget. It may refresh slow regions AND error regions "
+                    "only when TWO independent reads agree and the write engine "
+                    "checks again. Unknown bytes will NEVER be overwritten. "
+                    "Unstable USB connections and critical hardware faults still block writes. "
+                    "Continue to the authorization screen?",
                 ):
                     return
                 volatile = quick_repair_storage.get().startswith('Volatile RAM')
@@ -726,6 +783,13 @@ def launch() -> None:
                 ]
                 if unknown_health_override.get():
                     flags.append('--ack-unknown-health')
+                if ack_media_warn.get():
+                    if not messagebox.askyesno('Repair on SMART warning',
+                        'SMART reports a warning. This drive may be physically deteriorating. '
+                        'Rewriting may worsen it. Accept this additional risk?'):
+                        return
+                    flags.append('--ack-media-warning')
+                flags += ['--repair-policy', 'balanced' if guided_repair_policy.get().startswith('Balanced') else 'preserve']
                 if volatile:
                     if not messagebox.askyesno(
                         'USB dock power risk',
@@ -766,6 +830,15 @@ def launch() -> None:
                         ("Rescue to image", "rescue"),
                         ("Resume rescue", "resume")]:
         ttk.Button(bf, text=label, command=lambda k=kind: device_action(k)).pack(side="left", padx=(0, 6))
+    policy_row = ttk.Frame(tab_drive)
+    policy_row.pack(fill='x', pady=(4, 2))
+    ttk.Label(policy_row, text='Repair policy:').pack(side='left')
+    ttk.Combobox(policy_row, textvariable=guided_repair_policy, state='readonly',
+                 values=['Balanced: bounded error recovery + weak regions',
+                         'Preserve: refresh consistent slow regions only'],
+                 width=52).pack(side='left', padx=(6, 12))
+    ttk.Checkbutton(policy_row, text='Allow repair of verified candidates on SMART warning (high risk)',
+                    variable=ack_media_warn).pack(side='left')
     storage = ttk.Frame(tab_drive)
     storage.pack(fill='x', pady=(2, 8))
     ttk.Label(storage, text='Temporary region storage:').pack(side='left')
@@ -1440,7 +1513,7 @@ def launch() -> None:
                             'INCOMPLETE IMAGE: some areas remain missing or unverified. Keep the recovery journal.'
                         )
                         warning_label.configure(fg=C['warn'])
-                    elif 'targeted refresh' in str(title).lower():
+                    elif 'targeted refresh' in str(title).lower() or 'targeted in-place repair' in str(title).lower():
                         outcome = (last_result or {}).get('status', 'unknown')
                         plan = (last_result or {}).get('repair_plan') or {}
                         if outcome == 'completed_targeted_refresh':
@@ -1448,6 +1521,21 @@ def launch() -> None:
                             warning_var.set(f'Targeted refresh verified {fmt_bytes(int(repaired))}. '
                                             'Data correctness and hardware lifespan are NOT certified.')
                             warning_label.configure(fg=C['ok'])
+                        elif outcome == 'partial_repair_unresolved_data':
+                            repair_data = (last_result or {}).get('repair') or {}
+                            warning_var.set(
+                                f"Partial repair: {fmt_bytes(int(repair_data.get('verified_bytes') or 0))} "
+                                'rewritten and read-back verified. Some original error regions remain UNKNOWN; '
+                                'no replacement data was invented. Use Rescue or review the report.'
+                            )
+                            phase_var.set('PARTIAL REPAIR — UNRESOLVED ERRORS')
+                            warning_label.configure(fg=C['warn'])
+                        elif outcome == 'recovery_required':
+                            phase_var.set('RECOVERY REQUIRED — ERROR REGIONS ISOLATED')
+                            warning_var.set('Read-error budget reached or no repeatable regions could be repaired. '
+                                            'Unknown bytes were NOT overwritten. Review the failed offsets, '
+                                            'then choose image rescue or separately authorized destructive sector reinitialization.')
+                            warning_label.configure(fg=C['warn'])
                         elif outcome == 'completed_no_refresh_needed':
                             warning_var.set('No safe slow-region candidates detected. Nothing was rewritten; '
                                             'a passing scan does not prove file integrity.')
@@ -1457,7 +1545,15 @@ def launch() -> None:
                             warning_var.set('Repair was not performed or was incomplete. '
                                             + (reasons or 'Keep the journal and review the report.'))
                             warning_label.configure(fg=C['warn'])
+                    elif code != 0 and is_scan:
+                        phase_var.set('READ ERRORS FOUND — NEXT STEP: REPAIR / RESCUE')
+                        warning_var.set('Scan stopped after significant read/access errors. '
+                                        'This does NOT mean any sectors were repaired. '
+                                        'Check the error report, USB power/cable and SMART; '
+                                        'do not automatically rewrite unknown bytes.')
+                        warning_label.configure(fg=C['warn'])
                     elif code == 0 and is_scan:
+                        eta_var.set('Complete')
                         readiness = (last_result or {}).get('repair_readiness') or {}
                         blockers = readiness.get('blockers') or []
                         health = (last_result or {}).get('health') or {}
@@ -1489,7 +1585,12 @@ def launch() -> None:
                             'Job stopped or failed. Preserve the image and recovery journal for resume.'
                         )
                         warning_label.configure(fg=C['fail'])
-                    status.set(f"{title}: {'finished — review results' if code == 0 else f'exited {code} — journal may support resume'}")
+                    if code != 0 and is_scan:
+                        status.set(f'{title}: stopped at read-error safety limit — choose Quick repair or Rescue')
+                    elif last_result and last_result.get('status') in {'recovery_required', 'partial_repair_unresolved_data'}:
+                        status.set(f"{title}: {last_result['status'].replace('_', ' ')} — review the report")
+                    else:
+                        status.set(f"{title}: {'finished — review results' if code == 0 else f'exited {code} — journal may support resume'}")
                     if last_result and last_result.get('status') in {
                         'manifest_created_unattested', 'matches_unattested_manifest',
                         'integrity_mismatch', 'incomplete_unknown_regions',

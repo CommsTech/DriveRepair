@@ -256,6 +256,9 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
             'median_ms': None if med is None else round(med, 3),
             'failed': error is not None,
             'disconnect': disconnect,
+            'attempted_bytes': checked,
+            'readable_bytes': readable,
+            'read_error_chunks': failures,
         }
         if progress:
             try:
@@ -309,6 +312,7 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
     # original/correct value. Only revisit suspicious samples, not all LBAs.
     inconsistent_reads: list[dict] = []
     repeated_read_errors = 0
+    repeat_probe_failed_ranges: list[dict] = []
     if compare_suspects and mode == 'triage' and not status.startswith('aborted'):
         candidates = sorted(set(anomalous_indices))[:min(64, samples)]
         for index in candidates:
@@ -319,11 +323,13 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
                 second = reader.read_at(off, length)
                 if len(first) != length or len(second) != length:
                     repeated_read_errors += 1
+                    repeat_probe_failed_ranges.append({'offset': off, 'length': length})
                 elif first != second:
                     inconsistent_reads.append({'offset': off, 'length': length,
                                                'interpretation': 'Inconsistent repeated reads; correct bytes UNKNOWN'})
             except OSError:
                 repeated_read_errors += 1
+                repeat_probe_failed_ranges.append({'offset': off, 'length': length})
         if inconsistent_reads and status == 'completed':
             status = 'completed_with_inconsistent_reads'
     if status == 'completed' and failures:
@@ -346,6 +352,7 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
         'slow_regions_truncated': slow_region_count > 1000,
         'inconsistent_reads': inconsistent_reads,
         'repeat_probe_failures': repeated_read_errors,
+        'repeat_probe_failed_ranges': repeat_probe_failed_ranges,
         'extra_suspect_reads': 2 * min(len(set(anomalous_indices)), 64, samples) if compare_suspects and mode == 'triage' else 0,
         'follow_up_chunks': max(0, completed - (len(baseline) if baseline is not None else blocks)),
         'surface_coverage_pct': round(100 * checked / size, 6),

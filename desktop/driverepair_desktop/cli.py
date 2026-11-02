@@ -54,7 +54,7 @@ from .tsk_recovery import list_deleted_tsk, recover_selected_tsk
 from .forensics import image_evidence_manifest
 from .filesystems import detect_filesystems, recover_image
 from .sensors import SensorSuite
-from .guided_repair import tuned_scan, plan_targeted_refresh
+from .guided_repair import tuned_scan, plan_targeted_refresh, investigate_failed_ranges
 
 
 def parser() -> argparse.ArgumentParser:
@@ -91,9 +91,9 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument("--no-live-dashboard", action="store_true",
                          help="Reserved for GUI child processes (scan has no TTY dashboard)")
         cmd.add_argument("--json", action="store_true")
-    # Guided workflow: scan, identify slow *readable* regions, then explicitly
-    # authorized journaled targeted refresh. No writes on read errors, bad
-    # transport, inconsistent bytes or failing media counters.
+    # Guided workflow: scan and quarantine unreadable/unstable regions, then
+    # investigate bounded error ranges and refresh only repeatably readable
+    # candidates. No writes on unstable transport or unknown bytes.
     for name in ('care-image', 'care-external'):
         cmd = sub.add_parser(name, help='Guided quick/full scan and bounded, explicitly approved targeted refresh')
         cmd.add_argument('--image' if name == 'care-image' else '--device', required=True)
@@ -105,6 +105,10 @@ def parser() -> argparse.ArgumentParser:
                          help='I accept loss of active region data on crash/power failure')
         cmd.add_argument('--resume', action='store_true', help='Resume the targeted refresh journal without rescanning')
         cmd.add_argument('--max-regions', type=int, default=64)
+        cmd.add_argument('--repair-policy', choices=['preserve', 'balanced'], default='balanced',
+                         help='Balanced retries read errors without rewriting unknown bytes')
+        cmd.add_argument('--ack-media-warning', action='store_true',
+                         help='Explicitly accept higher risk on a SMART media warning (not FAIL)')
         cmd.add_argument('--ack-risk', action='store_true')
         cmd.add_argument('--ack-destructive', action='store_true')
         cmd.add_argument('--ack-no-backup', action='store_true')
@@ -1222,6 +1226,7 @@ def _run_care(args) -> int:
         scan = None
         targets = None
         chunk = 1024 * 1024
+        scan_started = time.monotonic()
         if not args.resume:
             settings = tuned_scan(size=size, sector=sector, mode=args.mode,
                                   bus=selected.bus if is_hardware else '')
@@ -1230,20 +1235,47 @@ def _run_care(args) -> int:
             try:
                 def scan_progress(index, total, info=None):
                     info = info or {}
+                    elapsed = max(0.001, time.monotonic() - scan_started)
+                    attempted = int(info.get('attempted_bytes') or 0)
+                    readable = int(info.get('readable_bytes') or 0)
+                    # ETA is based on operations in the current scan, NOT an
+                    # invented whole-disk ETA for quick/stratified sampling.
+                    speed = attempted / elapsed
+                    eta = (total - index) * elapsed / index if index and index < total else 0.0
                     emitter.emit({'phase': 'SCANNING', 'probe_index': index,
                                   'probe_total': total, 'refresh_index': index,
                                   'refresh_total': total, 'size': size,
+                                  'scan_mode': settings['mode'],
+                                  'read_length': info.get('length', 0),
                                   'offset': info.get('offset', 0),
+                                  'attempted_bytes': attempted,
+                                  'readable_bytes': readable,
+                                  'read_error_chunks': info.get('read_error_chunks', 0),
+                                  'speed_bps': speed, 'eta_seconds': eta,
                                   'failed': info.get('failed', False),
                                   'latency_ms': info.get('latency_ms'),
                                   'median_ms': info.get('median_ms'),
-                                  'message': 'Checking drive for recoverable slow regions'},
+                                  'message': 'Checking regions before targeted recovery / repair'},
                                  force=index == total or bool(info.get('failed')))
                 scan = scan_reader(reader, size=size, sector=sector,
                                    mode=settings['mode'], samples=settings['samples'],
                                    chunk=chunk, max_errors=settings['max_errors'],
                                    compare_suspects=(args.mode == 'quick'),
                                    progress=scan_progress)
+                if (args.repair_policy == 'balanced' and
+                        scan.get('read_error_ranges') and
+                        scan.get('status') in {'completed_with_read_errors', 'aborted_error_limit'}):
+                    def investigation_progress(info):
+                        emitter.emit({'phase': 'INVESTIGATING', 'size': size,
+                                      'offset': info.get('offset', 0),
+                                      'attempted_bytes': int(scan.get('attempted_bytes') or 0),
+                                      'readable_bytes': int(scan.get('readable_bytes') or 0),
+                                      'read_error_chunks': scan.get('read_error_chunks', 0),
+                                      'message': ('Read-only bounded retries of error regions: '
+                                                  f"{info['read_calls']} read operations")}, force=True)
+                    scan['error_investigation'] = investigate_failed_ranges(
+                        reader, scan['read_error_ranges'], sector=sector,
+                        max_reads=96, max_regions=16, progress=investigation_progress)
             finally:
                 reader.close()
             if is_hardware:
@@ -1253,10 +1285,14 @@ def _run_care(args) -> int:
                 scan, sector=sector, chunk=chunk, max_regions=args.max_regions,
                 smart=snapshot, hardware=is_hardware,
                 allow_unknown_health=args.ack_unknown_health,
+                allow_media_warning=args.ack_media_warning,
+                policy=args.repair_policy,
             )
             if plan['status'] == 'blocked':
-                result = {'status': 'repair_blocked', 'scan': scan, 'repair_plan': plan,
-                          'next_step': 'Rescue to a different drive/image before any in-place writes'}
+                result = {'status': 'recovery_required' if scan.get('read_error_chunks') else 'repair_blocked',
+                          'scan': scan, 'repair_plan': plan,
+                          'next_step': ('Unrecoverable/unverified regions remain. Use image rescue or a '
+                                        'separately authorized destructive reinitialization; never zero unknown bytes automatically.') }
                 print(json.dumps(result, indent=2) if args.json else result, flush=True)
                 return 2
             if not plan['targets']:
@@ -1289,11 +1325,21 @@ def _run_care(args) -> int:
                 elif _refresh_image_token(args.image) != (token, size):
                     raise RuntimeError('Image patient changed identity')
 
+            refresh_started = time.monotonic()
+            total_refresh_bytes = sum(length for _, length in targets) if targets else None
             def progress(event):
                 idx = event.get('refresh_index', 0)
                 total = event.get('refresh_total', len(targets or []))
+                rewritten = int(event.get('rewritten_bytes') or 0)
+                elapsed = max(0.001, time.monotonic() - refresh_started)
+                speed = rewritten / elapsed if rewritten else 0.0
+                remaining = (max(0, total_refresh_bytes - rewritten)
+                             if total_refresh_bytes is not None else None)
+                eta = (remaining / speed if speed > 0 and remaining is not None else None)
                 emitter.emit({'phase': 'REFRESH', 'refresh_index': idx,
                               'refresh_total': total, 'size': size,
+                              'speed_bps': speed, 'eta_seconds': eta,
+                              'read_error_chunks': (scan or {}).get('read_error_chunks', 0),
                               'offset': event.get('offset', 0),
                               'rewritten_bytes': event.get('rewritten_bytes', 0),
                               'verified_bytes': event.get('verified_bytes', 0),
@@ -1310,7 +1356,9 @@ def _run_care(args) -> int:
             writer.close()
         if ram_only:
             repair['journal'] = None
-        result = {'status': ('completed_targeted_refresh' if repair['status'] == 'completed'
+        result = {'status': ('partial_repair_unresolved_data' if repair['status'] == 'completed'
+                             and plan and plan.get('unresolved_data') else
+                             'completed_targeted_refresh' if repair['status'] == 'completed'
                              else 'repair_incomplete'), 'scan': scan,
                   'repair_plan': plan, 'repair': repair,
                   'volatile_ram_only': ram_only,
@@ -1447,9 +1495,12 @@ def run(argv: list[str] | None = None) -> int:
                 failed = bool(info.get('failed'))
                 disconnect = bool(info.get('disconnect'))
                 elapsed = max(1e-6, time.perf_counter() - scan_started)
-                bytes_done = min(size, current * chunk)
+                bytes_done = int(info.get('attempted_bytes', min(size, current * chunk)))
+                readable = int(info.get('readable_bytes', bytes_done if not failed else 0))
                 speed = bytes_done / elapsed
-                eta = ((size - bytes_done) / speed) if speed > 0 and current < total else 0.0
+                # Sample/triage ETA reflects remaining planned samples, not the
+                # entire surface. Full scan ETA reflects all planned blocks.
+                eta = (max(0, total - current) * elapsed / current if current else None)
                 health_view = health.observe(
                     latency_ms=None if latency_ms is None else float(latency_ms),
                     median_ms=None if median_ms is None else float(median_ms),
@@ -1464,8 +1515,11 @@ def run(argv: list[str] | None = None) -> int:
                     "refresh_total": total,
                     "offset": offset,
                     "size": size,
-                    "rewritten_bytes": bytes_done,
-                    "verified_bytes": 0 if failed else bytes_done,
+                    "attempted_bytes": bytes_done,
+                    "readable_bytes": readable,
+                    "read_error_chunks": int(info.get('read_error_chunks') or 0),
+                    "scan_mode": args.mode,
+                    "read_length": info.get('length', 0),
                     "latency_ms": latency_ms,
                     "median_ms": median_ms,
                     "failed": failed,

@@ -9,5 +9,6 @@
 - Details: `docs/FINDINGS_REMEDIATION_20261102.md`
 
 ## Still blocked for public release
-- Seagate ST1000LM048 full elevated surface verify (Direct Repair / refresh-external)
-- RAM-only and physical power-loss / USB disconnect qualification outstanding per 0.3.3b4 report
+- Seagate ST1000LM048 full elevated surface verify (error-aware Direct Repair / refresh-external)
+- Physical power-loss / USB disconnect / real read-error hardware gates per 0.3.3b4–b5 reports
+- Destructive reinitialization of unreadable sectors remains **not implemented**
