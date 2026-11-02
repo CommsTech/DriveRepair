@@ -192,6 +192,7 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
     anomalous_indices: list[int] = []
     examined: set[int] = set()
     slow_regions: list[dict] = []
+    slow_region_count = 0
 
     def _median_ms() -> float | None:
         if not latency_window:
@@ -199,10 +200,11 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
         return float(statistics.median(latency_window))
 
     def attempt(offset: int, length: int) -> bool:
-        nonlocal checked, readable, failures, completed, status
+        nonlocal checked, readable, failures, completed, status, slow_region_count
         checked += length
         completed += 1
-        examined.add(offset // chunk)
+        if mode == 'triage':
+            examined.add(offset // chunk)
         error = None
         disconnect = False
         t0 = time.monotonic()
@@ -235,14 +237,17 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
             else:
                 med = _median_ms() or 0.0
                 threshold = max(50.0, med * 4)
-                if latency_ms >= threshold and len(slow_regions) < 1000:
-                    slow_regions.append({
-                        'offset': offset,
-                        'length': length,
-                        'latency_ms': round(latency_ms, 3),
-                        'median_ms': round(med, 3),
-                    })
-                    anomalous_indices.append(offset // chunk)
+                if latency_ms >= threshold:
+                    slow_region_count += 1
+                    if len(slow_regions) < 1000:
+                        slow_regions.append({
+                            'offset': offset,
+                            'length': length,
+                            'latency_ms': round(latency_ms, 3),
+                            'median_ms': round(med, 3),
+                        })
+                    if mode == 'triage':
+                        anomalous_indices.append(offset // chunk)
         med = _median_ms()
         info = {
             'offset': offset,
@@ -337,6 +342,8 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
         'read_error_chunks': failures,
         'read_error_ranges': failed_ranges,
         'slow_regions': slow_regions,
+        'slow_region_count': max(slow_region_count, len(slow_regions)),
+        'slow_regions_truncated': slow_region_count > 1000,
         'inconsistent_reads': inconsistent_reads,
         'repeat_probe_failures': repeated_read_errors,
         'extra_suspect_reads': 2 * min(len(set(anomalous_indices)), 64, samples) if compare_suspects and mode == 'triage' else 0,

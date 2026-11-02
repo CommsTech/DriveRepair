@@ -121,7 +121,8 @@ class WindowsReadWriter:
         self.kernel.CloseHandle.restype = wintypes.BOOL
         access = 0x80000000 | 0x40000000
         flags = 0x80000000  # FILE_FLAG_WRITE_THROUGH
-        self.handle = self.kernel.CreateFileW(device.path, access, 0x3, None, 3, flags, None)
+        # Exclusive raw disk handle: prevent parallel in-place writers on Windows.
+        self.handle = self.kernel.CreateFileW(device.path, access, 0, None, 3, flags, None)
         if self.handle == ctypes.c_void_p(-1).value or self.handle is None:
             err = ctypes.get_last_error()
             if err == 5:  # ERROR_ACCESS_DENIED
@@ -608,7 +609,13 @@ def _escalate_region(
 
 
 class JournalStore:
-    """disk | hybrid (RAM region + disk meta) | memory (RAM region+meta, meta also mirrored lightly)."""
+    """Journal for current region; memory backend never touches a filesystem.
+
+    `memory` is **not durable**. Crash or power loss destroys the preimage;
+    only use for explicitly authorized last-resort work, never for resume.
+    `ramdisk` has disk-like transactional semantics on verified tmpfs, which
+    can survive application crashes but not loss of host RAM.
+    """
 
     def __init__(self, journal_dir: str, backend: str) -> None:
         if backend not in {"disk", "hybrid", "memory", "ramdisk"}:
@@ -621,6 +628,8 @@ class JournalStore:
         self._meta: dict | None = None
 
     def prepare_new(self) -> None:
+        if self.backend == "memory":
+            return  # zero filesystem artifacts, even metadata or lock files
         # An empty directory is fine (operators often mkdir the path first).
         # Refuse only when a prior journal artifact is present.
         if os.path.lexists(self.journal_dir):
@@ -636,11 +645,9 @@ class JournalStore:
             os.makedirs(self.journal_dir, mode=0o700)
 
     def save_meta(self, meta: dict) -> None:
-        self._meta = meta
+        self._meta = dict(meta)
         if self.backend == "memory":
-            # Tiny checkpoint so operators can still inspect status if process survives.
-            _state_save(self.meta_path, {**meta, "journal_backend": self.backend, "region_in_ram": True})
-            return
+            return  # Process-local only; never claim a restart checkpoint exists.
         _state_save(self.meta_path, {**meta, "journal_backend": self.backend,
                                      "region_in_ram": self.backend == "hybrid"})
 
@@ -670,11 +677,15 @@ class JournalStore:
 
     def clear_region(self) -> None:
         self._region = None
+        if self.backend == "memory":
+            return
         if os.path.isfile(self.blob_path):
             os.unlink(self.blob_path)
 
     def cleanup(self) -> None:
         self.clear_region()
+        if self.backend == "memory":
+            return
         if os.path.isdir(self.journal_dir):
             for name in os.listdir(self.journal_dir):
                 try:
@@ -806,6 +817,7 @@ def refresh_media(
     journal: str,
     chunk: int = 1024 * 1024,
     mode: str = "adaptive",
+    targets: list[tuple[int, int]] | None = None,
     verify: bool = True,
     resume: bool = False,
     max_errors: int = 4096,
@@ -818,13 +830,38 @@ def refresh_media(
     identity_check: Callable[[], None] | None = None,
     pre_write_check: Callable[[], None] | None = None,
 ) -> dict:
-    if mode not in {"adaptive", "full"}:
-        raise ValueError("mode must be adaptive or full")
+    if mode not in {"adaptive", "full", "targeted"}:
+        raise ValueError("mode must be adaptive, full or targeted")
+    if mode != "targeted" and targets is not None:
+        raise ValueError("Explicit targets require targeted mode")
     if size <= 0 or sector <= 0 or size % sector or chunk < sector or chunk % sector:
         raise ValueError("Invalid size/sector/chunk alignment for refresh")
     if not 1 <= max_errors <= 100000 or consistency_reads < 2:
         raise ValueError("Invalid max_errors or consistency_reads")
+    if journal_backend == "memory" and resume:
+        raise ValueError("Process-RAM journal cannot resume after exit; its original bytes are lost")
 
+    # Validate EVERY offset before creating the journal or opening a write
+    # transaction. Adjacent targets are permitted; overlaps and out-of-bounds
+    # requests are rejected rather than normalized into broader writes.
+    checked_targets = None
+    if targets is not None:
+        checked_targets = []
+        previous_end = 0
+        if len(targets) > 256:
+            raise ValueError("Too many targeted regions; subdivide the job")
+        for offset, length in targets:
+            if (type(offset) is not int or type(length) is not int or
+                    offset < 0 or length <= 0 or offset % sector or length % sector or
+                    offset < previous_end or offset + length > size or length > chunk):
+                raise ValueError("Invalid, overlapping, or unaligned targeted region")
+            checked_targets.append([offset, length])
+            previous_end = offset + length
+    if mode == "targeted" and not resume and not checked_targets:
+        raise ValueError("New targeted refresh requires nonempty verified targets")
+
+    target_digest = (_sha256(json.dumps(checked_targets, separators=(",", ":")).encode())
+                     if checked_targets is not None else None)
     store = JournalStore(journal, journal_backend)
     started = time.monotonic()
     probe_started = started
@@ -845,6 +882,9 @@ def refresh_media(
             raise RuntimeError("Verification/consistency settings changed on resume")
         if meta.get("journal_backend") not in {None, journal_backend}:
             raise RuntimeError("Journal backend changed on resume")
+        if mode == "targeted" and (meta.get("target_digest") is None or
+                                    target_digest is not None and meta["target_digest"] != target_digest):
+            raise RuntimeError("Target set differs from the interrupted journal")
         meta = _recover_interrupted_transaction(media, store, meta, identity_check, pre_write_check)
     else:
         store.prepare_new()
@@ -853,6 +893,10 @@ def refresh_media(
             mode=mode, verify=verify, consistency_reads=consistency_reads,
         )
         meta["journal_backend"] = journal_backend
+        if mode == "targeted":
+            meta["queue"] = checked_targets
+            meta["target_digest"] = target_digest
+            meta["target_count"] = len(checked_targets)
         if mode == "adaptive":
             probe_started = time.monotonic()
             targets, probe_stats = _probe_adaptive_targets(
@@ -864,7 +908,7 @@ def refresh_media(
             meta["queue"] = [[offset, length] for offset, length in targets]
             meta.update(probe_stats)
             meta["probe_elapsed_seconds"] = probe_elapsed
-        else:
+        elif mode == "full":
             meta["queue"] = None
         store.save_meta(meta)
 
@@ -874,7 +918,7 @@ def refresh_media(
         # already encountered unreadable regions. Rescue first.
         status = "aborted_probe_read_errors"
     refresh_index = 0
-    refresh_total = len(meta.get("queue") or []) if mode == "adaptive" else max(
+    refresh_total = len(meta.get("queue") or []) if mode in {"adaptive", "targeted"} else max(
         1, (size + chunk - 1) // chunk
     )
 
@@ -889,7 +933,7 @@ def refresh_media(
             progress(event)
 
     def next_region() -> tuple[int, int] | None:
-        if mode == "adaptive":
+        if mode in {"adaptive", "targeted"}:
             queue = meta.get("queue") or []
             return (int(queue[0][0]), int(queue[0][1])) if queue else None
         cursor = int(meta["cursor"])
@@ -935,9 +979,31 @@ def refresh_media(
                         raise OSError(errno.EIO, "Post-write readback mismatch")
                 except (OSError, RuntimeError) as exc:
                     meta["failed_write_attempts"] = int(meta["failed_write_attempts"]) + 1
-                    status = _stop_with_journal(
-                        store, meta, "aborted_write_or_verify_error", error=str(exc)
-                    )
+                    if store.backend == "memory":
+                        # With no durable journal a return to the GUI destroys the
+                        # only preimage. Make ONE bounded attempt to put it back
+                        # while it still exists in RAM, and verify that attempt.
+                        try:
+                            if pre_write_check:
+                                pre_write_check()
+                            _write_all_at(media, offset, data)
+                            if media.read_at(offset, length) != data:
+                                raise OSError(errno.EIO, "Rollback readback mismatch")
+                        except (OSError, RuntimeError) as restore_error:
+                            status = _stop_with_journal(
+                                store, meta, "critical_volatile_rollback_failed",
+                                error=f"Initial error: {exc}; restoration: {restore_error}",
+                            )
+                        else:
+                            meta["transaction"] = None
+                            status = _stop_with_journal(
+                                store, meta, "aborted_volatile_region_restored",
+                                error=f"Region restored and verified after error: {exc}",
+                            )
+                    else:
+                        status = _stop_with_journal(
+                            store, meta, "aborted_write_or_verify_error", error=str(exc)
+                        )
                     if progress:
                         progress({"status": status, "phase": "refresh", "offset": offset,
                                   "failed": True, "force": True,
@@ -973,7 +1039,8 @@ def refresh_media(
                     break
                 continue
 
-            # Journal original data durably *before* any patient write.
+            # Save original bytes BEFORE any patient write. Disk and checked
+            # tmpfs journals may survive an app crash; process RAM NEVER does.
             store.save_region(data)
             meta["transaction"] = {
                 "state": STATE_SAVED,
@@ -1009,10 +1076,13 @@ def refresh_media(
         "sector": sector,
         "chunk": chunk,
         "source_token": source_token,
-        "journal": store.journal_dir,
+        "journal": None if store.backend == "memory" else store.journal_dir,
         "journal_backend": journal_backend,
+        "volatile_ram_only": journal_backend == "memory",
+        "resume_possible_after_exit": journal_backend != "memory",
         "cursor": meta.get("cursor"),
         "queue_remaining": len(meta.get("queue") or []),
+        "target_count": meta.get("target_count", 0),
         "rewritten_bytes": meta["rewritten_bytes"],
         "verified_bytes": meta["verified_bytes"],
         "skipped_ranges": meta.get("skipped_ranges") or [],

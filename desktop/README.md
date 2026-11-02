@@ -1,4 +1,20 @@
-# DriveRepair desktop — 0.3.3b3
+## No image required: targeted in-place repair (experimental)
+
+The **Diagnose / Rescue** page now shows **Quick repair**, **Full repair**,
+and a **Temporary region storage** choice. Set **Volatile RAM only (NO saved
+files)** when a second storage destination is unavailable and you explicitly
+accept that losing RAM during a write can destroy source data. This does not
+save a rescue image or a rolling-journal file. **Disk journal** remains safer.
+
+Run `refresh-external --mode full --journal-backend memory` from the CLI for a
+whole-surface rewrite, or select **In-place refresh** in the GUI. Both require
+all appropriate device identity and destructive-operation confirmations.
+SMART warnings, unreadable data and uncertain data remain stop conditions
+rather than targets for speculative repair. On Windows an offline patient
+and elevated privileges are necessary; on macOS raw writes remain disabled.
+See `../docs/NO_IMAGE_RAM_REPAIR.md` for exact commands and limitations.
+
+# DriveRepair desktop — 0.3.3b4
 
 A privacy-first guided Python 3.10+ desktop UI/CLI, with incremental Rust recovery-core migration. This is not a signed standalone native installer. The GUI requires Tk. Raw-device repair remains experimental; do not operate on irreplaceable disks.
 
@@ -167,9 +183,9 @@ Start in GUI → **Recover OS drive → Last resort**. See
 checks and exact CLI flags. The experimental feature is not approved for
 irreplaceable data or automatic operation.
 
-### Graphical workflow controls (0.3.3b3)
+### Graphical workflow controls (0.3.3b4)
 
-Run `python -m driverepair_desktop gui`, or `python DriveRepair-0.3.3b3.pyz gui`.
+Run `python -m driverepair_desktop gui`, or `python DriveRepair-0.3.3b4.pyz gui`.
 The **Start here** buttons navigate to their named workflow pages; select a disk
 row before Quick scan, SMART, or Rescue in **Diagnose / Rescue**. Windows and Linux
 external raw-disk rescue require an independently verified destination and elevated
