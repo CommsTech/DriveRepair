@@ -1,3 +1,22 @@
+## 0.3.3b3 — Guided GUI clickability and portable recovery hotfix (2026-11-01)
+
+- Fixed all seven Start Here buttons: Notebook.select now receives its owned
+  tab container instead of a nested Canvas child (previously threw TclError).
+- Hid the idle dashboard to make all seven guided choices visible; kept
+  dashboard toggle, automatic display while a job runs, and persistent Stop.
+- Exposed the guarded Windows external-device rescue command through the GUI
+  (previously mislabeled and blocked as Linux-only); still requires separate
+  destination, elevated access, user risk acknowledgement, and physical QA.
+- Fixed portable .pyz GUI subprocess invocation: child jobs re-enter the .pyz
+  instead of relying on an installed `driverepair_desktop` module.
+- Exposed unexpected GUI callback exceptions to users and the bounded log.
+- Set child progress streams to UTF-8 and closed their pipes after completion.
+- Added real Tk GUI button, tab, visible-control and image-rescue regression
+  tests with no physical-disk access; CI adds Linux Xvfb GUI validation.
+- Aligned Python desktop packaging version and zipapp build versions.
+- No new physical-drive recovery / write capability; public hardware beta
+  validation remains outstanding.
+
 ## 0.3.3b2 — Journal-backed rescue status and lab safety hotfix (experimental)
 
 - Added OS-held exclusive writer lock across forward and retry passes; simultaneous jobs against one image/map are rejected while monitoring remains read-only.

@@ -38,6 +38,20 @@ C = {
 }
 
 
+def recovery_command(args: list[str], *, executable: str | None = None,
+                     entrypoint: str | None = None) -> list[str]:
+    """Launch the same recovery engine when installed or running as a zipapp.
+
+    `python -m driverepair_desktop` does not resolve the package from a .pyz
+    archive in a fresh interpreter. The portable GUI must re-enter its .pyz.
+    """
+    python = executable or sys.executable
+    entry = entrypoint if entrypoint is not None else sys.argv[0]
+    if entry.lower().endswith('.pyz') and os.path.isfile(entry):
+        return [python, os.path.abspath(entry), *args]
+    return [python, '-m', 'driverepair_desktop', *args]
+
+
 def launch() -> None:
     try:
         import tkinter as tk
@@ -135,8 +149,15 @@ def launch() -> None:
     ttk.Label(header, text="Privacy-first · Recovery evidence · Cross-platform",
               style="Muted.TLabel").pack(side="right", pady=(12, 0))
 
+    # Keep a large, live dashboard during recovery, but do not fill the
+    # Start Here screen with empty telemetry before a job exists.
+    # Do not pack overview initially — packing then immediately forgetting races
+    # idle-layout tests and flashes empty telemetry on slow Windows Tk updates.
+    overview = ttk.Frame(shell)
+    dashboard_visible = tk.BooleanVar(value=False)
+
     # Live ops strip
-    ops = tk.Frame(shell, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
+    ops = tk.Frame(overview, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
     ops.pack(fill="x", pady=(14, 10), ipady=8, ipadx=8)
     left = tk.Frame(ops, bg=C["panel"])
     left.pack(side="left", fill="both", expand=True, padx=10, pady=6)
@@ -152,11 +173,11 @@ def launch() -> None:
              font=("Consolas", 11), justify="right").pack(anchor="e")
     # The progress bar is outside the pack-managed left/right strip so it spans
     # the actual window width (not the tiny gap left between side panels).
-    pbar = ttk.Progressbar(shell, mode="determinate", maximum=1000)
+    pbar = ttk.Progressbar(overview, mode="determinate", maximum=1000)
     pbar.pack(fill="x", pady=(0, 8))
 
     # Rescue overview: always visible while navigating across workflow tabs.
-    summary = tk.Frame(shell, bg=C["bg"])
+    summary = tk.Frame(overview, bg=C["bg"])
     summary.pack(fill="x", pady=(0, 8))
     summary_labels = []
     for label, variable in (("DATA SAVED TO IMAGE", recovered_var),
@@ -170,18 +191,18 @@ def launch() -> None:
         summary_labels.append(heading)
         tk.Label(card, textvariable=variable, bg=C["panel"], fg=C["text"],
                  font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=10, pady=(2, 8))
-    dest_line = tk.Frame(shell, bg=C["bg"])
+    dest_line = tk.Frame(overview, bg=C["bg"])
     dest_line.pack(fill="x", pady=(0, 6))
     tk.Label(dest_line, textvariable=destination_var, bg=C["bg"], fg=C["muted"],
              font=("Segoe UI", 9), anchor="w").pack(side="left", fill="x", expand=True)
     tk.Label(dest_line, textvariable=capacity_var, bg=C["bg"], fg=C["muted"],
              font=("Segoe UI", 9)).pack(side="right")
-    warning_label = tk.Label(shell, textvariable=warning_var, anchor="w", bg=C["panel"],
+    warning_label = tk.Label(overview, textvariable=warning_var, anchor="w", bg=C["panel"],
                              fg=C["muted"], font=("Segoe UI", 9), padx=10, pady=5)
     warning_label.pack(fill="x", pady=(0, 8))
 
     # Sector map
-    map_frame = tk.Frame(shell, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
+    map_frame = tk.Frame(overview, bg=C["panel"], highlightbackground=C["border"], highlightthickness=1)
     map_frame.pack(fill="both", expand=False, pady=(0, 10))
     legend_var = tk.StringVar(value="Activity map  ·  . unscanned   o read to image   ? in progress   X unreadable/failed")
     tk.Label(map_frame, textvariable=legend_var,
@@ -233,6 +254,7 @@ def launch() -> None:
     # Every workflow page is independently scrollable. Otherwise on a typical
     # laptop the lower controls (including Start/Restore) can be unreachable.
     tab_canvases = {}
+    workflow_pages = {}
     def workflow_tab(name: str, title: str):
         container = ttk.Frame(notebook)
         scroller = tk.Canvas(container, bg=C['bg'], highlightthickness=0, borderwidth=0)
@@ -245,6 +267,7 @@ def launch() -> None:
         page.bind('<Configure>', lambda e: scroller.configure(scrollregion=scroller.bbox('all')))
         scroller.bind('<Configure>', lambda e: scroller.itemconfigure(window_id, width=e.width))
         notebook.add(container, text=title)
+        workflow_pages[name] = container  # Notebook owns the CONTAINER, not the page frame.
         tab_canvases[name] = scroller
         return page
 
@@ -265,28 +288,51 @@ def launch() -> None:
               style='Muted.TLabel', wraplength=880).pack(anchor='w', pady=(0, 14))
     workflow_cards = [
         ('My computer will not boot / only one internal disk',
-         'Boot a trusted live USB, then rescue to a separate disk or NAS share.', tab_system),
+         'Boot a trusted live USB, then rescue to a separate disk or NAS share.', 'system'),
         ('My files were accidentally deleted',
-         'Preview deleted file metadata and restore only files I select. Start from an image.', tab_undelete),
+         'Preview deleted file metadata and restore only files I select. Start from an image.', 'undelete'),
         ('My external drive is slow or failing',
-         'Find the device by model, capacity and identity; run fast triage or rescue.', tab_drive),
+         'Find the device by model, capacity and identity; run fast triage or rescue.', 'drive'),
         ('I need a forensic working copy',
-         'Rescue an image, verify bytes, preserve original evidence and recovery maps.', tab_image),
+         'Rescue an image, verify bytes, preserve original evidence and recovery maps.', 'image'),
         ('I suspect silent file corruption / flipped bits',
-         'Compare image chunks against a previously trusted baseline; recover only provably correct regions.', tab_integrity),
+         'Compare image chunks against a previously trusted baseline; recover only provably correct regions.', 'integrity'),
         ('My filesystem is corrupted',
-         'Check and repair a NEW filesystem image copy; original stays unchanged.', tab_fs),
+         'Check and repair a NEW filesystem image copy; original stays unchanged.', 'filesystem'),
         ('I want to refresh readable media',
-         'Expert-only experimental original-media writes. Not a replacement for a backup.', tab_refresh),
+         'Expert-only experimental original-media writes. Not a replacement for a backup.', 'refresh'),
     ]
+    def choose_workflow(name: str) -> None:
+        """Navigate to the notebook-managed page; do not select its canvas child."""
+        notebook.select(workflow_pages[name])
+        tab_canvases[name].yview_moveto(0)
+        status.set(f"Selected workflow: {notebook.tab(workflow_pages[name], 'text').strip()}")
+
     for heading, explanation, target in workflow_cards:
         card = ttk.Frame(tab_start, style='Card.TFrame', padding=(12, 9))
         card.pack(fill='x', pady=4)
-        ttk.Button(card, text=heading, command=lambda t=target: notebook.select(t)).pack(side='left', padx=(0, 14))
+        ttk.Button(card, text=heading, command=lambda t=target: choose_workflow(t)).pack(side='left', padx=(0, 14))
         ttk.Label(card, text=explanation, style='Card.TLabel', wraplength=535).pack(side='left')
     ttk.Label(tab_start, text='Boot/system disk unusable? Start from an independently trusted live USB '
               'environment. The custom boot components are experimental, not validated recovery media.',
               style='Muted.TLabel', wraplength=850).pack(anchor='w', pady=14)
+
+    def set_dashboard_visible(visible: bool) -> None:
+        dashboard_visible.set(bool(visible))
+        if visible:
+            if not overview.winfo_manager():
+                overview.pack(fill='x', before=notebook)
+            overview.update_idletasks()
+        else:
+            overview.pack_forget()
+
+    def on_dashboard_toggle() -> None:
+        # Read the Checkbutton variable after Tk applies the toggle.
+        set_dashboard_visible(bool(dashboard_visible.get()))
+
+    ttk.Checkbutton(header, text='Show recovery dashboard', variable=dashboard_visible,
+                    command=on_dashboard_toggle).pack(
+                        side='right', padx=(0, 14), pady=(10, 0))
 
     log_controls = ttk.Frame(shell)
     log_controls.pack(fill='x', pady=(8, 0))
@@ -481,7 +527,7 @@ def launch() -> None:
                 return
         if args and args[0].startswith('rescue-'):
             args = [*args, '--progress-jsonl', '--no-live-dashboard']
-        command = [sys.executable, "-m", "driverepair_desktop", *args]
+        command = recovery_command(args)
         last_result = None
         write(f"\n=== {title} ===\n")
         status.set(f"Running: {title}")
@@ -501,6 +547,7 @@ def launch() -> None:
             label.configure(text=text)
         legend_var.set('Activity map · . unscanned  o read to image  ? in progress  X unreadable/unknown')
         reset_map()
+        set_dashboard_visible(True)
         busy = True
         cancel_button.configure(state="normal")
 
@@ -509,7 +556,8 @@ def launch() -> None:
             try:
                 child = subprocess.Popen(
                     command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    text=True, bufsize=1,
+                    text=True, encoding='utf-8', errors='replace', bufsize=1,
+                    env={**os.environ, 'PYTHONIOENCODING': 'utf-8'},
                 )
                 process = child
 
@@ -530,6 +578,12 @@ def launch() -> None:
                 code = child.wait()
                 stdout_thread.join(timeout=3)
                 stderr_thread.join(timeout=3)
+                # Release pipe descriptors once the stream readers have drained.
+                # Otherwise repeated rescues leak handles on Windows and Linux.
+                if child.stdout is not None:
+                    child.stdout.close()
+                if child.stderr is not None:
+                    child.stderr.close()
                 try:
                     final_result = json.loads(''.join(output_lines))
                     if isinstance(final_result, dict):
@@ -598,8 +652,9 @@ def launch() -> None:
                 start(["benchmark-external", "--device", dev, "--ack-risk", "--json"],
                       "Benchmark", risky=True)
             elif kind in {"rescue", "resume"}:
-                if not sys.platform.startswith("linux"):
-                    raise ValueError("Direct external rescue is Linux-only in this build.")
+                if not (sys.platform.startswith('linux') or sys.platform == 'win32'):
+                    raise ValueError('Live external rescue is limited to Linux and Windows. '
+                                     'On macOS, first create an image with a separately validated tool.')
                 out = require(dest_file, "new image destination")
                 opts = (["--resume"] if kind == "resume" else [])
                 start(["rescue-external", "--device", dev, "--output", out,
@@ -612,7 +667,7 @@ def launch() -> None:
     bf.pack(anchor="w", pady=8)
     ttk.Button(bf, text="Refresh inventory", command=refresh_devices).pack(side="left", padx=(0, 6))
     for label, kind in [("SMART", "health"), ("Quick scan", "sample"), ("Full scan", "full"),
-                        ("Benchmark", "benchmark"), ("Rescue (Linux)", "rescue"),
+                        ("Benchmark", "benchmark"), ("Rescue (Linux/Windows)", "rescue"),
                         ("Resume rescue", "resume")]:
         ttk.Button(bf, text=label, command=lambda k=kind: device_action(k)).pack(side="left", padx=(0, 6))
     row(tab_drive, "Rescue image output", dest_file, pick_output)
@@ -1130,8 +1185,9 @@ def launch() -> None:
     log_controls.pack(side='bottom', fill='x', pady=(8, 0))
     notebook.pack(fill='both', expand=True)
 
+    poll_after_id = None
     def poll() -> None:
-        nonlocal process, busy, last_result, map_dirty
+        nonlocal process, busy, last_result, map_dirty, poll_after_id
         try:
             while True:
                 kind, value = q.get_nowait()
@@ -1291,15 +1347,35 @@ def launch() -> None:
         except queue.Empty:
             pass
         redraw_map()
-        root.after(100, poll)
+        poll_after_id = root.after(100, poll)
 
     def on_close() -> None:
         if process is not None and process.poll() is None:
             if not messagebox.askyesno("Active job", "Cancel the running job and exit?"):
                 return
             process.terminate()
+        if poll_after_id is not None:
+            try:
+                root.after_cancel(poll_after_id)
+            except tk.TclError:
+                pass
         root.destroy()
 
+    def report_ui_error(error_type, error_value, error_tb) -> None:
+        import traceback
+        details = ''.join(traceback.format_exception(error_type, error_value, error_tb))
+        write('Unexpected interface error:\n' + details + '\n')
+        status.set('Interface error — see Advanced details / engine log')
+        try:
+            messagebox.showerror('DriveRepair interface error',
+                                 f'{error_value}\n\nSee Advanced details for troubleshooting.')
+        except tk.TclError:
+            pass
+
+    root.report_callback_exception = report_ui_error
+    # The recovery dashboard is available on demand but initially hidden so
+    # the goal buttons and drive controls fit on normal laptop displays.
+    set_dashboard_visible(False)
     root.protocol("WM_DELETE_WINDOW", on_close)
     canvas.bind("<Configure>", lambda e: redraw_map(force=True))
     poll()

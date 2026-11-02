@@ -620,9 +620,19 @@ class JournalStore:
         self._meta: dict | None = None
 
     def prepare_new(self) -> None:
+        # An empty directory is fine (operators often mkdir the path first).
+        # Refuse only when a prior journal artifact is present.
         if os.path.lexists(self.journal_dir):
-            raise FileExistsError("Refresh journal already exists; use --resume")
-        os.makedirs(self.journal_dir, mode=0o700)
+            if not os.path.isdir(self.journal_dir):
+                raise FileExistsError("Refresh journal path exists and is not a directory")
+            leftover = [
+                name for name in os.listdir(self.journal_dir)
+                if name not in {'.', '..'}
+            ]
+            if leftover:
+                raise FileExistsError("Refresh journal already exists; use --resume")
+        else:
+            os.makedirs(self.journal_dir, mode=0o700)
 
     def save_meta(self, meta: dict) -> None:
         self._meta = meta

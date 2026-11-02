@@ -122,8 +122,9 @@ impl Menu {
             };
 
             let size_str = crate::disk::detection::format_size(disk.size_bytes);
-            let label = format!("{} - {} ({})", interface_str, &disk.model, size_str);
-            let description = format!("Serial: {}", &disk.serial);
+            // Avoid clippy::useless_borrows_in_formatting (stable 1.99+ in CI).
+            let label = format!("{} - {} ({})", interface_str, disk.model, size_str);
+            let description = format!("Serial: {}", disk.serial);
 
             menu.add_item(index, label, description);
         }
