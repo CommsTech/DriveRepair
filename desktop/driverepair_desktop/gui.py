@@ -611,7 +611,7 @@ def launch() -> None:
         # engine. Do NOT use bytes-written counters for a read-only scan.
         if phase in {'SCANNING', 'INVESTIGATING'}:
             for label, text in zip(summary_labels, ('BYTES READ', 'READ ERRORS',
-                                                    'CURRENT SPEED', 'TIME REMAINING')):
+                                                    'RECENT SPEED', 'TIME REMAINING')):
                 label.configure(text=text)
             attempted = int(event.get('attempted_bytes', 0))
             readable = int(event.get('readable_bytes', 0))
@@ -625,9 +625,8 @@ def launch() -> None:
                 speed_var.set(f'{fmt_bytes(int(speed_bps))}/s')
             elif phase == 'INVESTIGATING':
                 speed_var.set('Targeted retries')
-            elif stats.get('started') and attempted:
-                elapsed = max(0.01, time.monotonic() - stats['started'])
-                speed_var.set(f'{fmt_bytes(int(attempted / elapsed))}/s')
+            elif speed_bps is None:
+                speed_var.set('Measuring…')
             eta_s = event.get('eta_seconds')
             if phase == 'INVESTIGATING':
                 eta_var.set('Bounded retries')
@@ -641,7 +640,7 @@ def launch() -> None:
         elif phase == 'REFRESH':
             for label, text in zip(summary_labels, ('BYTES REWRITTEN / VERIFIED',
                                                     'UNREADABLE / UNKNOWN',
-                                                    'CURRENT SPEED', 'TIME REMAINING')):
+                                                    'RECENT SPEED', 'TIME REMAINING')):
                 label.configure(text=text)
             recovered_var.set(f"{fmt_bytes(stats['rewritten'])} / {fmt_bytes(stats['verified'])}")
             remaining_errors = int(event.get('read_error_chunks') or 0)
@@ -775,7 +774,7 @@ def launch() -> None:
         warning_var.set('Recovery may stress failing hardware. This display is not a drive-health verdict.')
         warning_label.configure(fg=C['muted'])
         for label, text in zip(summary_labels, ('DATA SAVED TO IMAGE', 'UNREADABLE / UNKNOWN',
-                                                'CURRENT SPEED', 'TIME REMAINING')):
+                                                'RECENT SPEED', 'TIME REMAINING')):
             label.configure(text=text)
         if in_place:
             summary_labels[0].configure(text='BYTES REWRITTEN / VERIFIED')

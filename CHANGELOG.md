@@ -286,3 +286,10 @@
   with an internal SATA disk; USB bridges still require the separate acknowledgment.
 - Added synthetic CLI safety-path tests. No physical device testing or
   manufacturer firmware remapping validation has been performed.
+
+### 0.3.3b9 — Qt workstation migration and resumable read-only scans
+- Optional PySide6 workstation with staged Start, drive choices, interactive sampled activity map, advanced log, and clear high-risk write confirmation. Existing Tk specialist tools remain.
+- Five-second recent throughput and separate job average; fixed misleading “current speed” label.
+- Private, identity-bound full-scan checkpoints permit explicit read-only resumption after unplug/reconnect; 433/no-device classified as access failure.
+- RAM-only guided writes keep their no-file default; scan checkpoint is a separate explicit opt-in.
+- This does **not** add raw firmware vendor commands, AI-invented evidence, or automatic physical-write resumption.

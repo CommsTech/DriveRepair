@@ -17,7 +17,7 @@ from typing import Callable
 # Win32 ERROR_IO_DEVICE (1117) can surface as Python errno EINVAL (22).
 # ERRNO 22 is only fatal without the more specific native error code.
 DEVICE_IO_ERRORS = {1117, 23, 1110}
-FATAL_WINERRORS = {5, 6, 21, 1167}
+FATAL_WINERRORS = {5, 6, 21, 433, 1167}
 FATAL_ERRNOS = {errno.ENODEV, errno.ENXIO, errno.EBADF, errno.EACCES,
                 errno.EPERM, errno.ENOENT}
 
@@ -39,7 +39,8 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
                        max_errors: int = 16, progress: Callable | None = None,
                        max_deferred: int = 256, max_followup_reads: int = 96,
                        min_chunk: int | None = None, max_chunk: int | None = None,
-                       known_suspects: list[dict] | None = None) -> dict:
+                       known_suspects: list[dict] | None = None,
+                       resume_state: dict | None = None, checkpoint=None) -> dict:
     """One full-surface pass, skipping isolated failures then bounded refinement.
 
     The returned `read_error_ranges` are original failed I/O requests, even if
@@ -57,24 +58,41 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
     chunk = min(max_chunk, max(min_chunk, chunk))
     started = time.monotonic()
     checked = readable = read_count = failures = 0
-    position = 0
-    deferred: list[dict] = []
+    prior = resume_state or {}
+    position = int(prior.get('position', 0))
+    if position < 0 or position > size or position % sector:
+        raise ValueError('Invalid resume position')
+    checked = int(prior.get('checked', 0))
+    readable = int(prior.get('readable', 0))
+    read_count = int(prior.get('read_count', 0))
+    failures = int(prior.get('failures', 0))
+    deferred: list[dict] = [dict(x) for x in prior.get('deferred', [])]
     suspect = [dict(x) for x in (known_suspects or [])[:128]
                if type(x) is dict and type(x.get('offset')) is int and
                0 <= x['offset'] < size]
-    slow: list[dict] = []
-    slow_count = 0
+    slow: list[dict] = [dict(x) for x in prior.get('slow', [])]
+    slow_count = int(prior.get('slow_count', len(slow)))
     read_sizes = set()
     adjustments = 0
-    size_now = chunk
+    size_now = int(prior.get('size_now', chunk))
+    if not min_chunk <= size_now <= max_chunk or size_now % sector:
+        size_now = chunk
     recent_rate = deque(maxlen=32)
     consecutive_errors = 0
     healthy_streak = 0
-    skipped: list[dict] = []
+    skipped: list[dict] = [dict(x) for x in prior.get('skipped', [])]
     status = 'completed'
     error_count_over_limit = False
     retries_limited = False
     latency_window = deque(maxlen=256)
+
+    def write_checkpoint(*, force=False):
+        if checkpoint is not None:
+            checkpoint({'position': position, 'checked': checked,
+                        'readable': readable, 'read_count': read_count,
+                        'failures': failures, 'deferred': deferred[:256],
+                        'slow': slow[:1024], 'slow_count': slow_count,
+                        'skipped': skipped[:256], 'size_now': size_now}, force=force)
 
     def report(off, length, elapsed_ms, error=None, category=None):
         if progress is None:
@@ -127,6 +145,7 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
             if category in {'device_or_access_unavailable', 'invalid_read_request'}:
                 status = 'aborted_device_or_access_error'
                 report(position, length, elapsed_ms, issue, category)
+                write_checkpoint(force=True)
                 break
             if failures >= max_errors:
                 retries_limited = True  # affects deferred probe budget, not whole-disk progress
@@ -137,6 +156,7 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
                 adjustments += 1
             report(position, length, elapsed_ms, issue, category)
             position += length
+            write_checkpoint()
             # A large cluster of failed reads is bypassed, not repeatedly hit.
             # The skipped space is UNTESTED, never classified as healthy.
             if consecutive_errors >= 6 and position < size:
@@ -145,6 +165,7 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
                 if skip:
                     skipped.append({'offset': position, 'length': skip, 'reason': 'repeated_io_failures'})
                     position += skip
+                    write_checkpoint(force=True)
                     consecutive_errors = 0
                     report(position - skip, skip, 0.0, 'skipped untested after repeated I/O errors',
                            'skipped_untested')
@@ -178,7 +199,9 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
             healthy_streak = 0
         report(position, length, elapsed_ms)
         position += length
+        write_checkpoint()
 
+    write_checkpoint(force=True)
     if status == 'completed' and (deferred or skipped or error_count_over_limit):
         status = 'completed_with_read_errors'
     elif status == 'completed' and slow:
@@ -212,6 +235,8 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
         'follow_up_chunks': 0,
         'surface_coverage_pct': round(100 * min(size, visited) / size, 6),
         'elapsed_seconds': round(elapsed, 3),
+        'resume_position_bytes': position,
+        'resumed_from_bytes': int(prior.get('position', 0)),
         'read_sizes_bytes': sorted(read_sizes),
         'read_size_adjustments': adjustments,
         'skipped_untested_ranges': skipped,

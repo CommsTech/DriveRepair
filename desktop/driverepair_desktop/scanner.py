@@ -174,7 +174,8 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
                 adaptive_min_chunk: int | None = None,
                 adaptive_max_chunk: int | None = None,
                 sample_seed: int | None = None,
-                progress: Callable[..., None] | None = None) -> dict:
+                progress: Callable[..., None] | None = None,
+                resume_state: dict | None = None, checkpoint=None) -> dict:
     if (not 0 < sector <= 1024 * 1024 or size <= 0 or size % sector or
             chunk < sector or chunk % sector or not 1 <= max_errors <= 10000 or
             not 1 <= samples <= 100000):
@@ -183,7 +184,10 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
         from .adaptive_scan import adaptive_full_scan
         return adaptive_full_scan(reader, size=size, sector=sector, chunk=chunk,
                                   max_errors=max_errors, progress=progress,
-                                  min_chunk=adaptive_min_chunk, max_chunk=adaptive_max_chunk)
+                                  min_chunk=adaptive_min_chunk, max_chunk=adaptive_max_chunk,
+                                  resume_state=resume_state, checkpoint=checkpoint)
+    if resume_state is not None:
+        raise ValueError('Resume checkpoint supported only for adaptive full scans')
     blocks = (size + chunk - 1) // chunk
     baseline = list(scan_offsets(size, chunk, mode, samples, sample_seed)) if mode != 'full' else None
     if mode == 'triage' and history_hints:
