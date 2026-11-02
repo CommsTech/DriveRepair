@@ -1,0 +1,868 @@
+diff --git a/.gitea/workflows/ci.yml b/.gitea/workflows/ci.yml
+index f73f042..396f9b3 100644
+--- a/.gitea/workflows/ci.yml
++++ b/.gitea/workflows/ci.yml
+@@ -88,7 +88,7 @@ jobs:
+       - name: Portable GUI to recovery engine image test
+         working-directory: desktop
+         env:
+-          DRIVEREPAIR_SMOKE_PYZ: ../dist/DriveRepair-0.3.3b9.pyz
++          DRIVEREPAIR_SMOKE_PYZ: ../dist/DriveRepair-0.3.3b12.pyz
+         run: xvfb-run -a python -m unittest discover -s tests -p test_gui_workflows.py -v
+ 
+   native-recovery-core:
+@@ -121,6 +121,6 @@ jobs:
+       - name: Verify CLI offline rescue commands are packaged
+         run: |
+           python scripts/build_desktop.py --no-wheel
+-          python dist/DriveRepair-0.3.3b9.pyz list-all-linux --help
+-          python dist/DriveRepair-0.3.3b9.pyz plan-system-recovery --help
+-          python dist/DriveRepair-0.3.3b9.pyz rescue-system --help
++          python dist/DriveRepair-0.3.3b12.pyz list-all-linux --help
++          python dist/DriveRepair-0.3.3b12.pyz plan-system-recovery --help
++          python dist/DriveRepair-0.3.3b12.pyz rescue-system --help
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 0373a3b..667ed9f 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,3 +1,35 @@
++## 0.3.3b12 — Bounded investigation, safe Stop and truthful workflow progress
++
++This is a **private engineering build**, not a production write-safety certificate.
++
++- Fix the retry-budget defect: every attempted read, including each failed or
++  timed-out request, now consumes the bounded follow-up budget **before** I/O.
++  Failed subregions cannot trigger an effectively unbounded recursive probe tree.
++  A wall-clock time budget is best-effort only: Windows/USB drivers may block a
++  synchronous read beyond it; software cannot reliably cancel that kernel I/O.
++- Emit structured investigation telemetry with LBA byte offset, request length,
++  attempted-read count, read state, error count, and duration. Qt debug mode saves
++  throttled `IO_TELEMETRY` lines to distinguish a blocked read from GUI lag.
++- Guided Fix jobs accept a private `STOP` command on stdin. Scans stop at a
++  read boundary, and rolling-journal writes stop **between** committed
++  transactions. No in-flight rewrite is intentionally interrupted by Stop.
++  Read-only jobs can be terminated, with forced exit after a short grace period.
++- Qt shows separate **current-phase progress** and **estimated whole-job
++  progress**; the latter is explicitly approximate until the repair plan exists.
++  Investigation includes a read-attempt budget. The stalled-I/O status displays
++  last offset, request size, and seconds without a result.
++- Present advisory media-profile identification in the drive card. SMR rewrite
++  transactions are capped at 256 KiB and at most 16 regions per guided batch;
++  reported SSD/NVMe profiles cap individual transactions at 128 KiB and batches
++  at 16. These are logical sizes, not HDD physical-zone or SSD NAND geometry.
++  Adjacent rewrite authorization remains restricted to verified CMR.
++
++**Known limitations:** Selected-disk `Get-Disk` timeouts on the Windows USB
++bridge remain a write blocker. The native Windows Qt interface, actual USB
++faults and physical writes have not been hardware-qualified here. No arbitrary
++firmware writes, true physical-sector resurfacing, or AI-generated data repair.
++See `docs/BOUNDED_IO_AND_SAFE_STOP_0.3.3b12.md` for operational notes.
++
+ ### 0.3.3b11 — Mounted volume preparation and fault-boundary investigation
+ 
+ - Qt Fix workflows may explicitly authorize temporary Windows exclusive lock/dismount of mounted external volumes after scanning. Busy volumes, unknown mount paths and failed locks stop safely; no forceful dismount or permanent drive-letter removal.
+diff --git a/README.md b/README.md
+index c22dbe0..b4d1247 100644
+--- a/README.md
++++ b/README.md
+@@ -2,11 +2,15 @@
+ 
+ **Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
+ 
+-**Current build: 0.3.3b11 / engineering beta candidate — NOT approved for public hardware-repair use.**
++**Current build: 0.3.3b12 / engineering beta candidate — NOT approved for public hardware-repair use.**
+ The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
+ 
+ **If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
+ 
++## Reliability and safe cancellation (0.3.3b12)
++
++The Qt interface now separates current phase from estimated whole-job progress. Follow-up read errors consume actual retry attempts (including failures) and expose the currently investigated offset. Stop is cooperative during guided repair, never a mid-write abort. SMR and flash media use smaller bounded logical rewrite transactions; these are conservative, **not** factory-media rejuvenation. Full details and Windows testing instructions: [Bounded I/O and safe Stop](docs/BOUNDED_IO_AND_SAFE_STOP_0.3.3b12.md).
++
+ ## Windows mounted-volume preparation and read-error boundaries (0.3.3b11)
+ 
+ The Qt Fix workflow can request a **temporary exclusive lock/dismount** of an external Windows volume with a drive letter. This is never done without the operation's explicit physical-write confirmation. Windows must establish exclusive access; in-use, unknown or system volumes remain off-limits. No forced dismount or permanent drive-letter removal is performed. Read-error investigations now look on both logical sides of failed requests with a strict additional-probe budget. These inspections are read-only and **do not establish physical damage or recover missing bytes**. See `docs/WINDOWS_VOLUME_PREPARATION_AND_ERROR_BOUNDARIES.md`. Windows USB repair remains hardware-unverified.
+diff --git a/desktop/README.md b/desktop/README.md
+index 5766b8a..fa73f03 100644
+--- a/desktop/README.md
++++ b/desktop/README.md
+@@ -1,3 +1,7 @@
++## DriveRepair 0.3.3b12 — bounded fault diagnosis and phase-aware Qt
++
++The Qt GUI now has independent phase progress and explicitly estimated whole-job progress. It streams investigation offsets and retry counts to the GUI debug log, supports cooperative Stop for guided Fix operations, and caps repeated failed reads. The Windows native USB-driver may still block a single I/O request, and a RAM-only transaction cannot resume after a crash. See `../docs/BOUNDED_IO_AND_SAFE_STOP_0.3.3b12.md`.
++
+ ## DriveRepair 0.3.3b11 Windows experimental repair preparation
+ 
+ When a mounted external volume is selected for *Fix my drive* in Qt, the app requests separate target confirmation and explains temporary lock/dismount. Windows exclusive locking must succeed; open files prevent the operation. Both-side read-error boundary checks are read-only observations, not automatic sector rewrites. See `../docs/WINDOWS_VOLUME_PREPARATION_AND_ERROR_BOUNDARIES.md` for test gates and limits.
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index 6b80e6c..a7db566 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b11"
++__version__ = "0.3.3b12"
+diff --git a/desktop/driverepair_desktop/cli.py b/desktop/driverepair_desktop/cli.py
+index d8dc6d3..03d4cc3 100644
+--- a/desktop/driverepair_desktop/cli.py
++++ b/desktop/driverepair_desktop/cli.py
+@@ -43,6 +43,7 @@ from .media_refresh import (
+ from .power_guard import VolatilePowerGuard, PowerGuardError
+ from .refresh_display import RefreshDashboard
+ from .progress_events import ProgressEmitter
++from .stop_control import StopControl, StopRequested
+ from .rates import RateWindow
+ from .scan_checkpoint import ScanCheckpoint, default_path as default_scan_checkpoint, load as load_scan_checkpoint
+ import hashlib
+@@ -173,6 +174,8 @@ def parser() -> argparse.ArgumentParser:
+                          help='Allow missing SMART evidence (still no repair on observed errors)')
+         cmd.add_argument('--confirm-identity', help='12-character fingerprint from list --json (physical writes only)')
+         cmd.add_argument('--progress-jsonl', action='store_true')
++        cmd.add_argument('--cooperative-stop-stdin', action='store_true',
++                         help='Private UI control channel: STOP line on child stdin, honored at safe boundaries')
+         cmd.add_argument('--no-live-dashboard', action='store_true')
+         cmd.add_argument('--json', action='store_true')
+     rescue_status = sub.add_parser(
+@@ -1236,6 +1239,7 @@ def _run_care(args) -> int:
+     rolling-journal engine owns every write. No error-bearing source is rewritten.
+     """
+     is_hardware = args.command == 'care-external'
++    control = StopControl(bool(getattr(args, 'cooperative_stop_stdin', False)))
+     ram_only = args.journal_backend == 'memory'
+     # An explicitly opted-in, small offsets-only history file is independent
+     # of a RAM-only REGION journal. No sector bytes or recovery image are saved.
+@@ -1299,12 +1303,23 @@ def _run_care(args) -> int:
+             chunk = settings['chunk']
+             # Large read requests identify weak areas; rewrite only a small,
+             # separately verified and journaled subregion (SMR write amplification).
+-            repair_chunk = min(1024 * 1024, chunk)
++            # Constrain logical rewrite transaction size by medium. This is a
++            # performance/safety limit, never a claim to know physical SMR zones
++            # or SSD flash-page geometry through a USB bridge.
++            profile_kind = settings.get('profile', 'unknown')
++            repair_limit = (256 * 1024 if profile_kind == 'smr' else
++                            128 * 1024 if profile_kind in ('ssd','nvme') else
++                            1024 * 1024)
++            repair_chunk = max(sector, (min(repair_limit, chunk) // sector) * sector)
++            effective_max_regions = min(args.max_regions,
++                                        16 if profile_kind == 'smr' else
++                                        16 if profile_kind in ('ssd','nvme') else args.max_regions)
+             hints = (load_hints(selected.fingerprint, size, sector)
+                      if is_hardware and args.remember_anomalies else [])
+             reader = open_device_readonly(selected) if is_hardware else ImageReader(args.image)
+             try:
+                 def scan_progress(index, total, info=None):
++                    control.check_read_boundary()
+                     info = info or {}
+                     elapsed = max(0.001, time.monotonic() - scan_started)
+                     attempted = int(info.get('attempted_bytes') or 0)
+@@ -1373,18 +1388,28 @@ def _run_care(args) -> int:
+                         scan.get('read_error_ranges') and not scan.get('error_investigation') and
+                         scan.get('status') in {'completed_with_read_errors', 'aborted_error_limit'}):
+                     def investigation_progress(info):
++                        control.check_read_boundary()
+                         emitter.emit({'phase': 'INVESTIGATING', 'size': size,
++                                      'read_length': info.get('length', 0),
++                                      'investigation_reads': info.get('read_calls', 0),
++                                      'investigation_total': info.get('max_reads', 24),
++                                      'investigation_state': info.get('state'),
++                                      'investigation_elapsed_seconds': info.get('elapsed_seconds', 0),
+                                       'offset': info.get('offset', 0),
+                                       'attempted_bytes': int(scan.get('attempted_bytes') or 0),
+                                       'readable_bytes': int(scan.get('readable_bytes') or 0),
+                                       'read_error_chunks': scan.get('read_error_chunks', 0),
+-                                      'message': ('Read-only bounded retries of error regions: '
+-                                                  f"{info['read_calls']} read operations")}, force=True)
++                                      'message': ('Read-only bounded investigation · '
++                                                  f"attempt {info['read_calls']}/{info.get('max_reads',24)} · "
++                                                  f"offset {info.get('offset',0)} · "
++                                                  f"state {info.get('state','unknown')}")}, force=True)
+                     scan['error_investigation'] = investigate_failed_ranges(
+                         reader, scan['read_error_ranges'], sector=sector,
+-                        max_reads=24, max_regions=8, progress=investigation_progress)
++                        max_reads=24, max_regions=8, max_elapsed_seconds=20.0,
++                        progress=investigation_progress)
+             finally:
+                 reader.close()
++            control.check_read_boundary()
+             if is_hardware:
+                 # Keep read-only scan findings even when the USB bridge freezes
+                 # during the *post-scan* identity query. Such a query must still
+@@ -1409,8 +1434,12 @@ def _run_care(args) -> int:
+                     return 2
+             scan['media_profile'] = {k: settings[k] for k in
+                 ('profile', 'profile_evidence', 'media_note', 'requested_coverage_pct') if k in settings}
++            scan['media_profile']['bounded_rewrite_region_bytes'] = repair_chunk
++            scan['media_profile']['max_rewrite_transactions'] = effective_max_regions
++            scan['media_profile']['notes'] = ('Logical transfer limits, not physical track or NAND layout. '
++                'Unknown media remains unqualified; no inferred sector-level correctness.')
+             plan = plan_targeted_refresh(
+-                scan, sector=sector, chunk=repair_chunk, max_regions=args.max_regions,
++                scan, sector=sector, chunk=repair_chunk, max_regions=effective_max_regions,
+                 smart=snapshot, hardware=is_hardware,
+                 allow_unknown_health=args.ack_unknown_health,
+                 allow_media_warning=args.ack_media_warning,
+@@ -1509,6 +1538,7 @@ def _run_care(args) -> int:
+                 journal_backend=args.journal_backend, consistency_reads=2, verify=True,
+                 resume=args.resume, max_errors=16, progress=progress,
+                 identity_check=identity_check, pre_write_check=identity_check,
++                stop_requested=control.requested,
+             )
+         finally:
+             writer.close()
+@@ -1517,6 +1547,7 @@ def _run_care(args) -> int:
+         result = {'status': ('partial_repair_unresolved_data' if repair['status'] == 'completed'
+                              and plan and plan.get('unresolved_data') else
+                              'completed_targeted_refresh' if repair['status'] == 'completed'
++                             else 'repair_stopped_safely' if repair['status'] == 'stopped_at_safe_boundary'
+                              else 'repair_incomplete'), 'scan': scan,
+                   'repair_plan': plan, 'repair': repair,
+                   'volatile_ram_only': ram_only,
+@@ -1633,7 +1664,13 @@ def run(argv: list[str] | None = None) -> int:
+             print(json.dumps(report, indent=2))
+             return 0 if free >= selected.size_bytes else 2
+         if args.command in {'care-image', 'care-external'}:
+-            return _run_care(args)
++            try:
++                return _run_care(args)
++            except StopRequested:
++                print(json.dumps({'status': 'stopped_by_user', 'phase': 'read_only',
++                                  'writes_performed': False,
++                                  'message': 'Stop honored before subsequent patient I/O. No repair was started.'}), flush=True)
++                return 3
+         if args.command in {'rescue-status', 'rescue-image', 'rescue-external', 'rescue-system', 'benchmark-image',
+                             'benchmark-external', 'carve-image', 'salvage-zip',
+                             'undelete-fat32', 'list-deleted-fat32',
+diff --git a/desktop/driverepair_desktop/guided_repair.py b/desktop/driverepair_desktop/guided_repair.py
+index 325c37b..448d7e8 100644
+--- a/desktop/driverepair_desktop/guided_repair.py
++++ b/desktop/driverepair_desktop/guided_repair.py
+@@ -46,15 +46,17 @@ def tuned_scan(*, size: int, sector: int, mode: str, bus: str = "",
+ 
+ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
+                               max_reads: int = 96, max_regions: int = 16,
+-                              progress=None) -> dict:
++                              progress=None, max_elapsed_seconds: float = 20.0) -> dict:
+     """Try to re-read error chunks, splitting down to logical sectors.
+ 
+     Every candidate must match in TWO reads. This establishes repeatability,
+     NOT the original/correct bytes. On a real drive this is deliberately bounded
+     to avoid hammering failing media. Does not perform ANY writes.
+     """
+-    if sector <= 0 or max_reads < 2 or max_regions < 1:
++    import time
++    if sector <= 0 or max_reads < 2 or max_regions < 1 or max_elapsed_seconds <= 0:
+         raise ValueError('Invalid retry budget or sector size')
++    started = time.monotonic()
+     pending = deque()
+     for raw in ranges[:max_regions]:
+         off, length = raw.get('offset'), raw.get('length')
+@@ -65,15 +67,22 @@ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
+     unresolved: list[dict] = []
+     reads = 0
+     device_unstable = False
+-    while pending and reads + 2 <= max_reads:
++    while pending and reads < max_reads and time.monotonic() - started < max_elapsed_seconds:
+         off, length = pending.popleft()
+         good = False
+         try:
+-            one = reader.read_at(off, length)
++            # Charge BEFORE the call: a failed OS/USB read costs a real I/O
++            # operation, sometimes many seconds. Never allow recursive splits
++            # to evade the user's retry budget.
+             reads += 1
+-            if len(one) == length:
+-                two = reader.read_at(off, length)
++            if progress is not None:
++                progress({'read_calls': reads, 'max_reads': max_reads,
++                          'offset': off, 'length': length, 'state': 'reading',
++                          'elapsed_seconds': time.monotonic() - started})
++            one = reader.read_at(off, length)
++            if len(one) == length and reads < max_reads and time.monotonic() - started < max_elapsed_seconds:
+                 reads += 1
++                two = reader.read_at(off, length)
+                 good = len(two) == length and one == two
+         except OSError as exc:
+             # WinError 1117 is ERROR_IO_DEVICE, and Python may report errno=22.
+@@ -102,13 +111,17 @@ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
+         else:
+             unresolved.append({'offset': off, 'length': length})
+         if progress is not None:
+-            progress({'read_calls': reads, 'resolved_regions': len(consistent),
++            progress({'read_calls': reads, 'max_reads': max_reads,
++                      'resolved_regions': len(consistent),
+                       'unresolved_regions': len(unresolved), 'pending_regions': len(pending),
+-                      'offset': off})
++                      'elapsed_seconds': time.monotonic() - started,
++                      'offset': off, 'length': length, 'state': 'probed'})
+     unresolved.extend({'offset': a, 'length': b} for a, b in pending)
+     # Input may be truncated at the budget. Never imply all source errors resolved.
+     limited = len(ranges) > max_regions or bool(pending)
+-    return {'consistent_regions': consistent, 'unresolved_regions': unresolved,
++    return {'max_reads': max_reads, 'elapsed_seconds': round(time.monotonic() - started, 3),
++            'timed_out_soft': bool(pending and time.monotonic() - started >= max_elapsed_seconds),
++            'consistent_regions': consistent, 'unresolved_regions': unresolved,
+             'read_calls': reads, 'budget_exhausted': limited,
+             'device_unstable': device_unstable,
+             'uninvestigated_original_ranges': max(0, len(ranges) - max_regions)}
+diff --git a/desktop/driverepair_desktop/media_refresh.py b/desktop/driverepair_desktop/media_refresh.py
+index 13ea8e9..41490eb 100644
+--- a/desktop/driverepair_desktop/media_refresh.py
++++ b/desktop/driverepair_desktop/media_refresh.py
+@@ -879,6 +879,7 @@ def refresh_media(
+     progress: Callable[[dict], None] | None = None,
+     identity_check: Callable[[], None] | None = None,
+     pre_write_check: Callable[[], None] | None = None,
++    stop_requested: Callable[[], bool] | None = None,
+ ) -> dict:
+     if mode not in {"adaptive", "full", "targeted"}:
+         raise ValueError("mode must be adaptive, full or targeted")
+@@ -1007,6 +1008,11 @@ def refresh_media(
+ 
+     try:
+         while status == "completed":
++            # Only stop between committed transactions. Never abandon a SAVED
++            # or WRITING region (especially with a volatile RAM journal).
++            if stop_requested is not None and stop_requested() and not meta.get("transaction"):
++                status = "stopped_at_safe_boundary"
++                break
+             if identity_check:
+                 identity_check()
+             tx = meta.get("transaction")
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+index 2ba15f6..3bab87b 100644
+--- a/desktop/driverepair_desktop/qtgui.py
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -61,6 +61,28 @@ def progress_percent(event: dict, disk_size: int = 0) -> float:
+     return max(0.0, min(100.0, 100.0 * cursor / size))
+ 
+ 
++
++
++def estimated_job_percent(event: dict, *, guided: bool) -> float:
++    """CONSERVATIVE phase-weighted estimate, not certified work completion.
++
++    The number of repair candidates is unknown until scanning finishes; phase
++    weights are only a presentation estimate. Never label it as verified coverage.
++    """
++    phase = str(event.get('phase') or '').upper()
++    pct = progress_percent(event, int(event.get('size') or 0))
++    if not guided:
++        return pct
++    if phase in {'SCANNING', 'TRIAGE'}:
++        return pct * 0.60
++    if phase == 'INVESTIGATING':
++        reads = max(0, int(event.get('investigation_reads') or 0))
++        total = max(1, int(event.get('investigation_total') or 1))
++        return 60.0 + min(1, reads / total) * 15.0
++    if phase == 'REFRESH':
++        return 75.0 + pct * 0.25
++    return 0.0
++
+ def _qt_debug_log_path() -> Path | None:
+     """Optional durable mirror for Qt workstation diagnostics (Admin debug sessions)."""
+     flag = os.environ.get('DRIVEREPAIR_GUI_DEBUG', '').strip().lower()
+@@ -250,6 +272,10 @@ def launch():
+             self._resume_poll_count=0
+             self._last_progress_at=None
+             self._last_phase=None
++            self._last_debug_event_at=0.0
++            self._last_io_offset=0
++            self._last_io_length=0
++            self._stop_requested=False
+             self._heartbeat=QTimer(self)
+             self._heartbeat.setInterval(1000)
+             self._heartbeat.timeout.connect(self.check_stall)
+@@ -298,6 +324,24 @@ def launch():
+             self.progress=QProgressBar()
+             self.progress.setRange(0,1000)
+             self.progress.setValue(0)
++            phase_row=QHBoxLayout()
++            hero.addLayout(phase_row)
++            self.phase_caption=QLabel('Current phase · no job')
++            self.phase_caption.setObjectName('muted')
++            phase_row.addWidget(self.phase_caption)
++            phase_row.addStretch()
++            self.phase_progress=QProgressBar()
++            self.phase_progress.setRange(0,1000)
++            self.phase_progress.setValue(0)
++            hero.addWidget(self.phase_progress)
++            total_row=QHBoxLayout()
++            hero.addLayout(total_row)
++            self.total_caption=QLabel('Estimated whole-job progress · staged estimate, not disk coverage')
++            self.total_caption.setObjectName('muted')
++            total_row.addWidget(self.total_caption)
++            total_row.addStretch()
++            self.overall_label=QLabel('—')
++            total_row.addWidget(self.overall_label)
+             hero.addWidget(self.progress)
+             metrics=QHBoxLayout()
+             hero.addLayout(metrics)
+@@ -346,6 +390,11 @@ def launch():
+             self.device_note.setWordWrap(True)
+             self.device_note.setObjectName('muted')
+             l.addWidget(self.device_note)
++            self.profile_note=QLabel('Drive strategy: awaiting device identification')
++            self.profile_note.setWordWrap(True)
++            self.profile_note.setObjectName('muted')
++            l.addWidget(self.profile_note)
++            self.device_box.currentIndexChanged.connect(self.update_drive_profile)
+             workflow=card(left)
+             title=QLabel('02  Choose a goal')
+             title.setStyleSheet('font-weight:700;font-size:15px')
+@@ -442,6 +491,23 @@ def launch():
+                 self.setWindowTitle(self.windowTitle() + ' [DEBUG]')
+             self.select_goal('scanquick')
+             QTimer.singleShot(100,self.refresh_devices)
++        def update_drive_profile(self, _index=None):
++            d=self.selected()
++            if not d:
++                self.profile_note.setText('Drive strategy: waiting for a selected device')
++                return
++            from .media_profiles import identify_profile
++            try:
++                profile=identify_profile(model=str(d.get('model') or ''),
++                    bus=str(d.get('bus') or ''), sector=int(d.get('sector_size') or 512))
++                self.profile_note.setText(
++                    f'Drive strategy: {profile.kind.upper()} · {profile.evidence}. '
++                    f'{profile.maintenance_note}')
++                self.profile_note.setToolTip('Advisory profile only. USB bridges may obscure physical media. '
++                    'No profile authorizes write or certifies health.')
++            except (ValueError,TypeError):
++                self.profile_note.setText('Drive strategy: unverified geometry — read-only until resolved')
++
+         def select_goal(self, goal):
+             family = ('fix' if goal.startswith('care') else
+                       'recover' if goal == 'rescue' else 'check')
+@@ -460,7 +526,14 @@ def launch():
+                     and self._last_progress_at is not None
+                     and time.monotonic()-self._last_progress_at>8):
+                 self.metric_labels['rate'].setText('Waiting on drive')
+-                self.help.setText('No progress event recently. The drive or OS may be retrying I/O; Stop is not instant.')
++                elapsed=int(time.monotonic()-self._last_progress_at)
++                self.help.setText(f'Waiting {elapsed}s for the storage driver or USB device. '
++                    'No new I/O result; the operation is NOT necessarily progressing. '
++                    'Stop waits for a safe boundary and may not interrupt a blocked kernel request.')
++                self.result.setText('Drive I/O stalled — investigation may be blocked inside Windows')
++                self.explain.setText(f'Last request: byte offset {self._last_io_offset:,} · '
++                    f'length {self._last_io_length:,} bytes · {elapsed}s without a result. '
++                    'Check Expert details for the most recent observations.')
+         def show_details(self, yes): self.log.setVisible(yes)
+         def note_log(self, text: str) -> None:
+             self.log.appendPlainText(text)
+@@ -684,7 +757,7 @@ def launch():
+                             'Save a small, private read-only scan checkpoint locally? '
+                             'This stores offsets and observations, not recovered sector bytes.',
+                             QMessageBox.Yes | QMessageBox.No)==QMessageBox.Yes
+-                    args=['care-external','--device',dev,'--mode','full' if kind=='carefull' else 'quick',
++                    args=['care-external','--cooperative-stop-stdin','--device',dev,'--mode','full' if kind=='carefull' else 'quick',
+                           *journal_args,'--auto-lock-volumes','--confirm-identity',d['identity_hint'],
+                           '--ack-risk','--ack-destructive','--ack-no-backup','--ack-data-loss-risk',
+                           '--ack-usb-bridge-risk','--ack-unvalidated-hardware','--ack-unknown-health',
+@@ -697,6 +770,9 @@ def launch():
+             self.run_command(args)
+         def run_command(self,args):
+             self.progress.setValue(0)
++            self.phase_progress.setValue(0)
++            self.overall_label.setText('0% estimated')
++            self._stop_requested=False
+             self.map.reset(int((self.selected() or {}).get('size_bytes') or 0))
+             self.result.setText('Running — monitoring the device')
+             self.explain.setText('Unknown regions remain unknown until observed.')
+@@ -707,6 +783,9 @@ def launch():
+             self._scanned=0
+             self._last_progress_at=time.monotonic()
+             self._last_phase=None
++            self._last_debug_event_at=0.0
++            self._last_io_offset=0
++            self._last_io_length=0
+             self._last_error=None
+             self.proc=QProcess(self)
+             self.proc.setProgram(cli_prefix()[0])
+@@ -742,6 +821,19 @@ def launch():
+                     self._pending=obj
+         def progress_event(self,event):
+             self._last_progress_at=time.monotonic()
++            self._last_io_offset=int(event.get('offset') or 0)
++            self._last_io_length=int(event.get('read_length') or 0)
++            # Trace actionable telemetry, not just final errors. Throttle logs
++            # independently of the 10Hz GUI updates to avoid filling disks.
++            if debug_log_path and (self._last_progress_at-self._last_debug_event_at>=4 or
++                                   str(event.get('phase'))!=self._last_phase):
++                fields={k:event.get(k) for k in
++                    ('phase','offset','read_length','investigation_state',
++                     'investigation_reads','investigation_total','read_error_chunks',
++                     'attempted_bytes','rewritten_bytes','verified_bytes',
++                     'speed_bps','eta_seconds') if event.get(k) is not None}
++                debug_trace('IO_TELEMETRY '+json.dumps(fields,sort_keys=True)+'\n')
++                self._last_debug_event_at=self._last_progress_at
+             self.status.setText(str(event.get('phase') or 'WORKING').replace('_',' ').title())
+             phase=str(event.get('phase') or 'WORKING').upper()
+             if phase != self._last_phase:
+@@ -749,9 +841,23 @@ def launch():
+                 self.metric_labels['rate'].setText('Measuring…')
+                 self.metric_labels['avg'].setText('Measuring…')
+             self.metric_headers['read'].setText('DATA REWRITTEN' if phase=='REFRESH' else 'DATA READ')
++            phase_number={'SCANNING':1, 'INVESTIGATING':2, 'REFRESH':3}.get(phase)
++            self.phase_caption.setText(
++                f'Phase {phase_number} of up to 3 · {phase.title()}' if phase_number and
++                self._last_job_kind.startswith('care') else f'Current phase · {phase.title()}')
+             size=int(event.get('size') or self.map.total or 0)
+             pct=progress_percent(event,size)
+-            self.progress.setValue(max(0,min(1000,round(10*pct))))
++            if phase=='INVESTIGATING':
++                reads=int(event.get('investigation_reads') or 0)
++                limit=max(1,int(event.get('investigation_total') or 1))
++                pct=min(100.0,100*reads/limit)
++                self.help.setText(f'Bounded investigation · {reads} of {limit} maximum read attempts. '
++                    'A single Windows I/O may still block longer than the soft time limit.')
++            self.phase_progress.setValue(max(0,min(1000,round(10*pct))))
++            overall=estimated_job_percent(event,guided=self._last_job_kind.startswith('care'))
++            self.progress.setValue(max(0,min(1000,round(10*overall))))
++            self.overall_label.setText(f'{overall:.1f}% estimated' if self._last_job_kind.startswith('care')
++                                      else f'{overall:.1f}% of current job')
+             self.metric_labels['done'].setText(f'{pct:.1f}%')
+             self.metric_labels['eta'].setText(format_eta(event.get('eta_seconds')))
+             if event.get('attempted_bytes') is not None:
+@@ -764,7 +870,8 @@ def launch():
+                 self.metric_labels['rate'].setText(display_size(event['speed_bps'])+'/s')
+             if event.get('average_speed_bps') is not None:
+                 self.metric_labels['avg'].setText(display_size(event['average_speed_bps'])+'/s')
+-            self.help.setText(str(event.get('message') or 'Checking device…'))
++            if phase!='INVESTIGATING':
++                self.help.setText(str(event.get('message') or 'Checking device…'))
+             self.map.ingest(event)
+             self.advice.setText(f'Full-drive map: {self.map.coverage.coverage_pct:.2f}% read successfully. '
+                                 'Colored stripes mark observations, not full-region certification.')
+@@ -775,6 +882,11 @@ def launch():
+             self.stop.setEnabled(False)
+             self.metric_labels['eta'].setText('—')
+             self.proc=None
++            self._stop_requested=False
++            if exit_code==0:
++                self.progress.setValue(1000)
++                self.phase_progress.setValue(1000)
++                self.overall_label.setText('100% of planned job · review findings')
+             try:
+                 result=json.loads(self._final_stdout)
+             except (ValueError,TypeError):
+@@ -840,6 +952,11 @@ def launch():
+                 if answer!=QMessageBox.Yes:
+                     event.ignore()
+                     return
++                if self._last_job_kind in ('carefull','carequick','careresume'):
++                    self.proc.write(b'STOP\n')
++                    event.ignore()
++                    self.result.setText('Stop requested — waiting for safe transaction boundary')
++                    return
+                 self.proc.terminate()
+                 if not self.proc.waitForFinished(2500):
+                     self.proc.kill()
+@@ -856,13 +973,26 @@ def launch():
+                 return
+             if not self.proc or self.proc.state()==QProcess.NotRunning:
+                 return
+-            if self._last_job_kind in ('carefull','carequick','careresume'):
+-                QMessageBox.warning(self,'Do not interrupt a write',
+-                    'Stopping a physical write mid-transaction can destroy data. The engine has no verified cooperative stop protocol yet. '
+-                    'This interface will not forcibly terminate the active write. Disconnect only if necessary to protect hardware.')
++            if self._stop_requested:
+                 return
+-            self.proc.terminate()
+-            self.result.setText('Stopping — waiting for process exit')
++            self._stop_requested=True
++            if self._last_job_kind in ('carefull','carequick','careresume'):
++                self.proc.write(b'STOP\n')
++                self.result.setText('Stop requested — waiting for safe transaction boundary')
++                self.explain.setText('No write is interrupted mid-transaction. A blocked Windows read '
++                    'cannot be forced to finish; do not disconnect while a rewrite is active.')
++            else:
++                self.proc.terminate()
++                QTimer.singleShot(5000,self._finish_read_only_stop)
++                self.result.setText('Stopping read-only operation…')
++            self.stop.setEnabled(False)
++
++        def _finish_read_only_stop(self):
++            if (self._stop_requested and self.proc and
++                    self.proc.state()!=QProcess.NotRunning and
++                    self._last_job_kind not in ('carefull','carequick','careresume')):
++                self.note_log('Read-only process ignored terminate; forcing child exit after 5 s.')
++                self.proc.kill()
+     app=QApplication.instance() or QApplication(sys.argv)
+     app.setFont(QFont('Segoe UI', 10))
+     win=Workstation()
+diff --git a/desktop/driverepair_desktop/stop_control.py b/desktop/driverepair_desktop/stop_control.py
+new file mode 100644
+index 0000000..58b126f
+--- /dev/null
++++ b/desktop/driverepair_desktop/stop_control.py
+@@ -0,0 +1,34 @@
++"""Cooperative cancellation requested by a trusted local UI over child stdin.
++
++No disk/journal files, no signals, and no unverified asynchronous write abort.
++The engine checks only at safe boundaries. A blocked kernel read cannot be
++forcibly cancelled by this mechanism.
++"""
++from __future__ import annotations
++
++import sys
++from threading import Event, Thread
++
++
++class StopRequested(Exception):
++    """Stop requested at a safe boundary, without stopping an active write."""
++
++
++class StopControl:
++    def __init__(self, enabled: bool = False):
++        self._requested = Event()
++        if enabled:
++            Thread(target=self._listen, daemon=True, name='driverepair-stop-listener').start()
++
++    def _listen(self):
++        for line in sys.stdin:
++            if line.strip().upper() == 'STOP':
++                self._requested.set()
++                break
++
++    def requested(self) -> bool:
++        return self._requested.is_set()
++
++    def check_read_boundary(self) -> None:
++        if self.requested():
++            raise StopRequested('Cancelled before further patient I/O')
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index d5eee34..77985b2 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b11"
++version = "0.3.3b12"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_b12_reliability.py b/desktop/tests/test_b12_reliability.py
+new file mode 100644
+index 0000000..a3f1894
+--- /dev/null
++++ b/desktop/tests/test_b12_reliability.py
+@@ -0,0 +1,102 @@
++"""Regression checks for bounded I/O and safe guided cancellation."""
++import errno
++import tempfile
++import unittest
++from pathlib import Path
++
++from driverepair_desktop.guided_repair import investigate_failed_ranges
++from driverepair_desktop.media_refresh import refresh_media
++from driverepair_desktop.qtgui import estimated_job_percent
++from driverepair_desktop.stop_control import StopControl, StopRequested
++
++
++class FailingReader:
++    def __init__(self):
++        self.attempts = 0
++
++    def read_at(self, offset, length):
++        self.attempts += 1
++        raise OSError(errno.EIO, 'simulated unreadable media')
++
++
++class InMemoryPatient:
++    def __init__(self):
++        self.bytes = bytearray(b'A' * 4096)
++        self.writes = []
++
++    def read_at(self, offset, length):
++        return bytes(self.bytes[offset:offset + length])
++
++    def write_at(self, offset, content):
++        self.writes.append((offset, len(content)))
++        self.bytes[offset:offset + len(content)] = content
++        return len(content)
++
++    def flush(self):
++        pass
++
++
++class BoundedInvestigationTests(unittest.TestCase):
++    def test_every_failed_request_counts_and_budget_holds(self):
++        reader = FailingReader()
++        events = []
++        report = investigate_failed_ranges(
++            reader, [{'offset': 0, 'length': 1024*1024}],
++            sector=512, max_reads=8, progress=events.append)
++        self.assertEqual(reader.attempts, 8)
++        self.assertEqual(report['read_calls'], 8)
++        self.assertTrue(report['budget_exhausted'])
++        self.assertGreater(len(report['unresolved_regions']), 0)
++        self.assertTrue(events)
++        self.assertEqual(events[-1]['max_reads'], 8)
++
++    def test_stopped_before_next_io_call(self):
++        reader = FailingReader()
++        def stop(_event):
++            raise StopRequested('simulated user stop')
++        with self.assertRaises(StopRequested):
++            investigate_failed_ranges(reader, [{'offset': 0, 'length': 8192}],
++                                      sector=512, max_reads=8, progress=stop)
++        self.assertEqual(reader.attempts, 0)
++
++    def test_statuses_separate_scan_investigation_and_refresh(self):
++        scan = {'phase': 'SCANNING', 'probe_index': 95, 'probe_total': 100}
++        probe = {'phase': 'INVESTIGATING', 'investigation_reads': 6,
++                 'investigation_total': 24}
++        repair = {'phase': 'REFRESH', 'refresh_index': 1, 'refresh_total': 2}
++        self.assertEqual(estimated_job_percent(scan, guided=False), 95)
++        self.assertAlmostEqual(estimated_job_percent(scan, guided=True), 57)
++        self.assertAlmostEqual(estimated_job_percent(probe, guided=True), 63.75)
++        self.assertAlmostEqual(estimated_job_percent(repair, guided=True), 87.5)
++
++
++class SafeStopTests(unittest.TestCase):
++    def test_pre_requested_stop_skips_all_writes(self):
++        patient = InMemoryPatient()
++        with tempfile.TemporaryDirectory() as td:
++            result = refresh_media(patient, size=4096, sector=512,
++                source_token='synthetic', journal=str(Path(td)/'journal'),
++                chunk=512, mode='targeted', targets=[(0, 512), (1024, 512)],
++                stop_requested=lambda: True)
++        self.assertEqual(result['status'], 'stopped_at_safe_boundary')
++        self.assertEqual(patient.writes, [])
++
++    def test_stop_between_transactions_never_leaves_active_region(self):
++        patient = InMemoryPatient()
++        should_stop = [False]
++        def progress(info):
++            if int(info.get('rewritten_bytes') or 0) >= 512 and not info.get('transaction'):
++                should_stop[0] = True
++        with tempfile.TemporaryDirectory() as td:
++            result = refresh_media(patient, size=4096, sector=512,
++                source_token='synthetic', journal=str(Path(td)/'journal'),
++                chunk=512, mode='targeted', targets=[(0, 512), (1024, 512)],
++                progress=progress, stop_requested=lambda: should_stop[0])
++        self.assertEqual(result['status'], 'stopped_at_safe_boundary')
++        self.assertEqual(patient.writes, [(0, 512)])
++        self.assertIsNone(result['transaction'])
++        self.assertEqual(patient.bytes, b'A'*4096)
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/docs/BOUNDED_IO_AND_SAFE_STOP_0.3.3b12.md b/docs/BOUNDED_IO_AND_SAFE_STOP_0.3.3b12.md
+new file mode 100644
+index 0000000..51c98dc
+--- /dev/null
++++ b/docs/BOUNDED_IO_AND_SAFE_STOP_0.3.3b12.md
+@@ -0,0 +1,94 @@
++# DriveRepair 0.3.3b12 — bounded I/O, guided Stop and media-aware engineering notes
++
++## Purpose and scope
++
++This cycle fixes a dangerous *software* retry-bound defect found during real
++Windows USB-dock testing and makes the graphical UI more informative. It does
++not establish the reliability of a physically failing drive, reconstruct lost
++bytes, or prove a drive is fit to store valuable data.
++
++## What the user sees
++
++1. Choose the drive. The advisory media profile shows what is known and what
++   remains unknown. An external USB bridge may hide the true recording medium.
++2. Select **Fix**, **Recover**, or **Check**; do not confuse a scan with a repair.
++3. Start the job only after reading the risk/identity confirmations.
++4. The **current phase** and **estimated total workflow** use different bars.
++   Guided Fix runs through scan, optional investigation and conditional repair.
++   The overall percentage is a *phase-weighted estimate*, not a guarantee that
++   all LBAs were tested, nor that any sector was repaired. At any point there
++   may be zero qualified rewrite candidates.
++5. Investigation reports a maximum number of read attempts. Debug mode records
++   the current byte offset/size, successful and failed reads, elapsed time and
++   the last reported operating state. `Waiting on drive` means a blocked read
++   is possible, **not** that DriveRepair is making forward progress.
++
++## Why a scan stalled at 8.4%
++
++In b11, an error-path within bounded bisection only incremented the retry count
++on successful reads. A failed 4 MiB read could therefore recursively split
++into numerous smaller *failed* requests without exhausting `max_reads`.
++This revision charges each attempted read before calling the OS. It also
++records elapsed time and emits diagnostic events before requesting a read.
++Its wall-clock limit is soft: Windows' synchronous disk I/O may remain blocked
++inside a USB driver or disk firmware longer than the configured budget.
++
++## How Stop works
++
++- **Guided Fix scan/investigation:** pressing Stop sends `STOP` to the child
++  process through its existing standard-input channel. The engine checks for
++  cancellation between read operations; it doesn't close an in-flight OS I/O.
++- **Guided in-place rewrite:** Stop is recognized *between committed journal
++  transactions*, never while `SAVED` or `WRITING` is active. The output is
++  `repair_stopped_safely`; completed/reverified work is still reported.
++- **Standalone read-only scan:** the Qt UI can terminate the child, then kill
++  it after a grace period if it doesn't respond. This does not make a blocked
++  kernel read safely cancellable or prove the USB adapter is working.
++- **Crash/power loss during volatile RAM-only writes:** the active original
++  bytes may disappear. There is no replayable journal, even with a UPS.
++- **Disk-backed journal:** choose storage on a *separate* healthy device and
++  preserve the journal until status/transaction integrity is confirmed.
++
++If Windows becomes unresponsive, do not assume that repeatedly pressing Stop
++will end a low-level I/O operation. Avoid unplugging during any possible write.
++
++## SMR, CMR, SSD and NVMe handling
++
++| Profile | Investigation | Guided logical rewrite limit | Risk notes |
++|---|---|---|---|
++| Manufacturer-confirmed SMR | Read-only staged and bounded; no inferred physical zone map | 256 KiB per transaction, max 16 transactions | Avoid neighboring writes and uncontrolled random rewriting; internal shingled-band mapping unknown |
++| Independently confirmed CMR | Staged and bounded | 1 MiB per transaction by default; expert-verified neighbors separately gated | Logical adjacency does not guarantee adjacent physical defects |
++| Reported SATA SSD or NVMe | Staged and bounded; check health/controller information | 128 KiB per transaction, max 16 | Rewrites consume flash endurance; slow requests do not prove bad NAND |
++| Unknown/USB bridge | Read-only evidence preferred until medium established | General bounded fallback, not medium-specific proof | USB connection isn't a recording technology |
++
++The caps constrain potential impact, not physical erase-block alignment. Disk
++firmware handles physical remapping and wear leveling. No vendor-specific
++service-area editing or flash controller commands are enabled.
++
++## Windows USB and identity prerequisites
++
++`Get-Disk`, CIM and WMIC timed out during the supplied tests. This may indicate
++an unresponsive USB bridge, device, storage stack or Windows service. The native
++read-only storage inspector offers some information without `Get-Disk`, but it
++**cannot authorize raw writes**. DriveRepair must positively identify the
++selected disk, verify it is not a system/boot drive, ensure mounted volumes
++are exclusively locked, and reconfirm identity before mutation. If any proof
++is missing, writes stay blocked. Reconnecting may change `PhysicalDriveN`.
++
++## Hardware acceptance plan (disposable disks only)
++
++- Exercise several separate models through the USB dock, including known SMR,
++  known CMR, SATA SSD and NVMe bridge, recording model, serial, transport,
++  sector geometry and controller SMART visibility.
++- Inject predictable failing reads on synthetic readers and confirm the maximum
++  read count. Validate GUI diagnostic offset, pass, phase and job progress.
++- On sacrificial hardware, verify safe Stop during scanning and between rewrite
++  transactions. Test after unmount, locked file, USB reset, loss of power and
++  process termination. Confirm zero unverified write to a different disk.
++- Verify source immutability for all read-only modes, resumed scan identity,
++  journal durability, and byte-for-byte validation of copied images.
++- Compare recovered data correctness, wall time, unique coverage and additional
++  I/O, not merely the highest sequential throughput.
++
++**Not tested here:** native PySide6 interaction on Windows, Win32 storage
++cancellation, firmware writes, Rust compilation or actual sector repairs.
+diff --git a/scripts/build_desktop.py b/scripts/build_desktop.py
+index 03fb9e6..b267579 100644
+--- a/scripts/build_desktop.py
++++ b/scripts/build_desktop.py
+@@ -14,7 +14,7 @@ from pathlib import Path
+ 
+ REPO = Path(__file__).resolve().parent.parent
+ DESKTOP = REPO / 'desktop'
+-VERSION = '0.3.3b10'
++VERSION = '0.3.3b12'
+ 
+ 
+ def command(args: list[str], cwd: Path = DESKTOP) -> None:

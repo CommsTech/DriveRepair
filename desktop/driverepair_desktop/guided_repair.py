@@ -46,15 +46,17 @@ def tuned_scan(*, size: int, sector: int, mode: str, bus: str = "",
 
 def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
                               max_reads: int = 96, max_regions: int = 16,
-                              progress=None) -> dict:
+                              progress=None, max_elapsed_seconds: float = 20.0) -> dict:
     """Try to re-read error chunks, splitting down to logical sectors.
 
     Every candidate must match in TWO reads. This establishes repeatability,
     NOT the original/correct bytes. On a real drive this is deliberately bounded
     to avoid hammering failing media. Does not perform ANY writes.
     """
-    if sector <= 0 or max_reads < 2 or max_regions < 1:
+    import time
+    if sector <= 0 or max_reads < 2 or max_regions < 1 or max_elapsed_seconds <= 0:
         raise ValueError('Invalid retry budget or sector size')
+    started = time.monotonic()
     pending = deque()
     for raw in ranges[:max_regions]:
         off, length = raw.get('offset'), raw.get('length')
@@ -65,15 +67,22 @@ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
     unresolved: list[dict] = []
     reads = 0
     device_unstable = False
-    while pending and reads + 2 <= max_reads:
+    while pending and reads < max_reads and time.monotonic() - started < max_elapsed_seconds:
         off, length = pending.popleft()
         good = False
         try:
-            one = reader.read_at(off, length)
+            # Charge BEFORE the call: a failed OS/USB read costs a real I/O
+            # operation, sometimes many seconds. Never allow recursive splits
+            # to evade the user's retry budget.
             reads += 1
-            if len(one) == length:
-                two = reader.read_at(off, length)
+            if progress is not None:
+                progress({'read_calls': reads, 'max_reads': max_reads,
+                          'offset': off, 'length': length, 'state': 'reading',
+                          'elapsed_seconds': time.monotonic() - started})
+            one = reader.read_at(off, length)
+            if len(one) == length and reads < max_reads and time.monotonic() - started < max_elapsed_seconds:
                 reads += 1
+                two = reader.read_at(off, length)
                 good = len(two) == length and one == two
         except OSError as exc:
             # WinError 1117 is ERROR_IO_DEVICE, and Python may report errno=22.
@@ -102,13 +111,17 @@ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
         else:
             unresolved.append({'offset': off, 'length': length})
         if progress is not None:
-            progress({'read_calls': reads, 'resolved_regions': len(consistent),
+            progress({'read_calls': reads, 'max_reads': max_reads,
+                      'resolved_regions': len(consistent),
                       'unresolved_regions': len(unresolved), 'pending_regions': len(pending),
-                      'offset': off})
+                      'elapsed_seconds': time.monotonic() - started,
+                      'offset': off, 'length': length, 'state': 'probed'})
     unresolved.extend({'offset': a, 'length': b} for a, b in pending)
     # Input may be truncated at the budget. Never imply all source errors resolved.
     limited = len(ranges) > max_regions or bool(pending)
-    return {'consistent_regions': consistent, 'unresolved_regions': unresolved,
+    return {'max_reads': max_reads, 'elapsed_seconds': round(time.monotonic() - started, 3),
+            'timed_out_soft': bool(pending and time.monotonic() - started >= max_elapsed_seconds),
+            'consistent_regions': consistent, 'unresolved_regions': unresolved,
             'read_calls': reads, 'budget_exhausted': limited,
             'device_unstable': device_unstable,
             'uninvestigated_original_ranges': max(0, len(ranges) - max_regions)}
