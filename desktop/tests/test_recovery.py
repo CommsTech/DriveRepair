@@ -60,6 +60,35 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(state['status'], 'completed')
         self.assertEqual(Path(self.out).read_bytes(), self.raw)
 
+    def test_replaced_same_size_image_rejected_by_resume_and_status(self):
+        from driverepair_desktop.recovery import inspect_rescue_status
+        self.recover(PatternReader(self.raw), max_chunks=1)
+        journal = Path(self.out + '.rescue.json')
+        before = journal.read_bytes()
+        replacement = Path(self.temp.name) / 'replacement'
+        replacement.write_bytes(b'Z' * len(self.raw))
+        os.replace(replacement, self.out)
+        with self.assertRaisesRegex(RuntimeError, 'identity changed'):
+            self.recover(PatternReader(self.raw), resume=True)
+        with self.assertRaisesRegex(RuntimeError, 'identity changed'):
+            inspect_rescue_status(self.out)
+        self.assertEqual(journal.read_bytes(), before)
+        self.assertEqual(Path(self.out).read_bytes(), b'Z' * len(self.raw))
+
+    def test_legacy_journal_is_rejected_without_modification(self):
+        from driverepair_desktop.recovery import inspect_rescue_status
+        self.recover(PatternReader(self.raw), max_chunks=1)
+        journal = Path(self.out + '.rescue.json')
+        state = json.loads(journal.read_text())
+        del state['output_identity']
+        journal.write_text(json.dumps(state))
+        before = journal.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, 'Legacy'):
+            self.recover(PatternReader(self.raw), resume=True)
+        with self.assertRaisesRegex(RuntimeError, 'Legacy'):
+            inspect_rescue_status(self.out)
+        self.assertEqual(journal.read_bytes(), before)
+
     def test_targeted_retry_repairs_previous_hole_in_image(self):
         first = self.recover(PatternReader(self.raw, bad=[1024]))
         self.assertTrue(first['missing_ranges'])

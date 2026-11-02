@@ -11,7 +11,7 @@ use std::time::UNIX_EPOCH;
 
 pub mod firmware_inspect;
 
-pub const VERSION: &str = "DRIVEREPAIR_IMAGE_MAP_V1";
+pub const VERSION: &str = "DRIVEREPAIR_IMAGE_MAP_V2";
 pub const DEFAULT_CHUNK: usize = 1024 * 1024;
 
 pub trait ReadAt {
@@ -81,6 +81,7 @@ pub struct Map {
     pub source_size: u64,
     pub source_modified_ns: u128,
     pub chunk: usize,
+    pub output_identity: String,
     // 0 = not attempted, 1 = all bytes copied and durable, 2 = missing bytes
     pub chunks: Vec<u8>,
 }
@@ -93,23 +94,43 @@ impl Map {
         if count > 100_000_000 {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "image too large for this chunk size"));
         }
-        Ok(Self { source, source_size: size, source_modified_ns: stamp, chunk,
+        Ok(Self { source, source_size: size, source_modified_ns: stamp, chunk, output_identity: String::new(),
                   chunks: vec![0; count as usize] })
     }
     pub fn header(&self) -> String {
-        format!("{}\n{}\n{}\n{}\n{}\n", VERSION, self.source,
-                self.source_size, self.source_modified_ns, self.chunk)
+        format!("{}\n{}\n{}\n{}\n{}\n{}\n", VERSION, self.source,
+                self.source_size, self.source_modified_ns, self.chunk, self.output_identity)
     }
-    pub fn load(path: &Path, expected: &Self) -> io::Result<Self> {
-        let contents = fs::read_to_string(path)?;
-        let mut lines = contents.lines();
-        for field in expected.header().lines() {
-            if lines.next() != Some(field) {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "rescue map source identity mismatch"));
-            }
+    // Only a non-newline-terminated prefix of a record we could have written
+    // can be a torn append. A complete record requires its newline commit marker.
+    fn valid_torn_tail(tail: &str, count: usize) -> bool {
+        let (index, status) = match tail.split_once(' ') {
+            Some((index, status)) => (index, Some(status)),
+            None => (tail, None),
+        };
+        if index.is_empty() || !index.bytes().all(|c| c.is_ascii_digit()) ||
+            (index.len() > 1 && index.starts_with('0')) {
+            return false;
+        }
+        if !matches!(index.parse::<usize>(), Ok(i) if i < count) {
+            return false;
+        }
+        matches!(status, None | Some("") | Some("1") | Some("2"))
+    }
+
+    fn parse(contents: &str, expected: &Self) -> io::Result<(Self, u64)> {
+        let header = expected.header();
+        if !contents.starts_with(&header) {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "rescue map identity mismatch, incomplete header, or legacy unbound map; start a new rescue"));
+        }
+        let rows = &contents[header.len()..];
+        let complete_len = rows.rfind('\n').map_or(0, |i| i + 1);
+        let tail = &rows[complete_len..];
+        if !tail.is_empty() && !Self::valid_torn_tail(tail, expected.chunks.len()) {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "malformed rescue map trailing update"));
         }
         let mut state = expected.clone();
-        for line in lines {
+        for line in rows[..complete_len].lines() {
             let mut fields = line.split_whitespace();
             let index: usize = fields.next().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "map row empty"))?
                 .parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid map index"))?;
@@ -120,8 +141,13 @@ impl Map {
             }
             state.chunks[index] = value;
         }
-        Ok(state)
+        Ok((state, (header.len() + complete_len) as u64))
     }
+
+    pub fn load(path: &Path, expected: &Self) -> io::Result<Self> {
+        Ok(Self::parse(&fs::read_to_string(path)?, expected)?.0)
+    }
+
 }
 
 #[derive(Default, Debug)]
@@ -147,6 +173,21 @@ fn same_file(a: &Path, b: &Path) -> io::Result<bool> {
     Ok(fs::canonicalize(a)? == fs::canonicalize(b)?)
 }
 
+#[cfg(unix)]
+fn output_identity(file: &File) -> io::Result<String> {
+    use std::os::unix::fs::MetadataExt;
+    let st = file.metadata()?;
+    if !st.is_file() || st.ino() == 0 {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "destination has no usable regular file identity"));
+    }
+    Ok(format!("{}:{}", st.dev(), st.ino()))
+}
+
+#[cfg(not(unix))]
+fn output_identity(_file: &File) -> io::Result<String> {
+    Ok("resume-unsupported".to_string())
+}
+
 pub struct RescueOptions<'a> {
     pub input: &'a Path,
     pub output: &'a Path,
@@ -162,10 +203,10 @@ pub struct RescueOptions<'a> {
 /// harmless reread, but never marks uncommitted output as fully recovered.
 pub fn rescue_image(opts: &RescueOptions<'_>) -> io::Result<RescueReport> {
     let (source, size, stamp) = image_identity(opts.input)?;
-    #[cfg(windows)]
+    #[cfg(not(unix))]
     if opts.resume {
         return Err(io::Error::new(io::ErrorKind::Unsupported,
-            "Windows Rust-core resume is not validated. Use the Python image-rescue engine instead."));
+            "Rust-core resume requires a supported file identity on this platform."));
     }
     if opts.input == opts.output || opts.input == opts.map_path || opts.output == opts.map_path {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "image, destination and map paths must differ"));
@@ -179,17 +220,26 @@ pub fn rescue_image(opts: &RescueOptions<'_>) -> io::Result<RescueReport> {
         }
     }
     let sector = if size % 512 == 0 { 512 } else { 1 };
-    let expected = Map::new(source, size, stamp, opts.chunk)?;
+    let mut expected = Map::new(source, size, stamp, opts.chunk)?;
     let mut state;
     let mut output;
     let mut journal;
     if opts.resume {
-        state = Map::load(opts.map_path, &expected)?;
         image_identity(opts.output).and_then(|(_, n, _)| if n == size { Ok(()) } else {
             Err(io::Error::new(io::ErrorKind::InvalidData, "destination image size changed"))
         })?;
         output = OpenOptions::new().read(true).write(true).open(opts.output)?;
-        journal = OpenOptions::new().append(true).open(opts.map_path)?;
+        expected.output_identity = output_identity(&output)?;
+        journal = OpenOptions::new().read(true).append(true).open(opts.map_path)?;
+        let mut contents = String::new();
+        journal.read_to_string(&mut contents)?;
+        let (loaded, valid_len) = Map::parse(&contents, &expected)?;
+        state = loaded;
+        if valid_len < contents.len() as u64 {
+            // Remove a torn suffix before appending, and make the repair durable.
+            journal.set_len(valid_len)?;
+            journal.sync_all()?;
+        }
     } else {
         if opts.map_path.exists() || opts.output.exists() {
             return Err(io::Error::new(io::ErrorKind::AlreadyExists, "new output and map paths required"));
@@ -198,6 +248,7 @@ pub fn rescue_image(opts: &RescueOptions<'_>) -> io::Result<RescueReport> {
         output.set_len(size)?;
         output.sync_all()?;
         journal = OpenOptions::new().write(true).create_new(true).open(opts.map_path)?;
+        expected.output_identity = output_identity(&output)?;
         state = expected;
         journal.write_all(state.header().as_bytes())?;
         journal.sync_all()?;
@@ -315,6 +366,85 @@ mod tests {
         let a = Map::new("source_a".into(), 4096, 1, 512).unwrap();
         let b = Map::new("source_b".into(), 4096, 1, 512).unwrap();
         assert_ne!(a.header(), b.header());
+    }
+    #[test]
+    fn map_torn_tail_boundaries_and_invalid_records() {
+        let mut expected = Map::new("source".into(), 1024, 1, 512).unwrap();
+        expected.output_identity = "device:inode".into();
+        let header = expected.header();
+        // Every byte boundary of a record: only the newline commits it.
+        for cut in 0..=4 {
+            let text = format!("{}0 1\n{}", header, &"1 1\n"[..cut]);
+            let (state, end) = Map::parse(&text, &expected).unwrap();
+            assert_eq!(state.chunks, if cut == 4 { vec![1, 1] } else { vec![1, 0] });
+            assert_eq!(end as usize, header.len() + 4 + if cut == 4 { 4 } else { 0 });
+        }
+        for cut in 0..header.len() {
+            assert!(Map::parse(&header[..cut], &expected).is_err(), "header cut {cut}");
+        }
+        for bad in ["x", "0 3", "2", "01", "0 1x", "0 1\ninvalid\n", "0 3\n"] {
+            assert!(Map::parse(&format!("{header}{bad}"), &expected).is_err(), "bad record {bad:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_rescue_truncates_torn_tail_before_appending() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let dir = std::env::temp_dir().join(format!("driverepair_torn_{}_{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&dir).unwrap();
+        let source = dir.join("source");
+        let dest = dir.join("dest");
+        let map = dir.join("map");
+        let data = vec![0xAC; 1536];
+        fs::write(&source, &data).unwrap();
+        // Generate a bound journal, then simulate a crash after first chunk
+        // committed and the next append began. Output already contains data,
+        // as required by the data-before-journal protocol.
+        let opts = RescueOptions { input: &source, output: &dest, map_path: &map, chunk: 512, resume: false, second_pass: false };
+        rescue_image(&opts).unwrap();
+        let text = fs::read_to_string(&map).unwrap();
+        let header: String = text.lines().take(6).map(|l| format!("{l}\n")).collect();
+        fs::write(&map, format!("{header}0 1\n1 ")).unwrap();
+        let resumed = RescueOptions { resume: true, ..opts };
+        let report = rescue_image(&resumed).unwrap();
+        assert_eq!(report.chunks_good, 3);
+        assert_eq!(fs::read(&dest).unwrap(), data);
+        assert_eq!(fs::read_to_string(&map).unwrap(), format!("{header}0 1\n1 1\n2 1\n"));
+        assert_eq!(rescue_image(&resumed).unwrap().chunks_good, 3);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replaced_output_and_legacy_map_are_rejected() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let dir = std::env::temp_dir().join(format!("driverepair_identity_{}_{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&dir).unwrap();
+        let source = dir.join("source");
+        let dest = dir.join("dest");
+        let map = dir.join("map");
+        fs::write(&source, vec![7; 1024]).unwrap();
+        let opts = RescueOptions { input: &source, output: &dest, map_path: &map, chunk: 512, resume: false, second_pass: false };
+        rescue_image(&opts).unwrap();
+        let saved = fs::read(&map).unwrap();
+        let v2 = String::from_utf8(saved.clone()).unwrap();
+        let mut fields: Vec<_> = v2.lines().collect();
+        fields[0] = "DRIVEREPAIR_IMAGE_MAP_V1";
+        fields.remove(5); // V1 did not contain output identity
+        let old = fields.join("\n") + "\n";
+        fs::write(&map, &old).unwrap();
+        let resumed = RescueOptions { resume: true, ..opts };
+        assert!(rescue_image(&resumed).is_err());
+        assert_eq!(fs::read_to_string(&map).unwrap(), old);
+        fs::write(&map, &saved).unwrap();
+        let replacement = dir.join("replacement");
+        fs::write(&replacement, vec![9; 1024]).unwrap();
+        fs::rename(&replacement, &dest).unwrap();
+        assert!(rescue_image(&resumed).is_err());
+        assert_eq!(fs::read(&map).unwrap(), saved);
+        assert_eq!(fs::read(&dest).unwrap(), vec![9; 1024]);
+        fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn image_rescue_roundtrip_and_new_destination_requirement() {
