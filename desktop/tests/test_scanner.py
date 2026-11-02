@@ -89,6 +89,26 @@ class ScannerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 scan_reader(FakeReader(b"a" * 4096), **options)
 
+    def test_full_scan_progress_includes_latency(self):
+        seen = []
+
+        def report(current, total, info=None):
+            seen.append((current, total, info))
+
+        src = FakeReader(bytes(range(256)) * 16)
+        result = scan_reader(src, size=4096, sector=512, mode="full", chunk=1024,
+                             progress=report)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(len(seen), 4)
+        for current, total, info in seen:
+            self.assertEqual(total, 4)
+            self.assertIsInstance(info, dict)
+            self.assertIn("latency_ms", info)
+            self.assertIsNotNone(info["latency_ms"])
+            self.assertGreaterEqual(info["latency_ms"], 0.0)
+            self.assertFalse(info["failed"])
+        self.assertIsNotNone(seen[-1][2]["median_ms"])
+
 
 if __name__ == "__main__":
     unittest.main()

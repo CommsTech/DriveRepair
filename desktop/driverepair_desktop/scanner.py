@@ -163,7 +163,7 @@ def scan_offsets(size: int, chunk: int, mode: str, samples: int):
 def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
                 samples: int = 128, chunk: int = 1024 * 1024, max_errors: int = 16,
                 compare_suspects: bool = False,
-                progress: Callable[[int, int], None] | None = None) -> dict:
+                progress: Callable[..., None] | None = None) -> dict:
     if (not 0 < sector <= 1024 * 1024 or size <= 0 or size % sector or
             chunk < sector or chunk % sector or not 1 <= max_errors <= 10000 or
             not 1 <= samples <= 100000):
@@ -177,9 +177,36 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
     started = time.monotonic()
     status = 'completed'
     latencies: list[float] = []
+    # Bounded ring for live median during full-surface passes (avoid retaining
+    # every 1 MiB sample latency for multi-TB media in RAM).
+    latency_window: list[float] = []
+    latency_window_cap = 512
     probe_latencies: list[tuple[int, float]] = []
     anomalous_indices: list[int] = []
     examined: set[int] = set()
+    slow_regions: list[dict] = []
+
+    def _median_ms() -> float | None:
+        if not latency_window:
+            return None
+        return float(statistics.median(latency_window))
+
+    def _emit_progress(offset: int, length: int, latency_ms: float, failed: bool) -> None:
+        if not progress:
+            return
+        med = _median_ms()
+        info = {
+            'offset': offset,
+            'length': length,
+            'latency_ms': round(latency_ms, 3),
+            'median_ms': None if med is None else round(med, 3),
+            'failed': failed,
+        }
+        try:
+            progress(min(completed, planned), planned, info)
+        except TypeError:
+            # Older 2-arg callbacks (tests / callers) stay compatible.
+            progress(min(completed, planned), planned)
 
     def attempt(offset: int, length: int) -> bool:
         nonlocal checked, readable, failures, completed, status
@@ -205,11 +232,26 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
             anomalous_indices.append(offset // chunk)
             if len(failed_ranges) < 1000:
                 failed_ranges.append({'offset': offset, 'length': length, 'error': error})
-        elif mode == 'triage':
-            latencies.append(latency_ms)
-            probe_latencies.append((offset, latency_ms))
-        if progress:
-            progress(min(completed, planned), planned)
+        else:
+            # All modes track latency so GUI/CLI can surface slow spots live.
+            latency_window.append(latency_ms)
+            if len(latency_window) > latency_window_cap:
+                del latency_window[: len(latency_window) - latency_window_cap]
+            if mode == 'triage':
+                latencies.append(latency_ms)
+                probe_latencies.append((offset, latency_ms))
+            else:
+                med = _median_ms() or 0.0
+                threshold = max(50.0, med * 4)
+                if latency_ms >= threshold and len(slow_regions) < 1000:
+                    slow_regions.append({
+                        'offset': offset,
+                        'length': length,
+                        'latency_ms': round(latency_ms, 3),
+                        'median_ms': round(med, 3),
+                    })
+                    anomalous_indices.append(offset // chunk)
+        _emit_progress(offset, length, latency_ms, error is not None)
         if failures >= max_errors and status == 'completed':
             status = 'aborted_error_limit'
         return error is None
@@ -220,13 +262,14 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
         if status.startswith('aborted'):
             break
 
-    slow_regions: list[dict] = []
     # Triage's second stage investigates neighboring chunks of read failures
     # and slow samples, *not* the whole drive. Never re-read an already checked
     # region and never permit unbounded growth of this work list.
     if mode == 'triage' and not status.startswith('aborted'):
         median_ms = statistics.median(latencies) if latencies else 0.0
         threshold = max(50.0, median_ms * 4)
+        # Replace any in-pass slow bookmarks with the definitive triage set.
+        slow_regions = []
         # We cannot retroactively detect which probes were slow without storing
         # their latency, so capture probe timings in `attempt` below.
         for off, latency in probe_latencies:

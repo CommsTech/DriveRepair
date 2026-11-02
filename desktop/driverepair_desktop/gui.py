@@ -1218,16 +1218,24 @@ def launch() -> None:
                     write(str(value))
                 elif kind == "stderr":
                     line = str(value).rstrip("\n")
-                    if line.startswith("{"):
+                    # Progress JSONL drives the dashboard; keep it out of Advanced log.
+                    payload = line.strip()
+                    json_start = payload.find('{"type":"progress"')
+                    if json_start >= 0:
+                        payload = payload[json_start:]
+                    if payload.startswith("{"):
                         try:
-                            event = json.loads(line)
+                            event = json.loads(payload)
                             if event.get("type") == "progress":
                                 apply_progress(event)
                                 continue
                         except json.JSONDecodeError:
                             pass
-                    if line.strip():
-                        write(line + "\n")
+                    # Ignore bare carriage-return SCAN paints; dashboard already shows %.
+                    stripped = line.strip().lstrip('\r')
+                    if stripped.startswith('SCAN  ') or not stripped:
+                        continue
+                    write(line + "\n")
                 elif kind == 'deleted_error':
                     catalog_source['path'] = ''
                     candidate_status.set('Preview failed: ' + str(value))
