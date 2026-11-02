@@ -359,13 +359,19 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
     repeated_read_errors = 0
     repeat_probe_failed_ranges: list[dict] = []
     if compare_suspects and mode == 'triage' and not status.startswith('aborted'):
-        candidates = sorted(set(anomalous_indices))[:min(64, samples)]
+        candidates = sorted(set(anomalous_indices))[:min(12, samples)]
+        followup_deadline = time.monotonic() + 15.0
+        extra_attempts = 0
         for index in candidates:
+            if time.monotonic() >= followup_deadline:
+                break
             off = index * chunk
             length = min(chunk, size - off)
             try:
                 first = reader.read_at(off, length)
+                extra_attempts += 1
                 second = reader.read_at(off, length)
+                extra_attempts += 1
                 if len(first) != length or len(second) != length:
                     repeated_read_errors += 1
                     repeat_probe_failed_ranges.append({'offset': off, 'length': length})
@@ -373,10 +379,18 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
                     inconsistent_reads.append({'offset': off, 'length': length,
                                                'interpretation': 'Inconsistent repeated reads; correct bytes UNKNOWN'})
             except OSError:
+                extra_attempts += 1
                 repeated_read_errors += 1
                 repeat_probe_failed_ranges.append({'offset': off, 'length': length})
         if inconsistent_reads and status == 'completed':
             status = 'completed_with_inconsistent_reads'
+    boundary_investigation = None
+    if failed_ranges and status != 'aborted_device_or_access_error':
+        from .guided_repair import inspect_failed_boundaries
+        boundary_investigation = inspect_failed_boundaries(
+            reader, failed_ranges[:8], size=size, sector=sector,
+            probe_bytes=max(sector, min(64 * 1024, chunk)),
+            max_probes=16, max_elapsed_seconds=12.0)
     if status == 'completed' and failures:
         status = 'completed_with_read_errors'
     elif status == 'completed' and slow_regions:
@@ -392,6 +406,7 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
         'planned_chunks': planned,
         'read_error_chunks': failures,
         'read_error_ranges': failed_ranges,
+        'error_boundary_investigation': boundary_investigation,
         'read_error_ranges_truncated': failures > len(failed_ranges),
         'slow_regions': slow_regions,
         'historical_hints_used': len(history_hints or []),
@@ -401,7 +416,7 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
         'inconsistent_reads': inconsistent_reads,
         'repeat_probe_failures': repeated_read_errors,
         'repeat_probe_failed_ranges': repeat_probe_failed_ranges,
-        'extra_suspect_reads': 2 * min(len(set(anomalous_indices)), 64, samples) if compare_suspects and mode == 'triage' else 0,
+        'extra_suspect_reads': extra_attempts if compare_suspects and mode == 'triage' else 0,
         'follow_up_chunks': max(0, completed - (len(baseline) if baseline is not None else blocks)),
         'surface_coverage_pct': round(100 * (sum(min(chunk, size - i * chunk) for i in examined)
                                              if mode == 'triage' else min(size, checked)) / size, 6),

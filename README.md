@@ -2,10 +2,14 @@
 
 **Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
 
-**Current build: 0.3.3b10 / engineering beta candidate — NOT approved for public hardware-repair use.**
+**Current build: 0.3.3b11 / engineering beta candidate — NOT approved for public hardware-repair use.**
 The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
 
 **If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
+
+## Windows mounted-volume preparation and read-error boundaries (0.3.3b11)
+
+The Qt Fix workflow can request a **temporary exclusive lock/dismount** of an external Windows volume with a drive letter. This is never done without the operation's explicit physical-write confirmation. Windows must establish exclusive access; in-use, unknown or system volumes remain off-limits. No forced dismount or permanent drive-letter removal is performed. Read-error investigations now look on both logical sides of failed requests with a strict additional-probe budget. These inspections are read-only and **do not establish physical damage or recover missing bytes**. See `docs/WINDOWS_VOLUME_PREPARATION_AND_ERROR_BOUNDARIES.md`. Windows USB repair remains hardware-unverified.
 
 ## Qt interface, honest coverage and reconnect work (0.3.3b10)
 

@@ -148,6 +148,9 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument('--journal', help='Required for disk/ramdisk journal only; not used in volatile RAM mode')
         cmd.add_argument('--journal-backend', choices=['disk', 'memory'], default='disk',
                          help='disk=crash-recoverable; memory=no files, NO crash recovery (high risk)')
+        if name == 'care-external':
+            cmd.add_argument('--auto-lock-volumes', action='store_true',
+                             help='Opt in to locking/dismounting mounted external volumes exclusively for writes; fails if in use')
         cmd.add_argument('--ack-volatile-journal', action='store_true',
                          help='I accept loss of active region data on crash/power failure')
         cmd.add_argument('--resume', action='store_true', help='Resume the targeted refresh journal without rescanning')
@@ -384,6 +387,9 @@ def parser() -> argparse.ArgumentParser:
                          help='Confirm proceeding without a full verified backup')
         cmd.add_argument('--ack-data-loss-risk', action='store_true',
                          help='Confirm understanding that in-place writes can destroy remaining recoverable data')
+        if name == 'refresh-external':
+            cmd.add_argument('--auto-lock-volumes', action='store_true',
+                             help='Explicitly permit exclusive lock/dismount of mounted external volumes; never force busy volumes')
         if name in {'refresh-external', 'refresh-system'}:
             cmd.add_argument('--confirm-identity', help='12-character fingerprint shown by list --json')
             cmd.add_argument('--power-source', help='For volatile RAM: nut:UPSNAME (local USB NUT) or battery (Linux laptop)')
@@ -894,7 +900,7 @@ def _run_extras(args) -> int:
                 ack_unvalidated_hardware=getattr(args, 'ack_unvalidated_hardware', False),
                 require_unvalidated=True,
             )
-            assert_patient_idle_windows(selected)
+            assert_patient_idle_windows(selected, allow_locked_volume=getattr(args, 'auto_lock_volumes', False))
             if not args.confirm_identity or args.confirm_identity != selected.fingerprint[:12]:
                 raise ValueError('Physical writes require --confirm-identity with the current list --json identity_hint')
             # Duplicate bridge serials can identify distinct drives; fail closed.
@@ -934,7 +940,7 @@ def _run_extras(args) -> int:
                     f'[{time.strftime("%H:%M:%S")}] Opening read/write handle on {selected.id}...',
                     file=sys.stderr, flush=True,
                 )
-            media = open_device_readwrite(selected)
+            media = open_device_readwrite(selected, **({'auto_lock_volumes': True} if getattr(args, 'auto_lock_volumes', False) else {}))
             size, sector = selected.size_bytes, selected.sector_size
             source_token = selected.fingerprint
         else:
@@ -1257,7 +1263,7 @@ def _run_care(args) -> int:
         for dev in list_external_devices():
             if dev.id != selected.id and dev.serial == selected.serial:
                 raise RuntimeError('Duplicate disk serials: refusing raw write')
-        assert_patient_idle_windows(selected)
+        assert_patient_idle_windows(selected, allow_locked_volume=getattr(args, 'auto_lock_volumes', False))
         if ram_only:
             if sys.platform.startswith('linux'):
                 _verify_linux_patient_not_in_use(selected)
@@ -1376,7 +1382,7 @@ def _run_care(args) -> int:
                                                   f"{info['read_calls']} read operations")}, force=True)
                     scan['error_investigation'] = investigate_failed_ranges(
                         reader, scan['read_error_ranges'], sector=sector,
-                        max_reads=96, max_regions=16, progress=investigation_progress)
+                        max_reads=24, max_regions=8, progress=investigation_progress)
             finally:
                 reader.close()
             if is_hardware:
@@ -1463,7 +1469,7 @@ def _run_care(args) -> int:
         # Select the patient again immediately before RW; fail closed if renumbered.
         if is_hardware:
             assert_stable_identity(selected, select_external_device(args.device))
-            writer = open_device_readwrite(selected)
+            writer = open_device_readwrite(selected, **({'auto_lock_volumes': True} if getattr(args, 'auto_lock_volumes', False) else {}))
         else:
             if _refresh_image_token(args.image) != (token, size):
                 raise RuntimeError('Image identity changed between scan and refresh')
