@@ -3,4 +3,4 @@
 The desktop scanner is independent of the experimental boot firmware code.
 """
 
-__version__ = "0.3.3b4"
+__version__ = "0.3.3b5"

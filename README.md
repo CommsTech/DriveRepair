@@ -2,7 +2,7 @@
 
 **Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
 
-**Current build: 0.3.3b4 / engineering beta candidate — NOT approved for public hardware-repair use.**
+**Current build: 0.3.3b5 / engineering beta candidate — NOT approved for public hardware-repair use.**
 The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
 
 **If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
@@ -25,15 +25,39 @@ select `full`; this is significantly riskier, particularly on failing hardware.
   device, risk and volatile-journal confirmation. The patient must be offline,
   unmounted and exclusive to this tool. macOS destructive hardware access is
   disabled pending safe volume locking and physical QA.
-- A read error or inconsistent region is **not rewritten**. Repeatedly reading
-  the same corrupted bits does not recover their correct original value.
-  If SMART indicates failure or reads are unreliable, stop and rescue/replace.
+- **Recoverable error areas:** Quick/Full repair now perform bounded, read-only retries of known error regions, splitting a failed read into smaller aligned regions. Two identical recovered reads can qualify the region for a separately journaled rewrite after the writer again confirms the bytes. This does **not** establish their original correctness.
+- **Still-unreadable or inconsistent data:** never overwritten automatically. Such regions remain UNKNOWN and produce a partial/not-success result. Separate destructive logical-sector reinitialization is NOT implemented or approved on physical hardware.
+- **Hardware safeguards:** unstable USB transport/identity, critical SMART failure and unknown error offsets still block writes. A SMART warning requires an additional explicit risk acknowledgment. If repeated errors persist, stop and rescue/replace.
 - Successful readback means the new recording matches the bytes just read;
   it **does not** prove original file correctness or restore hardware lifespan.
 - The code has been tested on synthetic images only. **Do not run RAM-only
   repair on valuable, sole-copy data or a failing disk for public beta.**
 
 See [direct repair and RAM-only operations](docs/NO_IMAGE_RAM_REPAIR.md).
+
+## Guided repair policies and scan dashboard (0.3.3b5)
+
+The external-drive page provides two tested repair policies:
+
+- **Preserve**: refresh only slow, consistently readable regions outside known error chunks.
+- **Balanced** (default): in addition, re-investigate known error chunks with a strict limit on read requests. A portion that returns identical bytes twice may be scheduled for the journaled writer, which checks again before writing and verifies after writing.
+
+If the scan reaches the **16-read-error safety limit**, it stops further surface probing instead of repeatedly stressing the drive. **Balanced** guided repair can still investigate the known error offsets with bounded split/retry reads and refresh separately confirmed, readable regions. Any unscanned space is **unknown**, so the result is **partial** and not a whole-drive repair. A diagnostic scan remains strictly read-only.
+
+A detected read error alone is **not** authority to erase, invent, or zero-fill unknown bytes. An unresolved sector remains unknown. A partial refresh returns a nonzero exit status and a warning, even if other regions were verified. A transport failure, critical SMART condition, missing error coordinates, or active filesystem is not a recoverable sector and remains a blocker. The separate `--ack-media-warning` and `--ack-unknown-health` flags acknowledge higher-risk operations; neither is a certification.
+
+**GUI telemetry:** scan data cards display *actual bytes successfully read*, failed chunk count, measured throughput and ETA for the current operation (sampled Quick mode does not claim to read the entire surface). During refresh the cards show bytes rewritten and verified. The map uses explicit color swatches for unscanned, readable, in-progress, slow, investigation and failed/unknown regions. The map is an approximate visualization, not a complete bad-sector map or integrity certification.
+
+For synthetic-image testing only:
+
+```sh
+python -m driverepair_desktop care-image --image synthetic.img \
+  --journal /safe-storage/unique-guided-journal --mode quick \
+  --repair-policy balanced --ack-risk --ack-destructive \
+  --ack-no-backup --ack-data-loss-risk --json
+```
+
+**For public beta:** Do not perform unvalidated physical-drive in-place writes on valuable media. Windows USB-dock writes, unplug/replug, crashes, and stale power states still require sacrificial hardware tests.
 
 ## Graphical recovery dashboard (0.3.2b1)
 

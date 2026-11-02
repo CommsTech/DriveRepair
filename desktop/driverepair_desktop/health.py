@@ -225,11 +225,12 @@ class ScanHealthTracker:
         elif failed:
             self.read_errors += 1
             if self.media in {"UNKNOWN", "OK"}:
-                self.media = "WARN" if self.read_errors < 3 else "FAIL"
-            if self.mechanical in {"UNKNOWN", "OK", "WATCH"}:
-                self.mechanical = "FAIL"
-            if self.bus == "usb" and self.transport == "UNKNOWN" and self.read_errors >= 3:
-                self.transport = "WARN"
+                self.media = "WARN"
+            # EIO alone does not identify a failing head or USB transport.
+            # Those are separate diagnoses, not mathematical consequences of
+            # one (or several) unreadable reads.
+            if self.mechanical not in {"FAIL", "WATCH"}:
+                self.mechanical = "WATCH"
         else:
             self.ok_reads += 1
             if self.transport == "UNKNOWN" and self.ok_reads >= 8:
@@ -263,7 +264,7 @@ class ScanHealthTracker:
         if self.transport == "FAIL":
             blockers.append("transport FAIL — stabilize USB/dock before any write workflow")
         if self.mechanical == "FAIL":
-            blockers.append("mechanical FAIL proxy — abort write workflows")
+            blockers.append("device disconnected/critical instability — abort write workflows")
         if self.mechanical == "WATCH":
             blockers.append("mechanical WATCH (slow regions) — refresh may stress media further")
         status = ("blocked" if blockers

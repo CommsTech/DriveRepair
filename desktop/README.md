@@ -183,9 +183,9 @@ Start in GUI → **Recover OS drive → Last resort**. See
 checks and exact CLI flags. The experimental feature is not approved for
 irreplaceable data or automatic operation.
 
-### Graphical workflow controls (0.3.3b4)
+### Graphical workflow controls (0.3.3b5)
 
-Run `python -m driverepair_desktop gui`, or `python DriveRepair-0.3.3b4.pyz gui`.
+Run `python -m driverepair_desktop gui`, or `python DriveRepair-0.3.3b5.pyz gui`.
 The **Start here** buttons navigate to their named workflow pages; select a disk
 row before Quick scan, SMART, or Rescue in **Diagnose / Rescue**. Windows and Linux
 external raw-disk rescue require an independently verified destination and elevated
@@ -208,3 +208,20 @@ xvfb-run -a python -m unittest discover -s tests -p test_gui_workflows.py -v
 These tests use synthetic disk-image files only; they do **not** open patient
 block devices or validate raw-drive writes. Windows/macOS still require real
 user-interface and physical-device qualification before release.
+
+### Scan-to-repair and dashboard (0.3.3b5)
+
+Quick/Full repair now distinguish isolated read errors from unstable drive communication.
+Balanced mode investigates error locations with a strict retry/split budget; it never
+rewrites bytes that still cannot be read consistently. Preserve mode restricts work
+to consistently readable slow regions. SMART media WARN requires additional explicit
+authorization; critical media/transport states still prevent writes.
+
+The recovery dashboard displays **Bytes read**, **Read errors**, **Current speed**,
+and **Time remaining** during scans, then **Bytes rewritten / verified** while
+refreshing. Quick-scan ETA means remaining **sample work**, not time for an entire
+full-drive scan. The map has a visible color legend for each state. Unscanned
+regions are not declared good.
+
+Run `xvfb-run -a python -m unittest discover -s tests -v` on Linux to include
+Tk GUI telemetry/legend tests; Windows and macOS GUI/hardware checks remain pending.

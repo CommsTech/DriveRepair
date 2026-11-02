@@ -1,3 +1,17 @@
+## 0.3.3b5 — Bounded error investigation, scan metrics and clear color legend (engineering candidate)
+
+- **Error-limit continuation:** A Quick/Full guided repair that encounters the default 16 read-error safety limit can investigate the known failed offsets and may still refresh independent, consistently readable candidates. The remainder of the disk is explicitly *unscanned/unknown*. Read-only diagnostic scans still stop at their error budget; they do not write.
+- Repeated-read disagreement or failed follow-up checks quarantine *only their known ranges*, not all other candidates. Failures without usable offsets, USB disconnect/access loss, actual critical SMART reports, and identity instability continue to block unsafe writes.
+- Read errors alone now produce a media **WATCH/WARN** indicator, not a fabricated diagnosis of motor/mechanical failure or USB cable failure. Hardware/transport causality remains unknown until independently established.
+- The GUI distinguishes partial, recovery-needed, and successful targeted-refresh results instead of showing a generic exit-code failure for a known safety stop. Synthetic regression checks cover limited scans, mixed good/bad regions, disconnection, UI metric cards, and no silent full-disk success.
+
+- Guided Quick/Full repair no longer treats every isolated read error as a global write veto. Error-bearing chunks receive bounded, read-only split/retry investigation; only byte-for-byte repeatable returned data can become a candidate for another, separately journaled read/rewritten/read-back verification. Unreadable or inconsistent subregions are not overwritten.
+- Added `--repair-policy preserve|balanced`. Preserve refreshes consistently readable slow regions only; balanced also considers consistently recovered error subregions. If some regions are still unknown, a partial result is explicitly reported as non-success. Destructive zero reinitialization of unreadable bytes is NOT automated.
+- Critical SMART failure, unstable transport, unidentified error offsets, changing device identity, and mounted/in-use patient remain write blockers. SMART WARN requires an additional `--ack-media-warning` acknowledgment; this is NOT a hardware qualification.
+- Both standalone scan and Quick/Full repair now send actual attempted/readable byte metrics, error totals, throughput, and per-operation ETA; the GUI shows scanned bytes instead of falsely counting them as rewritten. Refresh progress includes rewritten/verified bytes, speed and ETA.
+- Added a colored swatch legend (pending, readable, in progress, slow, investigate, unreadable) matching the actual disk map; updated GUI warnings and progress states.
+- Added synthetic read error/budget tests, full Tk swatch and metric tests. No physical disk writes were performed. Hardware testing, raw writes, rust compilation and boot tests remain release gates.
+
 ## 0.3.3b4 — Direct repair / volatile RAM-only prototype
 
 - Added a visible no-image **Quick repair / Full repair** workflow with a
