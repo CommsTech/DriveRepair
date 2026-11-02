@@ -308,3 +308,16 @@ Full surface scans now adapt sector-aligned read request sizes, defer difficult 
 **RAM-only versus history:** RAM-only keeps sector data and transaction state in process RAM and never saves a recovery image or sector journal. An independently selected “Remember bad/slow locations” option may save a small, local, offsets-only diagnostic history on the host computer. It stores no sector bytes, file contents, or write authorization. Disable it when absolutely no diagnostic files are desired.
 
 **Repeat Quick Repair:** Each physical-drive session uses a new recorded random sampling seed. The selected locations are stratified across the disk and processed in address order; a repeat run can inspect different areas. Saved anomaly locations (when enabled) are rechecked separately. A new seed does not establish full-disk integrity. Synthetic image tests retain deterministic sampling.
+
+#### Rescue journal compatibility and image identity
+
+New rescue journals bind progress to the destination file's filesystem identity
+(device and file/inode number), not just its path and size. Resume and status
+refuse legacy Python journals without that identity; Rust-core V1 maps are also
+refused. Preserve those images and journals and start a new rescue to a new
+output rather than attaching old progress to an unverified file. Filesystems
+without a usable file identifier are not supported for Python rescue; Rust-core
+resume is supported only on Unix. Filesystem identity is not a content hash:
+in-place changes, identifier reuse, adversarial changes, and some network or
+unusual filesystem behavior may not be detected. Keep the output and journal
+on reliable storage and protect them from modification during and between runs.

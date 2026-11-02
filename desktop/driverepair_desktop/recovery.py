@@ -131,6 +131,23 @@ def _open_output(path: str, size: int, resume: bool) -> int:
         raise
 
 
+def _output_identity(st: os.stat_result) -> dict:
+    # fstat ties the journal to the open file, not merely its pathname or size.
+    # Some filesystems cannot provide usable identifiers; fail closed there.
+    if not st.st_ino:
+        raise RuntimeError('Destination filesystem does not provide a usable file identity')
+    return {'device': st.st_dev, 'inode': st.st_ino}
+
+
+def _check_output_identity(state: dict, st: os.stat_result) -> None:
+    identity = state.get('output_identity')
+    if not isinstance(identity, dict) or set(identity) != {'device', 'inode'} or any(
+            type(identity[k]) is not int for k in ('device', 'inode')):
+        raise RuntimeError('Legacy or invalid recovery journal lacks output identity; start a new rescue')
+    if identity != _output_identity(st):
+        raise RuntimeError('Destination image identity changed; refusing journal progress')
+
+
 @contextmanager
 def _rescue_writer_lock(output: str):
     """One recovery writer per image/map, released even after process death.
@@ -238,6 +255,7 @@ def inspect_rescue_status(output: str) -> dict:
     image_stat = os.stat(output, follow_symlinks=False)
     if not stat.S_ISREG(image_stat.st_mode) or image_stat.st_size != state['size']:
         raise RuntimeError('Image is missing, not a regular file, or has changed size')
+    _check_output_identity(state, image_stat)
     missing = sum(length for _, length in state['missing_ranges'])
     pending = sum(length for _, length in state.get('retry_pending_ranges', []))
     unprocessed = state['size'] - state['cursor']
@@ -260,7 +278,7 @@ def inspect_rescue_status(output: str) -> dict:
         'clean_rescue_complete': clean,
         'percent_processed': round(100 * state['cursor'] / state['size'], 3),
         'notes': ('Journal-backed progress, not image-file length. '
-                  'Recovered bytes are OS-read bytes, not independently checksum-verified file contents.'),
+                  'File identity does not detect in-place changes; recovered bytes are not checksum-verified.'),
     }
 
 
@@ -307,7 +325,10 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
     fd = _open_output(output, size, resume)
     attempts = 0
     try:
-        if not resume:
+        if resume:
+            _check_output_identity(state, os.fstat(fd))
+        else:
+            state['output_identity'] = _output_identity(os.fstat(fd))
             _state_save(journal, state)
         if retry_missing:
             if 'retry_pending_ranges' not in state:
