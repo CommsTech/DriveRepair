@@ -86,10 +86,10 @@ jobs:
         run: python scripts/build_desktop.py --no-wheel
 
       - name: Portable GUI to recovery engine image test
-        working-directory: desktop
-        env:
-          DRIVEREPAIR_SMOKE_PYZ: ../dist/DriveRepair-0.3.3b12.pyz
-        run: xvfb-run -a python -m unittest discover -s tests -p test_gui_workflows.py -v
+        run: |
+          VERSION=$(python -c 'from scripts.build_desktop import VERSION; print(VERSION)')
+          cd desktop
+          DRIVEREPAIR_SMOKE_PYZ="../dist/DriveRepair-${VERSION}.pyz" xvfb-run -a python -m unittest discover -s tests -p test_gui_workflows.py -v
 
   native-recovery-core:
     name: Standalone Rust regular-image rescue core tests
@@ -121,6 +121,7 @@ jobs:
       - name: Verify CLI offline rescue commands are packaged
         run: |
           python scripts/build_desktop.py --no-wheel
-          python dist/DriveRepair-0.3.3b12.pyz list-all-linux --help
-          python dist/DriveRepair-0.3.3b12.pyz plan-system-recovery --help
-          python dist/DriveRepair-0.3.3b12.pyz rescue-system --help
+          VERSION=$(python -c 'from scripts.build_desktop import VERSION; print(VERSION)')
+          python "dist/DriveRepair-${VERSION}.pyz" list-all-linux --help
+          python "dist/DriveRepair-${VERSION}.pyz" plan-system-recovery --help
+          python "dist/DriveRepair-${VERSION}.pyz" rescue-system --help
