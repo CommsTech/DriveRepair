@@ -206,6 +206,48 @@ def _merge_ranges(ranges: list[list[int]]) -> list[list[int]]:
     return result
 
 
+def _merge_sorted_range_lists(left: list[list[int]], right: list[list[int]]) -> list[list[int]]:
+    """Coalesce two already-sorted, non-overlapping range lists without re-sorting history.
+
+    ``left`` is the durable accumulated map from prior chunks; ``right`` is the
+    (usually tiny) set of new holes from the current chunk after local merge.
+    """
+    if not right:
+        return left
+    if not left:
+        return list(right)
+    result: list[list[int]] = []
+    i = j = 0
+    while i < len(left) or j < len(right):
+        if j >= len(right) or (i < len(left) and left[i][0] <= right[j][0]):
+            start, length = left[i]
+            i += 1
+        else:
+            start, length = right[j]
+            j += 1
+        if length <= 0:
+            continue
+        if result and start <= result[-1][0] + result[-1][1]:
+            end = max(result[-1][0] + result[-1][1], start + length)
+            result[-1][1] = end - result[-1][0]
+        else:
+            result.append([start, length])
+    return result
+
+
+def _extend_missing_ranges(accumulated: list[list[int]], new_ranges: list[list[int]]) -> list[list[int]]:
+    """Append/coalesce new missing ranges into an already-sorted accumulated map."""
+    if not new_ranges:
+        return accumulated
+    return _merge_sorted_range_lists(accumulated, _merge_ranges(new_ranges))
+
+
+# Bound how often the rescue journal is durably rewritten. Output bytes are
+# always fsynced before a journal commit. Crash between checkpoints re-reads
+# already-copied ranges (safe); journal never advances past unflushed data.
+_RESCUE_JOURNAL_CHECKPOINT_CHUNKS = 16
+
+
 
 def _validate_state(state: dict) -> None:
     try:
@@ -377,25 +419,34 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
             recover(offset, length)
             for start, data in segments:
                 _write_all(fd, data, start)
-            # fsync destination must complete before advancing durable map.
-            os.fsync(fd)
             previous_missing = state['missing_ranges']
             if retry_missing:
-                # Journal pending-range removal only after data is durable.
+                # Pending-range removal is only durable after the checkpoint
+                # fsync below; keep in-memory queue accurate for the next chunk.
                 if not state['retry_pending_ranges'] or state['retry_pending_ranges'][0] != [offset, length]:
                     raise RuntimeError('Retry journal changed unexpectedly')
                 state['retry_pending_ranges'].pop(0)
-                state['missing_ranges'] = _merge_ranges(previous_missing + new_missing)
+                state['missing_ranges'] = _extend_missing_ranges(previous_missing, new_missing)
             else:
                 state['cursor'] = offset + length
-                state['missing_ranges'] = _merge_ranges(previous_missing + new_missing)
+                state['missing_ranges'] = _extend_missing_ranges(previous_missing, new_missing)
             state['recovered_bytes'] += sum(len(data) for _, data in segments)
             state['failed_read_attempts'] += attempts
             attempts = 0
             state['status'] = 'in_progress'
             _validate_state(state)
-            _state_save(journal, state)
             processed += 1
+            # Checkpoint cadence: fsync image FIRST, then durable journal.
+            # Forced on stop (max_chunks), completion, or every N chunks.
+            force_checkpoint = (
+                (max_chunks is not None and processed >= max_chunks)
+                or (retry_missing and not state.get('retry_pending_ranges'))
+                or ((not retry_missing) and state['cursor'] == size)
+                or (processed % _RESCUE_JOURNAL_CHECKPOINT_CHUNKS == 0)
+            )
+            if force_checkpoint:
+                os.fsync(fd)
+                _state_save(journal, state)
             if progress:
                 progress(dict(state))
             if max_chunks is not None and processed >= max_chunks:
@@ -406,6 +457,9 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
             state['status'] = 'completed_with_missing_data' if state['missing_ranges'] else 'completed'
             state.pop('retry_pending_ranges', None)
         _validate_state(state)
+        # Final checkpoint always: durable image then journal (idempotent if
+        # the last loop iteration already checkpointed).
+        os.fsync(fd)
         _state_save(journal, state)
         return dict(state)
     finally:
