@@ -4,7 +4,9 @@
 
 | Version | Security review |
 |---|---|
-| `main` / 0.3.3b4 engineering candidate | Best effort; **not authorized for unrestricted public physical repair** |
+| `main` / 0.3.3b13 + unreleased hardening (engineering source) | Best effort; **not authorized for unrestricted public physical repair** |
+
+**Public distribution:** Use only the intentionally restricted `-public-beta.pyz` build from the reviewed checkout. Its CLI denies in-place image/physical-drive refresh/repair and native optimization execution. The legacy standard build and source tree retain experimental raw-write features. This policy is not a cryptographic control against a modified package.
 
 ## Product security posture
 

@@ -20,6 +20,7 @@ from .rescue_display import RescueDisplayState, format_duration
 from .console_ui import fmt_bytes
 from .preferences import load_preferences, save_preferences
 from .media_profiles import identify_profile
+from .release_policy import PUBLIC_BETA_IMAGE_ONLY, IN_PLACE_WRITE_COMMANDS
 
 
 # Industrial dark palette (high-contrast status colors, no purple/glow stack).
@@ -52,6 +53,34 @@ def recovery_command(args: list[str], *, executable: str | None = None,
     if entry.lower().endswith('.pyz') and os.path.isfile(entry):
         return [python, os.path.abspath(entry), *args]
     return [python, '-m', 'driverepair_desktop', *args]
+
+
+# Centralize the child control contract across both Tk and CLI. The GUI must
+# never use process termination as a shortcut around a patient write boundary.
+PROGRESS_OPERATIONS = frozenset({
+    'rescue-image', 'rescue-external', 'rescue-system',
+    'scan', 'scan-image', 'care-image', 'care-external',
+    'refresh-image', 'refresh-external', 'refresh-system',
+    'benchmark-external', 'last-resort-system-refresh',
+})
+COOPERATIVE_STOP_OPERATIONS = frozenset({
+    'scan', 'scan-image', 'care-image', 'care-external',
+    'refresh-image', 'refresh-external', 'refresh-system',
+})
+POTENTIALLY_WRITING_OPERATIONS = frozenset({
+    'care-image', 'care-external', 'refresh-image', 'refresh-external',
+    'refresh-system', 'last-resort-system-refresh',
+})
+
+
+def prepare_child_arguments(args: list[str]) -> list[str]:
+    """Pass the stop protocol only to child commands which implement it."""
+    result = list(args)
+    if result and result[0] in PROGRESS_OPERATIONS and '--progress-jsonl' not in result:
+        result.extend(['--progress-jsonl', '--no-live-dashboard'])
+    if result and result[0] in COOPERATIVE_STOP_OPERATIONS and '--cooperative-stop-stdin' not in result:
+        result.append('--cooperative-stop-stdin')
+    return result
 
 
 def _gui_debug_enabled() -> bool:
@@ -181,6 +210,7 @@ def launch() -> None:
     process: subprocess.Popen[str] | None = None
     busy = False
     staged_job = None  # Workflow selection NEVER starts disk I/O.
+    active_command: list[str] = []  # The actual current child operation.
     map_width, map_height = 64, 12
     rescue_metrics = RescueDisplayState()
     map_cells = ["."] * (map_width * map_height)
@@ -712,6 +742,10 @@ def launch() -> None:
     def start(args: list[str], title: str, *, risky: bool = False, destructive: bool = False) -> None:
         """Stage a job for confirmation. Invoking workflow controls cannot run I/O."""
         nonlocal staged_job
+        if PUBLIC_BETA_IMAGE_ONLY and args and args[0] in IN_PLACE_WRITE_COMMANDS:
+            messagebox.showwarning('Public beta: image-first',
+                'In-place rewriting of an image or physical disk is disabled. Use Check or Rescue to a NEW image.')
+            return
         if busy:
             messagebox.showwarning('Busy', 'Stop the current job before selecting another.')
             return
@@ -740,7 +774,7 @@ def launch() -> None:
             staged_job = None
 
     def launch_job(args: list[str], title: str, *, risky: bool = False, destructive: bool = False) -> None:
-        nonlocal process, busy, last_result
+        nonlocal process, busy, last_result, active_command
         if busy:
             messagebox.showwarning("Busy", "A job is already active.")
             return
@@ -765,16 +799,9 @@ def launch() -> None:
             if typed != selected_id:
                 messagebox.showerror("Not authorized", "Device ID confirmation did not match; no write started.")
                 return
-        # Rescue AND scan/refresh/benchmark need JSONL progress so the dashboard
-        # does not sit forever on STARTING while the child is actively I/O bound.
-        progressive = {
-            'rescue-image', 'rescue-external', 'rescue-system',
-            'scan', 'scan-image', 'care-image', 'care-external', 'refresh-external', 'refresh-image',
-            'benchmark-external', 'last-resort-system-refresh',
-        }
-        if args and args[0] in progressive and '--progress-jsonl' not in args:
-            args = [*args, '--progress-jsonl', '--no-live-dashboard']
+        args = prepare_child_arguments(args)
         command = recovery_command(args)
+        active_command = list(args)
         last_result = None
         write(f"\n=== {title} ===\n")
         status.set(f"Running: {title}")
@@ -812,7 +839,7 @@ def launch() -> None:
             nonlocal process
             try:
                 child = subprocess.Popen(
-                    command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     text=True, encoding='utf-8', errors='replace', bufsize=1,
                     env={**os.environ, 'PYTHONIOENCODING': 'utf-8'},
                 )
@@ -833,6 +860,8 @@ def launch() -> None:
                 stdout_thread.start()
                 stderr_thread.start()
                 code = child.wait()
+                if child.stdin is not None:
+                    child.stdin.close()
                 stdout_thread.join(timeout=3)
                 stderr_thread.join(timeout=3)
                 # Release pipe descriptors once the stream readers have drained.
@@ -855,10 +884,35 @@ def launch() -> None:
         threading.Thread(target=worker, daemon=True).start()
 
     def cancel() -> None:
-        if process is not None and process.poll() is None:
-            if messagebox.askyesno("Cancel", "Stop the active job?"):
-                process.terminate()
-                status.set("Cancellation requested")
+        if process is None or process.poll() is not None:
+            return
+        command_name = command_for_running_job()
+        potentially_writing = command_name in POTENTIALLY_WRITING_OPERATIONS
+        cooperative = command_name in COOPERATIVE_STOP_OPERATIONS
+        message = ('Request a safe stop? The current write transaction must finish; '
+                   'DriveRepair will keep running until the engine acknowledges STOP.'
+                   if potentially_writing else 'Stop the active read-only job?')
+        if not messagebox.askyesno('Stop job', message):
+            return
+        if cooperative and process.stdin is not None:
+            try:
+                process.stdin.write('STOP\n')
+                process.stdin.flush()
+            except (BrokenPipeError, OSError, ValueError):
+                status.set('Stop channel unavailable; waiting for engine exit')
+            else:
+                status.set('Stop requested — waiting for the active I/O boundary')
+        elif potentially_writing:
+            messagebox.showwarning('Cannot force-stop a write',
+                'This operation has no verified cooperative stop. Keep DriveRepair open and '
+                'allow it to reach a safe completion boundary. Do not disconnect the drive.')
+        else:
+            process.terminate()
+            status.set('Read-only process termination requested; last I/O result unknown')
+
+    def command_for_running_job() -> str:
+        # This is the previously staged command, never the next workflow choice.
+        return active_command[0] if active_command else ''
 
     # --- Diagnose / rescue tab ---
     ttk.Label(tab_drive, text="External whole disks only. Prefer image rescue before any in-place work.",
@@ -1987,9 +2041,12 @@ def launch() -> None:
 
     def on_close() -> None:
         if process is not None and process.poll() is None:
-            if not messagebox.askyesno("Active job", "Cancel the running job and exit?"):
-                return
-            process.terminate()
+            # Never close the UI by killing an in-flight patient write. Even a
+            # cooperative STOP needs time for the active read/write to finish.
+            messagebox.showinfo('Job still active',
+                'Stop the job first and wait for the engine result before exiting. '
+                'Do not disconnect a device during a journaled transaction.')
+            return
         if poll_after_id is not None:
             try:
                 root.after_cancel(poll_after_id)

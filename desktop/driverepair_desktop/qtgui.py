@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 from .surface_map import SurfaceCoverage
+from .release_policy import PUBLIC_BETA_IMAGE_ONLY
 import sys
 import time
 
@@ -313,7 +314,9 @@ def launch():
             label=QLabel('DriveRepair')
             label.setObjectName('heading')
             brand.addWidget(label)
-            sub=QLabel('RECOVERY WORKSTATION  •  PRIVATE BY DESIGN')
+            sub=QLabel('PUBLIC BETA  •  IMAGE-FIRST / READ-ONLY PHYSICAL SCANS'
+                       if PUBLIC_BETA_IMAGE_ONLY else
+                       'RECOVERY WORKSTATION  •  ENGINEERING BUILD')
             sub.setObjectName('eyebrow')
             brand.addWidget(sub)
             header.addLayout(brand)
@@ -418,8 +421,14 @@ def launch():
             goals=QHBoxLayout()
             workflow.addLayout(goals)
             for title,goal in [('Fix my drive','carequick'),('Recover files','rescue'),('Check drive','scanquick')]:
+                if PUBLIC_BETA_IMAGE_ONLY and goal == 'carequick':
+                    title = 'Fix my drive (engineering only)'
                 b=QPushButton(title)
-                b.clicked.connect(lambda _,g=goal:self.select_goal(g))
+                if PUBLIC_BETA_IMAGE_ONLY and goal == 'carequick':
+                    b.setEnabled(False)
+                    b.setToolTip('Public beta offers image rescue and read-only diagnostics. Physical rewrites are disabled.')
+                else:
+                    b.clicked.connect(lambda _,g=goal:self.select_goal(g))
                 goals.addWidget(b)
             advanced=QLabel('Or choose a specific operation:')
             advanced.setObjectName('muted')
@@ -667,6 +676,11 @@ def launch():
             if self.proc and self.proc.state()!=QProcess.NotRunning:
                 return
             kind=self.job_box.currentData()
+            if PUBLIC_BETA_IMAGE_ONLY and kind in {'carefull', 'carequick', 'careresume'}:
+                QMessageBox.information(self, 'Public beta: image-first',
+                    'In-place physical-drive writes are disabled in this build. '
+                    'Select Check for a read-only scan, or Recover to a NEW image.')
+                return
             d=self.selected()
             if kind=='rescue':
                 src=self.dest.text().strip()
@@ -1010,26 +1024,18 @@ def launch():
         def closeEvent(self, event):
             if self.proc and self.proc.state()!=QProcess.NotRunning:
                 if self._last_job_kind in ('carefull','carequick','careresume'):
-                    QMessageBox.warning(self,'Write in progress',
-                        'Please keep DriveRepair open during the in-place transaction. '
-                        'The engine does not yet support verified cooperative write cancellation.')
-                    event.ignore()
-                    return
-                answer=QMessageBox.question(self,'Scan in progress',
-                    'Stop the read-only job and close the workstation?',
-                    QMessageBox.Yes | QMessageBox.No)
-                if answer!=QMessageBox.Yes:
-                    event.ignore()
-                    return
-                if self._last_job_kind in ('carefull','carequick','careresume'):
-                    self.proc.write(b'STOP\n')
-                    event.ignore()
-                    self.result.setText('Stop requested — waiting for safe transaction boundary')
-                    return
-                self.proc.terminate()
-                if not self.proc.waitForFinished(2500):
-                    self.proc.kill()
-                    self.proc.waitForFinished(1000)
+                    answer=QMessageBox.question(self,'Physical write may be in progress',
+                        'The active transaction cannot be forcibly interrupted safely. '
+                        'Request a cooperative stop and keep DriveRepair open until the engine finishes?',
+                        QMessageBox.Yes | QMessageBox.No)
+                else:
+                    answer=QMessageBox.question(self,'Job still running',
+                        'Request Stop and wait for the job result before closing?',
+                        QMessageBox.Yes | QMessageBox.No)
+                if answer==QMessageBox.Yes:
+                    self.stop_job()
+                event.ignore()
+                return
             event.accept()
 
         def stop_job(self):

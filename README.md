@@ -1,11 +1,50 @@
 # DriveRepair
 
-**Privacy-first disk diagnostics, image rescue, targeted file recovery, filesystem repair-on-clone, and experimental media maintenance.**
+**Drive diagnostics, image-first rescue, selective file extraction, clone-only filesystem repair and experimental original-media maintenance.** Privacy-first and local by default.
 
-**Current build: 0.3.3b13 / engineering beta candidate — NOT approved for public hardware-repair use.**
-The downloadable desktop program runs on Python 3.10+ with optional Tk GUI; a small, optional standalone Rust regular-image rescue core is being introduced. The original low-level Rust BIOS/UEFI boot code remains in `src/boot` but does not yet provide a validated system-recovery live environment.
+> **Current source baseline: 0.3.3b13, with post-b13 beta hardening (unreleased). Not approved for unrestricted physical-drive repair.** The supplied source archive is an engineering build. Only the separately built `-public-beta.pyz` package has in-place image/physical-drive writes disabled by distribution policy. Do not distribute the engineering zipapp/wheel as a public safety-qualified release.
 
-**If a drive contains irreplaceable data:** stop repeated scans/in-place writes. Image to healthy storage with a validated recovery tool or consult a professional. A rolling media-refresh journal is **not a full backup**.
+## Start here — choose the safest workflow
+
+| Your situation | Start with | What the result means |
+|---|---|---|
+| A drive is slow, unreadable or making errors | **Check drive** (read-only) and prioritize imaging to healthy storage | A completed read or green map cell does not prove correct files or a healthy drive |
+| You have a disk image and need another copy | **Recover files → Rescue image** (new destination) | The rescue map records readable and missing regions; an apparent full-size sparse file is not proof of recovery |
+| Files were deleted or a filesystem is damaged | Work from a **copy of the image** using FAT32/TSK/extraction or ext clone-repair tools | Results are limited, may be incomplete and do not guarantee original file contents |
+| You want to refresh/repair the original image or physical drive in place | **Not available in the public image-first build** | Engineering-only, requires an independent safety assessment and sacrificial hardware validation |
+
+### Installation and first run (Python 3.10+)
+
+The desktop interface uses Python, optional PySide6 (Qt UI), and a Tk fallback. **No native Windows/macOS/Linux installer or certified boot image is provided.** With Python installed, build the public image-first zipapp from a vetted source checkout:
+
+```sh
+python scripts/build_desktop.py --public-beta --no-wheel
+python dist/DriveRepair-0.3.3b13-public-beta.pyz gui
+```
+
+For a CLI image-only example, use a source **regular file** and an unused output path:
+
+```sh
+python dist/DriveRepair-0.3.3b13-public-beta.pyz scan-image --image source.img --mode triage --json
+python dist/DriveRepair-0.3.3b13-public-beta.pyz rescue-image --image source.img --output recovered.img --json
+python dist/DriveRepair-0.3.3b13-public-beta.pyz rescue-status --output recovered.img --json
+```
+
+Never use the patient disk as the recovery destination. If data is irreplaceable or hardware is rapidly failing, minimize further reads, prefer a validated imaging workflow, and consider a professional lab. No software can reliably reconstruct bytes never read or already overwritten.
+
+### Platform and capability status (not a certification)
+
+| Capability | Windows | Linux | macOS |
+|---|---|---|---|
+| Regular image scanning and image-based recovery | Implemented in Python; synthetic tests | Implemented; local synthetic tests | Implemented in Python; native execution unverified here |
+| Physical-drive inventory / read-only scan | Implementation present; USB/dock fault testing remains open | Implementation present; privileged device QA open | Discovery/read-only path present; native hardware QA open |
+| Physical in-place sector writes | Engineering-only, conservative locking; **public beta blocked** | Engineering-only, offline and journal prerequisites; **public beta blocked** | Disabled pending volume-lock qualification |
+| Standalone Rust core | Optional **regular-image rescue** backend only; OS parity not proven in this review | Optional regular-image rescue; Cargo build unavailable in this review | Optional source backend; OS parity not proven in this review |
+| UEFI/BIOS/ISO boot environment | Experimental source/recipe, not qualified | Experimental source/recipe, not qualified | Not a validated recovery environment |
+
+**Stop and recovery rules:** read-only Stop requests are honored at completed I/O boundaries; Windows/USB drivers can stall inside a kernel read. In-place operations never intentionally abort a transaction mid-write; a disk-backed journal holds only the active region, not a backup. Volatile RAM and hybrid modes cannot provide durable in-flight restoration. SMART HealthStatus lacking attributes is **UNKNOWN**, not a clean bill of health. A quick 10% sample is not whole-drive verification.
+
+**Build and release authority:** `docs/RELEASE_STATUS.md` is the current capability/release gate. The historical sections below document previous engineering changes and are **not** statements that those operations are public-ready. For exact incremental changes after b13 see `CHANGELOG.md` → Unreleased. No speed or recovery superiority over SpinRite, DiskGenius or Acronis has been independently benchmarked.
 
 ## Windows access and read-only Stop (0.3.3b13)
 

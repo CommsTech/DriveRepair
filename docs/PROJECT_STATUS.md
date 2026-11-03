@@ -1,3 +1,5 @@
+> **Historical snapshot (0.3.1b1, November 1).** This is retained for project history. For the current post-0.3.3b13 engineering candidate see [RELEASE_STATUS.md](RELEASE_STATUS.md) and [PUBLIC_BETA_GATES.md](PUBLIC_BETA_GATES.md).
+
 # Project status — November 1, 2026
 
 **Version:** 0.3.1b1 experimental engineering beta candidate, based on the supplied `DriveRepair-main(4).zip` snapshot.

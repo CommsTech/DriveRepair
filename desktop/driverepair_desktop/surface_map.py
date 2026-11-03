@@ -7,6 +7,7 @@ Memory is bounded for sequential passes by merging adjacent intervals.
 """
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass, field
 
 
@@ -17,10 +18,11 @@ class CoverageCell:
     intervals: list[tuple[int, int]] = field(default_factory=list)
     read_errors: int = 0
     slow_reads: int = 0
+    covered_bytes: int = 0
 
     @property
     def checked_bytes(self) -> int:
-        return sum(stop - start for start, stop in self.intervals)
+        return self.covered_bytes
 
     @property
     def fraction(self) -> float:
@@ -36,16 +38,22 @@ class CoverageCell:
             return
         if slow:
             self.slow_reads += 1
-        # Merge intersecting/adjacent ranges. Repeat probes never inflate coverage.
-        merged: list[tuple[int, int]] = []
-        for lo, hi in self.intervals:
-            if hi < start or stop < lo:
-                merged.append((lo, hi))
-            else:
-                start = min(start, lo)
-                stop = max(stop, hi)
-        merged.append((start, stop))
-        self.intervals = sorted(merged)
+        # Intervals remain sorted and disjoint. A binary insertion search plus
+        # localized merging avoids re-sorting the entire history at every read.
+        intervals = self.intervals
+        index = bisect_left(intervals, (start, -1))
+        if index and intervals[index - 1][1] >= start:
+            index -= 1
+        last = index
+        removed = 0
+        while last < len(intervals) and intervals[last][0] <= stop:
+            lo, hi = intervals[last]
+            start = min(start, lo)
+            stop = max(stop, hi)
+            removed += hi - lo
+            last += 1
+        intervals[index:last] = [(start, stop)]
+        self.covered_bytes += stop - start - removed
 
 
 class SurfaceCoverage:

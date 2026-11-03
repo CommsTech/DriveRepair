@@ -1,3 +1,13 @@
+# DriveRepair desktop — 0.3.3b13 + unreleased beta hardening
+
+**Recommended user path:** build the image-first public zipapp (`python scripts/build_desktop.py --public-beta --no-wheel`) and launch with `python dist/DriveRepair-0.3.3b13-public-beta.pyz gui`. It can scan physical drives read-only and work with regular image files, but denies in-place original-image and physical-drive writes in the embedded CLI policy. Use a separate healthy drive for rescue output. An accurate coverage map does not certify media or files.
+
+The Qt UI is optional (`pip install PySide6`); Tk is the fallback. Stop on scanning takes effect after a completed I/O; Stop on an in-place engineering write is cooperative and **never forcibly kills the active transaction**. A dead USB driver may prevent a timely stop. On macOS, physical raw writes remain disabled. Rust remains an optional regular-file image rescue core, not the primary GUI or a hardware-qualified engine. See `../docs/RELEASE_STATUS.md` for the current scope and unresolved gates.
+
+---
+
+## Historical engineering notes (retained)
+
 ## DriveRepair 0.3.3b13 — Windows inaccessible partitions and scan Stop
 
 See `../docs/WINDOWS_VOLUME_ACCESS_AND_STOP_0.3.3b13.md`.

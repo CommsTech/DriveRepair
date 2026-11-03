@@ -1,4 +1,8 @@
-# Public beta release gates — 0.3.1b1
+# Public beta release gates — post-0.3.3b13 (unreleased)
+
+**Current source status:** see [RELEASE_STATUS.md](RELEASE_STATUS.md). The historical gate details below remain requirements, not verified passes. The image-first public package now has a tested build-policy guard for raw physical writes, but the hardware, native GUI and signing gates remain open.
+
+**Public package policy gate:** verify `python scripts/build_desktop.py --public-beta --no-wheel`, then run direct CLI deny-path tests against the generated `.pyz` (`care-image`, `refresh-image`, `care-external`, `refresh-external`, `refresh-system`, `optimize-volume --execute`). This does not qualify an engineering wheel or source checkout for public distribution.
 
 **Decision: NOT READY FOR UNRESTRICTED PUBLIC BETA.** This package is suitable for controlled synthetic and nonvaluable image-based tests. The following work is NOT claimed complete:
 

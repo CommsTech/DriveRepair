@@ -36,6 +36,18 @@ class SurfaceMapTests(unittest.TestCase):
         self.assertEqual(coverage.checked_bytes, 45)
         self.assertAlmostEqual(coverage.coverage_pct, 4.5)
 
+    def test_intervals_remain_exact_under_reverse_and_duplicate_probes(self):
+        import random
+        coverage = SurfaceCoverage(4096, cells=1)
+        seen = set()
+        cases = [(i * 8, 8) for i in range(512)]
+        random.Random(1234).shuffle(cases)
+        for offset, length in cases + cases[::2]:
+            coverage.observe(offset, length)
+            seen.update(range(offset, offset + length))
+            self.assertEqual(coverage.checked_bytes, len(seen))
+        self.assertEqual(coverage.cells[0].intervals, [(0, 4096)])
+
     def test_large_drive_fixed_cell_bounds(self):
         coverage = SurfaceCoverage(10**12, cells=384)
         self.assertEqual(coverage.cells[0].start, 0)
