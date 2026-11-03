@@ -83,17 +83,31 @@ def estimated_job_percent(event: dict, *, guided: bool) -> float:
         return 75.0 + pct * 0.25
     return 0.0
 
+def _restrict_qt_debug_log_access(path: Path) -> None:
+    """Best-effort local privacy; chmod on POSIX only — Windows ACLs not claimed."""
+    try:
+        if os.name == 'posix':
+            os.chmod(path, 0o600)
+            if path.parent.exists():
+                os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
+
+
 def _qt_debug_log_path() -> Path | None:
-    """Optional durable mirror for Qt workstation diagnostics (Admin debug sessions)."""
+    """Optional local mirror for Qt workstation diagnostics (opt-in debug sessions).
+
+    Uses DRIVEREPAIR_GUI_DEBUG_LOG or a temp DriveRepair/debug directory — never a
+    hard-coded lab path. Logs may include device/I/O details; operator-managed retention.
+    """
+    import tempfile
     flag = os.environ.get('DRIVEREPAIR_GUI_DEBUG', '').strip().lower()
     if flag not in {'1', 'true', 'yes', 'on'}:
         return None
     stamp = time.strftime('%Y%m%dT%H%M%S')
     candidates = [
         Path(os.environ['DRIVEREPAIR_GUI_DEBUG_LOG']) if os.environ.get('DRIVEREPAIR_GUI_DEBUG_LOG') else None,
-        Path(r'D:\DriveRepairLab\seagate_st1000lm048_wipe_refresh_20261101') / f'gui_debug_{stamp}.log',
-        Path.home() / 'DriveRepairLab' / f'gui_debug_{stamp}.log',
-        Path(os.environ.get('TEMP', '.')) / f'DriveRepair_gui_debug_{stamp}.log',
+        Path(tempfile.gettempdir()) / 'DriveRepair' / 'debug' / f'gui_debug_{stamp}.log',
     ]
     for path in candidates:
         if path is None:
@@ -105,7 +119,9 @@ def _qt_debug_log_path() -> Path | None:
                     f'# DriveRepair Qt GUI debug start {time.strftime("%Y-%m-%dT%H:%M:%S")}\n'
                     f'# pid={os.getpid()} python={sys.executable}\n'
                     f'# argv={sys.argv!r}\n'
+                    f'# retention=operator-managed local file; unset DRIVEREPAIR_GUI_DEBUG to stop\n'
                 )
+            _restrict_qt_debug_log_access(path)
             print(f'[DriveRepair DEBUG] Qt logging to {path}', flush=True)
             return path
         except OSError:
@@ -672,6 +688,15 @@ def launch():
                 if kind=='health':
                     args=['health','--device',dev,'--json']
                 elif kind in {'scanquick','scanfull','resume'}:
+                    if kind=='scanquick':
+                        from .media_profiles import format_quick_preflight
+                        pre=QMessageBox.question(
+                            self,'Quick surface check preflight',
+                            format_quick_preflight(int(d.get('size_bytes') or 0)) +
+                            '\n\nRead-only diagnosis — not Quick Repair. Continue?',
+                            QMessageBox.Yes | QMessageBox.No)
+                        if pre!=QMessageBox.Yes:
+                            return
                     args=['scan','--device',dev,'--mode','full' if kind in ('scanfull','resume') else 'triage',
                           '--progress-jsonl','--cooperative-stop-stdin','--json']
                     if kind=='scanquick':
@@ -687,11 +712,21 @@ def launch():
                     if kind=='resume':
                         args+=['--resume-scan']
                 else:
+                    if kind=='carequick':
+                        from .media_profiles import format_quick_preflight
+                        pre=QMessageBox.question(
+                            self,'Quick Repair preflight',
+                            format_quick_preflight(int(d.get('size_bytes') or 0)) +
+                            '\n\nQuick Repair may rewrite slow-but-readable regions after exclusive volume lock. Continue?',
+                            QMessageBox.Yes | QMessageBox.No)
+                        if pre!=QMessageBox.Yes:
+                            return
                     answer=QMessageBox.question(self,'Experimental physical writes',
                         'DriveRepair can permanently damage data on a failing drive.\n\n'
                         'Only consistently readable regions are eligible. A RAM-only write has no crash recovery.\n\n'
-                        'For an external drive with a Windows letter, DriveRepair will attempt an exclusive '
-                        'lock and temporary dismount AFTER scanning, only if no files are in use. '
+                        'For an external drive with a Windows letter, DriveRepair attempts an exclusive '
+                        'lock and temporary dismount before the surface check when auto-lock is enabled, '
+                        'and again immediately before any rewrite, only if no files are in use. '
                         'It will not forcibly close applications or remove the drive letter permanently.\n\n'
                         'Continue to device confirmation?',
                         QMessageBox.Yes | QMessageBox.No)
@@ -904,8 +939,26 @@ def launch():
                     'Previously observed errors are retained in the log; unscanned ranges remain unknown. '
                     'A forced stop does not prove the pending Windows read completed.')
             elif exit_code==0:
-                self.result.setText('Job finished — review results')
-                self.explain.setText('A completed read or readback match is not proof of file integrity or restored lifespan.')
+                coverage=result.get('surface_coverage_pct')
+                if coverage is None and isinstance(result.get('scan'), dict):
+                    coverage=result['scan'].get('surface_coverage_pct')
+                coverage_txt=(f' Measured coverage ≈ {float(coverage):.1f}%.'
+                              if isinstance(coverage,(int,float)) else '')
+                status_code=str(result.get('status') or '')
+                if self._last_job_kind in ('scanquick','scanfull','resume') or 'surface_coverage_pct' in result:
+                    if status_code.startswith('completed_with_'):
+                        self.result.setText(f'Scan complete with findings ({status_code})')
+                    else:
+                        self.result.setText('Scan complete — diagnosis only')
+                    self.explain.setText(
+                        f'Read-only diagnosis finished.{coverage_txt} '
+                        'This is not Quick Repair and does not rewrite sectors. '
+                        'A completed read is not proof of file integrity.')
+                else:
+                    self.result.setText('Job finished — review results')
+                    self.explain.setText(
+                        f'A completed read or readback match is not proof of file integrity or restored lifespan.'
+                        f'{coverage_txt}')
             elif result.get('status') == 'repair_blocked_prewrite_access':
                 self.result.setText('Scan preserved — Windows blocked physical repair')
                 self.explain.setText(str(result.get('error') or 'No lockable volume handle')[:280] +

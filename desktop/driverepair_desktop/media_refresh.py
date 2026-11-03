@@ -98,6 +98,60 @@ def _windows_partition_skips_volume_lock(partition: dict) -> bool:
     return gpt in (msr, msr[1:-1])
 
 
+def _windows_partition_inventory(disk_number: int) -> list:
+    """Enumerate partitions/access paths for a physical disk (fail-closed)."""
+    import subprocess
+
+    script = (
+        f"$errs = @(); $parts = @(Get-Partition -DiskNumber {int(disk_number)} "
+        "-ErrorAction SilentlyContinue -ErrorVariable +errs); "
+        "if ($errs.Count -gt 0) { throw 'Unable to establish complete patient partition inventory' }; "
+        "@($parts | ForEach-Object { [pscustomobject]@{ PartitionNumber=$_.PartitionNumber; "
+        "Type=[string]$_.Type; GptType=[string]$_.GptType; Paths=@($_.AccessPaths) } }) | "
+        "ConvertTo-Json -Compress -Depth 4"
+    )
+    try:
+        completed = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, timeout=25,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        raise RuntimeError(f"Cannot enumerate all patient volume access paths: {exc}") from exc
+    if completed.returncode != 0:
+        err = (completed.stderr or completed.stdout or b"").decode("utf-8-sig", errors="replace").strip()
+        raise RuntimeError(
+            f"Cannot enumerate all patient volume access paths: {err or completed.returncode}"
+        )
+    raw = completed.stdout.decode("utf-8-sig").strip()
+    parsed = json.loads(raw) if raw and raw != "null" else []
+    if isinstance(parsed, dict):
+        parsed = [parsed]
+    if not isinstance(parsed, list):
+        raise RuntimeError('Unexpected Windows partition inventory')
+    return parsed
+
+
+def _windows_partition_lock_signature(partitions) -> tuple:
+    """Stable compare key for partition set + lockable paths (TOCTOU recheck)."""
+    if isinstance(partitions, dict):
+        partitions = [partitions]
+    rows = []
+    for partition in partitions or []:
+        if not isinstance(partition, dict):
+            raise RuntimeError('Unexpected Windows partition inventory')
+        paths = partition.get('Paths')
+        if not isinstance(paths, list):
+            raise RuntimeError('Cannot verify patient partition access paths; no physical writes permitted')
+        norm_paths = tuple(sorted(str(p) for p in paths if p not in (None, '')))
+        rows.append((
+            int(partition.get('PartitionNumber') or -1),
+            str(partition.get('Type') or ''),
+            str(partition.get('GptType') or '').casefold(),
+            norm_paths,
+        ))
+    return tuple(sorted(rows))
+
+
 def _windows_lock_paths(partitions, *, allow_mounted: bool) -> list[str]:
     """Choose one volume handle per partition; never force unknown mounts.
 
@@ -225,33 +279,17 @@ class WindowsReadWriter:
 
         A mounted directory junction or other unhandled access path is a hard
         stop. Merely checking drive letters does not prove a disk is idle.
+
+        After locks are held, the partition inventory is re-read once. A changed
+        partition set or access-path map aborts before the raw disk is opened.
+        This is still check-then-use: a race after the recheck remains possible
+        until Windows grants exclusive volume ownership for every path.
         """
         from ctypes import wintypes
-        import subprocess
 
         # SilentlyContinue: wiped RAW disks have zero partitions / access paths.
-        script = (
-            f"$errs = @(); $parts = @(Get-Partition -DiskNumber {int(disk_number)} "
-            "-ErrorAction SilentlyContinue -ErrorVariable +errs); "
-            "if ($errs.Count -gt 0) { throw 'Unable to establish complete patient partition inventory' }; "
-            "@($parts | ForEach-Object { [pscustomobject]@{ PartitionNumber=$_.PartitionNumber; "
-            "Type=[string]$_.Type; GptType=[string]$_.GptType; Paths=@($_.AccessPaths) } }) | "
-            "ConvertTo-Json -Compress -Depth 4"
-        )
-        try:
-            completed = subprocess.run(
-                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-                capture_output=True, timeout=25,
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
-            raise RuntimeError(f"Cannot enumerate all patient volume access paths: {exc}") from exc
-        if completed.returncode != 0:
-            err = (completed.stderr or completed.stdout or b"").decode("utf-8-sig", errors="replace").strip()
-            raise RuntimeError(
-                f"Cannot enumerate all patient volume access paths: {err or completed.returncode}"
-            )
-        raw = completed.stdout.decode("utf-8-sig").strip()
-        parsed = json.loads(raw) if raw and raw != "null" else []
+        parsed = _windows_partition_inventory(disk_number)
+        before = _windows_partition_lock_signature(parsed)
         volume_paths = _windows_lock_paths(parsed, allow_mounted=allow_mounted)
         FSCTL_LOCK_VOLUME = 0x00090018
         FSCTL_DISMOUNT_VOLUME = 0x00090020
@@ -273,6 +311,12 @@ class WindowsReadWriter:
             if not self.kernel.DeviceIoControl(handle, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0,
                                                ctypes.byref(returned), None):
                 raise RuntimeError(f"FSCTL_DISMOUNT_VOLUME failed for {path}")
+        # Fail closed if partitions appeared/changed while locks were acquired.
+        after = _windows_partition_lock_signature(_windows_partition_inventory(disk_number))
+        if after != before:
+            raise RuntimeError(
+                'Patient partition set changed during volume lock; refusing raw writes'
+            )
 
     def read_at(self, offset: int, count: int) -> bytes:
         from ctypes import wintypes
@@ -524,8 +568,13 @@ def _probe_adaptive_targets(
     slow_multiplier: float,
     auto_escalate: bool = True,
     progress: Callable[[dict], None] | None = None,
+    stop_requested: Callable[[], bool] | None = None,
 ) -> tuple[list[tuple[int, int]], dict]:
-    """Return slow-but-readable regions plus probe telemetry for Adaptive Refresh."""
+    """Return slow-but-readable regions plus probe telemetry for Adaptive Refresh.
+
+    Cooperative stop is checked between probes/escalations. An already-blocked
+    OS read cannot be interrupted from user-space.
+    """
     blocks = max(1, (size + chunk - 1) // chunk)
     n = min(samples, blocks)
     timings: list[tuple[int, int, float]] = []
@@ -534,6 +583,7 @@ def _probe_adaptive_targets(
     mechanical_alerts = 0
     extreme_streak = 0
     running_median = None
+    stopped = False
 
     def emit(**kwargs) -> None:
         if progress:
@@ -551,6 +601,9 @@ def _probe_adaptive_targets(
             return None, time.perf_counter() - started, _classify_os_error(exc)
 
     for i in range(n):
+        if stop_requested is not None and stop_requested():
+            stopped = True
+            break
         index = (i * (blocks - 1) // (n - 1)) if n > 1 else 0
         offset = index * chunk
         length = min(chunk, size - offset)
@@ -592,16 +645,44 @@ def _probe_adaptive_targets(
         if data is None:
             probe_failures += 1
             if auto_escalate and length > sector * 8:
-                escalations += _escalate_region(
-                    media, offset, length, sector, timings, emit
+                if stop_requested is not None and stop_requested():
+                    stopped = True
+                    break
+                added, escalate_stopped = _escalate_region(
+                    media, offset, length, sector, timings, emit,
+                    stop_requested=stop_requested,
                 )
+                escalations += added
+                if escalate_stopped:
+                    stopped = True
+                    break
             continue
         timings.append((offset, length, elapsed))
         if auto_escalate and thr_guess and elapsed >= max(thr_guess * 3, 0.2):
-            escalations += _escalate_region(
-                media, offset, length, sector, timings, emit
+            if stop_requested is not None and stop_requested():
+                stopped = True
+                break
+            added, escalate_stopped = _escalate_region(
+                media, offset, length, sector, timings, emit,
+                stop_requested=stop_requested,
             )
+            escalations += added
+            if escalate_stopped:
+                stopped = True
+                break
 
+    if stopped:
+        return [], {
+            "adaptive_samples_requested": samples,
+            "adaptive_samples_readable": len(timings),
+            "adaptive_probe_failures": probe_failures,
+            "adaptive_targets": 0,
+            "adaptive_escalations": escalations,
+            "adaptive_mechanical_alerts": mechanical_alerts,
+            "adaptive_median_seconds": None,
+            "adaptive_threshold_seconds": None,
+            "adaptive_probe_stopped": True,
+        }
     if not timings:
         return [], {
             "adaptive_samples_requested": samples,
@@ -651,13 +732,18 @@ def _escalate_region(
     sector: int,
     timings: list[tuple[int, int, float]],
     emit: Callable[..., None],
-) -> int:
-    """Deeper subdivision probe for slow/failed zones; adds readable sub-timings."""
+    stop_requested: Callable[[], bool] | None = None,
+) -> tuple[int, bool]:
+    """Deeper subdivision probe for slow/failed zones; adds readable sub-timings.
+
+    Returns (added_readable_subsamples, stopped). Stop is cooperative between
+    sub-reads only; a blocked OS read is not interruptible here.
+    """
     parts = 4
     sub = length // parts
     sub -= sub % sector
     if sub < sector * 8:
-        return 0
+        return 0, False
     emit(
         status="escalating",
         phase="escalate",
@@ -667,6 +753,8 @@ def _escalate_region(
     )
     added = 0
     for i in range(parts):
+        if stop_requested is not None and stop_requested():
+            return added, True
         off = offset + i * sub
         ln = sub if i < parts - 1 else (offset + length - off)
         ln -= ln % sector
@@ -689,7 +777,7 @@ def _escalate_region(
             emit(status="probing", offset=off, failed=True, latency_s=time.perf_counter() - started,
                  error_class=_classify_os_error(exc), force=True,
                  message=f"Escalate sub-read error @ {_fmt_offset(off)}")
-    return added
+    return added, False
 
 
 class JournalStore:
@@ -987,7 +1075,7 @@ def refresh_media(
             targets, probe_stats = _probe_adaptive_targets(
                 media, size=size, chunk=chunk, sector=sector, samples=adaptive_samples,
                 slow_multiplier=slow_multiplier, auto_escalate=auto_escalate,
-                progress=progress,
+                progress=progress, stop_requested=stop_requested,
             )
             probe_elapsed = round(time.monotonic() - probe_started, 3)
             meta["queue"] = [[offset, length] for offset, length in targets]
@@ -998,7 +1086,10 @@ def refresh_media(
         store.save_meta(meta)
 
     status = "completed"
-    if mode == "adaptive" and int(meta.get("adaptive_probe_failures") or 0):
+    if mode == "adaptive" and meta.get("adaptive_probe_stopped"):
+        # Stop during probing: no rewrite queue, no writes after stop.
+        status = "stopped_at_safe_boundary"
+    elif mode == "adaptive" and int(meta.get("adaptive_probe_failures") or 0):
         # Do not attempt destructive maintenance when the preliminary survey
         # already encountered unreadable regions. Rescue first.
         status = "aborted_probe_read_errors"

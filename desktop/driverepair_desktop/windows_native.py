@@ -13,7 +13,11 @@ import sys
 
 IOCTL_STORAGE_QUERY_PROPERTY = 0x002D1400
 IOCTL_DISK_GET_LENGTH_INFO = 0x0007405C
-BUS_NAMES = {1:'SCSI',3:'ATA',7:'USB',8:'RAID',10:'SAS',11:'SATA',17:'NVMe',18:'SCM',19:'UFS'}
+# STORAGE_BUS_TYPE subset; keep labels aligned with devices.canonicalize_windows_external_bus.
+BUS_NAMES = {
+    1: 'SCSI', 3: 'ATA', 4: '1394', 7: 'USB', 8: 'RAID', 10: 'SAS', 11: 'SATA',
+    12: 'SD', 13: 'MMC', 17: 'NVMe', 18: 'SCM', 19: 'UFS',
+}
 
 
 def _string(data: bytes, offset: int) -> str | None:

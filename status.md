@@ -1,19 +1,25 @@
-**0.3.3b13 ENGINEERING CANDIDATE: PRIVATE TESTS ONLY.** Windows volume-lock fail-closed + cooperative scan Stop. Not a public physical-repair release. See `docs/WINDOWS_VOLUME_ACCESS_AND_STOP_0.3.3b13.md`.
+**0.3.3b13 ENGINEERING CANDIDATE: PRIVATE TESTS ONLY.**
 
-# Status — 2026-11-02
+# Status — 2026-11-02 (evening)
 
-PRIVATE TEST — **0.3.3b13** partition-lock / scan-cancellation audit on disposable SanDisk 500GB USB SSD.
+## Code
+- PR **#173**: https://git.commsnet.org/commstech/DriveRepair/pulls/173 (`feature/issues-164-172-dock-preflight`)
+- Addresses forge **#164–#167, #170–#172**; defers **#168–#169**
+- Pushed for parallel developers; awaiting review/merge
 
-## Product
+## Dual USB dock matrix (elevated) — DONE
+Artifact: `D:\DriveRepairLab\...\prelease_summary_20261102T174954.md`
 
-- Version `0.3.3b13`: every enumerated partition needs a lockable Windows volume handle; RAW/unrecognized partitions block repair with `repair_blocked_prewrite_access` while preserving scan findings
-- Cooperative STOP for read-only `scan` / Qt escalation messaging
-- Prior: CIM/WMIC inventory + inventory-stable select fingerprints; Get-Disk write gate; bounded I/O / STOP (b12)
+| Patient | Result |
+|---|---|
+| SanDisk SSD | triage/STOP/busy-lock PASS; care `recovery_required` (no unsafe write) |
+| Seagate ST1000LM048 SMR | triage/STOP/NTFS PASS; care RAM **4 MiB rewritten+verified** (`partial_repair_unresolved_data`) |
 
-## Lab
+Health rows marked FAIL in summary were a PowerShell `ExitCode` read bug (JSON health OK).
 
-- Patient: SanDisk SDSSDH3 500G USB (sacrificial)
-- Journals: RAM-only (`--journal-backend memory`) for applicable write tests — no durable journal images on disk
-- Public release: **Blocked** pending Seagate ST1000LM048 elevated verify
+## Remaining before macOS
+1. Admin Qt GUI interactive pass (list / short job / Stop / results) both drives
+2. Confirm no leftover exclusive volume locks
+3. Merge #173; restore OpenClaw memory (pull `mxbai-embed-large`, Qdrant/Honcho reachability)
 
-Artifacts: `docs/releases/0.3.3b13/`
+OpenClaw memory write attempted; **index failed** (embeddings model missing). Local audit + agent-store note saved.

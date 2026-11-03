@@ -1306,6 +1306,28 @@ def _run_care(args) -> int:
         scan_started = time.monotonic()
         scan_rate = RateWindow(5)
         refresh_rate = RateWindow(5)
+        # Fail closed early when volumes cannot be locked: avoid a long quick
+        # scan that only discovers FSCTL_LOCK failure afterward. Locks are
+        # released immediately; run a separate read-only `scan` if surface
+        # evidence is still needed while the volume is busy.
+        if (is_hardware and not args.resume
+                and getattr(args, 'auto_lock_volumes', False)):
+            try:
+                probe = open_device_readwrite(selected, auto_lock_volumes=True)
+                probe.close()
+            except (OSError, RuntimeError, ValueError, PermissionError) as exc:
+                result = {
+                    'status': 'repair_blocked_prewrite_access',
+                    'scan': None,
+                    'repair_plan': None,
+                    'writes_performed': False,
+                    'error': str(exc)[:1200],
+                    'next_step': ('A Windows partition could not be exclusively locked before '
+                                  'the surface check. Close applications using the disk, then '
+                                  'retry; or run read-only `scan` separately for findings.'),
+                }
+                print(json.dumps(result, indent=2) if args.json else result, flush=True)
+                return 2
         if not args.resume:
             settings = tuned_scan(size=size, sector=sector, mode=args.mode,
                                   bus=selected.bus if is_hardware else '',

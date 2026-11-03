@@ -1,6 +1,9 @@
 # Architecture notes — 0.3.3b13 desktop
 
-1. **Windows volume lock** — before exclusive raw writes, every enumerated partition must expose a lockable volume GUID/letter; empty access paths and unrecognized partitions fail closed (`repair_blocked_prewrite_access`) without discarding the scan report.
-2. **Cooperative STOP** — read-only scan and care honor STOP at completed I/O boundaries; Qt escalates to terminate/force-kill only for stuck read-only children and never labels that as a completed repair.
-3. **Inventory vs write gate** — list/select use CIM/WMIC-first inventory (stable fingerprints); physical writes add `assert_windows_external_write_gate` (Get-Disk online/external) without replacing list fingerprints (USB Size disagreement).
-4. **Bounded investigation / media profiles / auto-lock** — retained from 0.3.3b8–b12.
+1. **Windows volume lock** — before exclusive raw writes, every enumerated partition must expose a lockable volume GUID/letter; empty access paths and unrecognized partitions fail closed (`repair_blocked_prewrite_access`) without discarding the scan report. GPT MSR (exact GUID) is skipped. After locks, partition inventory signature is re-read once; a changed set aborts before raw open (remaining TOCTOU documented).
+2. **Early auto-lock preflight** — `care-external --auto-lock-volumes` probes exclusive lock+dismount before the long surface check so busy volumes fail closed quickly; locks are released before the read-only scan/repair path continues when the probe succeeds.
+3. **Cooperative STOP** — read-only scan and care honor STOP at completed I/O boundaries, including between adaptive probe samples/escalations (blocked OS reads are not interruptible). Qt escalates to terminate/force-kill only for stuck read-only children and never labels that as a completed repair.
+4. **Inventory vs write gate** — list/select use CIM/WMIC-first inventory (stable fingerprints); native IOCTL fallback uses the same external-bus canonicalization as Get-Disk (`usb`/`1394`/`sd`/`mmc`/`thunderbolt`). Physical writes add `assert_windows_external_write_gate` without replacing list fingerprints (USB Size disagreement).
+5. **Carving** — signature hits are merged via a heap iterator so dense synthetic windows do not materialize+sort unbounded candidate lists.
+6. **GUI debug** — opt-in only; `DRIVEREPAIR_GUI_DEBUG_LOG` or temp `DriveRepair/debug` (no hard-coded lab path). POSIX chmod 0o600; Windows ACLs not claimed.
+7. **Bounded investigation / media profiles** — retained from 0.3.3b8–b12; quick preflight text exposes planned coverage at an assumed 120 MiB/s without promising duration or health.
