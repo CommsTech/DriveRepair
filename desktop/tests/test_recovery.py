@@ -6,7 +6,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from driverepair_desktop.recovery import rescue_reader
+from driverepair_desktop.recovery import (
+    _RESCUE_JOURNAL_CHECKPOINT_CHUNKS,
+    _extend_missing_ranges,
+    _merge_ranges,
+    _merge_sorted_range_lists,
+    rescue_reader,
+)
 
 
 class PatternReader:
@@ -205,6 +211,44 @@ class RecoveryTests(unittest.TestCase):
             '0x0' in combined or '(0)' in combined.replace(' ', ''),
             msg=combined,
         )
+
+    def test_extend_missing_ranges_coalesces_without_resort_of_history(self):
+        # 4096 already-sorted fragmented holes; append adjacent/overlapping additions.
+        accumulated = [[i * 4096, 512] for i in range(4096)]
+        added = [[0, 512], [512, 512], [4096 * 4095 + 512, 512]]
+        merged = _extend_missing_ranges(accumulated, added)
+        # Adjacent add at 512 coalesces into the first hole; last hole grows.
+        self.assertEqual(merged[0], [0, 1024])
+        self.assertEqual(merged[-1], [4096 * 4095, 1024])
+        self.assertEqual(len(merged), 4096)
+        # Same result as full re-merge, without requiring a full historical sort.
+        self.assertEqual(merged, _merge_ranges(accumulated + added))
+        again = _merge_sorted_range_lists(merged, [])
+        self.assertIs(again, merged)
+
+    def test_journal_checkpoint_batches_fsync_but_forces_on_stop(self):
+        fsync_calls = {'n': 0}
+        real_fsync = os.fsync
+
+        def counting_fsync(fd):
+            fsync_calls['n'] += 1
+            return real_fsync(fd)
+
+        chunks = _RESCUE_JOURNAL_CHECKPOINT_CHUNKS * 2 + 3  # 35 chunks
+        payload = self.raw * 8  # 64 KiB → 64 × 1 KiB chunks available
+        with patch('driverepair_desktop.recovery.os.fsync', side_effect=counting_fsync):
+            state = rescue_reader(
+                PatternReader(payload), size=len(payload), sector=512,
+                output=self.out, source_token='test-token-alpha', chunk=1024,
+                max_chunks=chunks,
+            )
+        self.assertEqual(state['status'], 'in_progress')
+        self.assertEqual(state['cursor'], chunks * 1024)
+        # Old path fsynced image + journal (~2+) every chunk. Batched path must
+        # be far lower while still forcing a final/stop checkpoint.
+        self.assertGreaterEqual(fsync_calls['n'], 2)
+        self.assertLess(fsync_calls['n'], chunks * 2)
+
 
 if __name__ == '__main__':
     unittest.main()
