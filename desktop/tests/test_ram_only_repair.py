@@ -168,13 +168,19 @@ class RamOnlyTests(unittest.TestCase):
               mock.patch.object(cli, 'try_health_snapshot', return_value=None),
               mock.patch.object(cli, 'scan_reader', return_value=report),
               contextlib.redirect_stdout(output)):
-            exit_code = run(['care-external', '--device', disk.id,
-                             '--mode','quick', '--journal-backend','memory',
-                             '--ack-volatile-journal', '--ack-risk',
-                             '--ack-destructive', '--ack-no-backup',
-                             '--ack-data-loss-risk', '--ack-usb-bridge-risk',
-                             '--ack-unvalidated-hardware', '--ack-unknown-health',
-                             '--confirm-identity', disk.fingerprint[:12], '--json'])
+            args = ['care-external', '--device', disk.id,
+                    '--mode','quick', '--journal-backend','memory',
+                    '--ack-volatile-journal', '--ack-risk',
+                    '--ack-destructive', '--ack-no-backup',
+                    '--ack-data-loss-risk', '--ack-usb-bridge-risk',
+                    '--ack-unvalidated-hardware', '--ack-unknown-health',
+                    '--confirm-identity', disk.fingerprint[:12], '--json']
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertNotEqual(run(args), 0)
+            self.assertEqual(fixture.writes, [])
+            output.seek(0)
+            output.truncate()
+            exit_code = run([*args, '--ack-dock-power-backed'])
         self.assertEqual(exit_code, 0)
         preflight.assert_not_called()
         self.assertEqual(fixture.writes, [(0, size)])

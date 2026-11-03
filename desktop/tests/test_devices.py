@@ -1,6 +1,7 @@
 import json
 import plistlib
 import unittest
+from unittest.mock import patch
 
 from driverepair_desktop.devices import (
     Device, assert_windows_external_write_gate, linux_devices, macos_devices,
@@ -111,12 +112,8 @@ class DiscoveryTests(unittest.TestCase):
             raise RuntimeError("full inventory should not be required")
 
         from driverepair_desktop import devices as devices_mod
-        original = devices_mod._run
-        devices_mod._run = run
-        try:
+        with patch.object(devices_mod, '_run', run), patch.object(devices_mod.sys, 'platform', 'win32'):
             selected = devices_mod.select_external_device("windows:PhysicalDrive2")
-        finally:
-            devices_mod._run = original
         self.assertEqual(selected.id, "windows:PhysicalDrive2")
         self.assertTrue(any("Index=2" in c for c in calls))
 
