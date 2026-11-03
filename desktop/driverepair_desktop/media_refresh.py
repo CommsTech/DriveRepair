@@ -93,9 +93,9 @@ _WINDOWS_MSR_GPT_TYPE = '{e3c9e316-0b5c-4db8-817d-f92df00215ae}'
 
 
 def _windows_partition_skips_volume_lock(partition: dict) -> bool:
-    kind = str(partition.get('Type') or '').strip().casefold()
     gpt = str(partition.get('GptType') or '').strip().casefold()
-    return kind == 'reserved' or gpt == _WINDOWS_MSR_GPT_TYPE.casefold()
+    msr = _WINDOWS_MSR_GPT_TYPE.casefold()
+    return gpt in (msr, msr[1:-1])
 
 
 def _windows_lock_paths(partitions, *, allow_mounted: bool) -> list[str]:
