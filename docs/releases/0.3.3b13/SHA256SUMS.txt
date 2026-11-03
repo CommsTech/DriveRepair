@@ -7,4 +7,3 @@
 724d217fc31daf333e44f1aba4a18cdda6c53a957850aa17fe3a9b57c589ef85  driverepair_desktop-0.3.3b13-py3-none-any.whl
 5900e228832f95293007da2e0a70b0dbfa1bf345090ea3830f1d9364d4cc2f3b  DriveRepair-0.3.3b13-public-beta.pyz
 fd901c1de0515245222c114a1cf2061216f53d573c9952cffbfbfd3e582c6cf6  DriveRepair-0.3.3b13.pyz
-fd901c1de0515245222c114a1cf2061216f53d573c9952cffbfbfd3e582c6cf6  SHA256SUMS.txt
