@@ -26,12 +26,31 @@ class WindowsUnmappedPartitionTests(unittest.TestCase):
             _windows_lock_paths([{'PartitionNumber': 3, 'Type': 'RAW', 'Paths': []}], allow_mounted=True)
 
     def test_gpt_msr_reserved_partition_does_not_block_lockable_ntfs(self):
-        paths = _windows_lock_paths([
-            {'PartitionNumber': 1, 'Type': 'Reserved', 'GptType': '{e3c9e316-0b5c-4db8-817d-f92df00215ae}',
-             'Paths': []},
-            {'PartitionNumber': 2, 'Type': 'Basic', 'Paths': ['E:\\']},
-        ], allow_mounted=True)
-        self.assertEqual(paths, ['\\\\.\\E:'])
+        for gpt in ('{e3c9e316-0b5c-4db8-817d-f92df00215ae}',
+                    'E3C9E316-0B5C-4DB8-817D-F92DF00215AE'):
+            with self.subTest(gpt=gpt):
+                paths = _windows_lock_paths([
+                    {'PartitionNumber': 1, 'Type': 'Reserved', 'GptType': gpt, 'Paths': []},
+                    {'PartitionNumber': 2, 'Type': 'Basic', 'Paths': ['E:\\']},
+                ], allow_mounted=True)
+                self.assertEqual(paths, ['\\\\.\\E:'])
+
+    def test_reserved_label_alone_cannot_bypass_volume_lock(self):
+        for gpt in ('', None, '{00000000-0000-0000-0000-000000000000}',
+                    '{e3c9e316-0b5c-4db8-817d-f92df00215ae'):
+            with self.subTest(gpt=gpt):
+                with self.assertRaisesRegex(RuntimeError, 'no accessible lockable Windows volume handle'):
+                    _windows_lock_paths([
+                        {'PartitionNumber': 1, 'Type': 'Reserved', 'GptType': gpt, 'Paths': []},
+                        {'PartitionNumber': 2, 'Type': 'Basic', 'Paths': ['E:\\']},
+                    ], allow_mounted=True)
+
+    def test_gpt_msr_with_access_path_still_fails_closed(self):
+        with self.assertRaisesRegex(RuntimeError, 'unexpectedly exposes AccessPaths'):
+            _windows_lock_paths([
+                {'PartitionNumber': 1, 'Type': 'Reserved',
+                 'GptType': '{e3c9e316-0b5c-4db8-817d-f92df00215ae}', 'Paths': ['E:\\']},
+            ], allow_mounted=True)
 
 
 class _StopAfterOneRead:
