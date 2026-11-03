@@ -122,5 +122,25 @@ class CarvingTests(unittest.TestCase):
         self.assertEqual(result['files'][0]['format'], 'doc')
         self.assertTrue(result['files'][0]['filename'].endswith('.doc'))
 
+    def test_dense_invalid_signatures_do_not_block_later_valid_file(self):
+        from driverepair_desktop.carving import _iter_signature_hits
+        # Many false JPEG SOI markers, then one real PNG past the dense prefix.
+        prefix = b'\xff\xd8' * 20000
+        original = tiny_png()
+        dense = prefix + original
+        hits = []
+        for start, fmt in _iter_signature_hits(('jpeg', 'png'), dense, 0):
+            hits.append((start, fmt))
+            if len(hits) > 20010:
+                break
+        self.assertEqual(hits[0], (0, 'jpeg'))
+        self.assertIn((len(prefix), 'png'), hits)
+        with open(self.image, 'wb') as f:
+            f.write(dense)
+        # formats=('png',) skips jpeg candidates entirely; proves later valid PNG still carved.
+        result = carve_image(self.image, self.out, formats=('png',), max_files=1, max_file_mib=1)
+        self.assertEqual(result['files_carved'], 1)
+        self.assertEqual(result['files'][0]['offset_bytes'], len(prefix))
+
 if __name__ == '__main__':
     unittest.main()

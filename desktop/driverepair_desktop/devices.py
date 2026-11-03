@@ -225,10 +225,10 @@ def _windows_devices_from_get_disk(run: Callable[..., bytes], number: int | None
         records = [records]
     devices: list[Device] = []
     for record in records or []:
-        bus = str(record.get("BusType") or "").lower()
+        bus = canonicalize_windows_external_bus(str(record.get("BusType") or ""))
         # Some PowerShell versions serialize BusType as an enum integer.
         # Only positively identified external buses are admitted.
-        if bus not in {"usb", "7", "1394", "4", "sd", "12", "mmc", "13"}:
+        if bus is None:
             continue
         if record.get("IsBoot") is not False or record.get("IsSystem") is not False:
             continue
@@ -247,18 +247,40 @@ def _windows_devices_from_get_disk(run: Callable[..., bytes], number: int | None
         path = rf"\\.\PhysicalDrive{number}"
         devices.append(Device(f"windows:PhysicalDrive{number}", path,
                               str(record.get("FriendlyName") or "External disk"),
-                              size, sector, "usb" if bus in {"usb", "7"} else bus,
+                              size, sector, bus,
                               str(record.get("SerialNumber") or record.get("UniqueId") or ""),
                               str(record.get("Location") or "").strip(), "Get-Disk"))
     return devices
 
 
+def canonicalize_windows_external_bus(raw: str | None) -> str | None:
+    """Map CIM / Get-Disk / native STORAGE bus labels onto one inventory bus string.
+
+    Internal and unknown buses return None (fail closed). Canonical values match
+    Get-Disk admission: usb, 1394, sd, mmc, thunderbolt.
+    """
+    key = str(raw or "").strip().lower()
+    if key.startswith("bus_type_"):
+        key = key[len("bus_type_"):]
+    mapping = {
+        "usb": "usb", "7": "usb",
+        "1394": "1394", "4": "1394", "firewire": "1394", "ieee1394": "1394",
+        "sd": "sd", "12": "sd",
+        "mmc": "mmc", "13": "mmc",
+        "thunderbolt": "thunderbolt",
+    }
+    return mapping.get(key)
+
+
 def _parse_usb_disk_records(records: list[dict]) -> list[Device]:
     devices: list[Device] = []
     for record in records or []:
-        iface = str(record.get("InterfaceType") or record.get("BusType") or "").upper()
-        # Conservative: only USB-attached whole disks.
-        if iface not in {"USB", "7"}:
+        bus = canonicalize_windows_external_bus(
+            str(record.get("InterfaceType") or record.get("BusType") or "")
+        )
+        # CIM/WMIC inventory stays USB-class only (SD/MMC typically appear as USB
+        # when docked). Get-Disk keeps the broader external set separately.
+        if bus != "usb":
             continue
         try:
             number = int(record.get("Index", record.get("Number")))
@@ -276,7 +298,7 @@ def _parse_usb_disk_records(records: list[dict]) -> list[Device]:
         model = str(record.get("Model") or record.get("FriendlyName") or "External USB disk").strip()
         serial = str(record.get("SerialNumber") or record.get("UniqueId") or "").strip()
         devices.append(Device(
-            f"windows:PhysicalDrive{number}", path, model, size, sector, "usb", serial, "", "legacy-inventory",
+            f"windows:PhysicalDrive{number}", path, model, size, sector, bus, serial, "", "legacy-inventory",
         ))
     return devices
 
@@ -395,9 +417,11 @@ def select_external_device(identifier: str,
             try:
                 from .windows_native import probe_physicaldrive
                 info = probe_physicaldrive(number)
-                bus = str(info.get('bus') or '').lower()
-                if bus not in {'usb', 'firewire', 'thunderbolt'} and not str(bus).startswith('bus_type_7'):
-                    raise RuntimeError(f'Native probe bus {bus!r} is not an external USB-class bus')
+                bus = canonicalize_windows_external_bus(str(info.get('bus') or ''))
+                if bus is None:
+                    raise RuntimeError(
+                        f"Native probe bus {info.get('bus')!r} is not a supported external bus"
+                    )
                 size = _positive_int(info.get('size_bytes'))
                 sector = _positive_int(info.get('logical_sector_bytes'), 512)
                 model = str(info.get('model') or f'PhysicalDrive{number}').strip()
@@ -406,7 +430,7 @@ def select_external_device(identifier: str,
                     raise RuntimeError('Native probe returned unusable geometry')
                 return Device(
                     identifier, rf'\\.\PhysicalDrive{number}', model, size, sector,
-                    'usb', serial, '', 'native-ioctl',
+                    bus, serial, '', 'native-ioctl',
                 )
             except (RuntimeError, OSError, ValueError, TypeError):
                 pass

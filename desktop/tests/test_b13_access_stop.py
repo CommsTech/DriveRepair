@@ -7,7 +7,10 @@ from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
 
-from driverepair_desktop.media_refresh import _windows_lock_paths
+from driverepair_desktop.media_refresh import (
+    ImageReadWriter, _probe_adaptive_targets, _windows_lock_paths,
+    _windows_partition_lock_signature, refresh_media,
+)
 from driverepair_desktop.stop_control import StopRequested
 from driverepair_desktop import cli
 
@@ -51,6 +54,74 @@ class WindowsUnmappedPartitionTests(unittest.TestCase):
                 {'PartitionNumber': 1, 'Type': 'Reserved',
                  'GptType': '{e3c9e316-0b5c-4db8-817d-f92df00215ae}', 'Paths': ['E:\\']},
             ], allow_mounted=True)
+
+    def test_partition_lock_signature_detects_new_partition(self):
+        before = [
+            {'PartitionNumber': 1, 'Type': 'Basic', 'GptType': '', 'Paths': ['E:\\']},
+        ]
+        after = before + [
+            {'PartitionNumber': 2, 'Type': 'Basic', 'GptType': '', 'Paths': ['F:\\']},
+        ]
+        self.assertNotEqual(
+            _windows_partition_lock_signature(before),
+            _windows_partition_lock_signature(after),
+        )
+        self.assertEqual(
+            _windows_partition_lock_signature(before),
+            _windows_partition_lock_signature(list(before)),
+        )
+
+
+class AdaptiveProbeStopTests(unittest.TestCase):
+    def test_probe_stops_between_samples_without_writes(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d, 'patient.img')
+            path.write_bytes(b'\x00' * (8 * 1024 * 1024))
+            media = ImageReadWriter(str(path))
+            try:
+                calls = {'n': 0}
+
+                def stop():
+                    calls['n'] += 1
+                    return calls['n'] >= 2
+
+                targets, stats = _probe_adaptive_targets(
+                    media, size=8 * 1024 * 1024, chunk=1024 * 1024, sector=512,
+                    samples=8, slow_multiplier=3.0, auto_escalate=False,
+                    stop_requested=stop,
+                )
+                self.assertEqual(targets, [])
+                self.assertTrue(stats.get('adaptive_probe_stopped'))
+            finally:
+                media.close()
+
+    def test_adaptive_refresh_stop_during_probe_performs_no_writes(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d, 'patient.img')
+            path.write_bytes(b'\x11' * (4 * 1024 * 1024))
+            reads = {'n': 0}
+
+            class Counting(ImageReadWriter):
+                def read_at(self, offset, count):
+                    reads['n'] += 1
+                    return super().read_at(offset, count)
+
+                def write_at(self, offset, data):
+                    raise AssertionError('write after cooperative probe stop')
+
+            counting = Counting(str(path))
+            try:
+                result = refresh_media(
+                    counting, size=4 * 1024 * 1024, sector=512,
+                    source_token='t', journal=str(Path(d, 'unused-journal')),
+                    chunk=1024 * 1024, mode='adaptive', adaptive_samples=8,
+                    auto_escalate=False, journal_backend='memory', verify=True,
+                    consistency_reads=2, stop_requested=lambda: reads['n'] >= 1,
+                )
+            finally:
+                counting.close()
+            self.assertEqual(result['status'], 'stopped_at_safe_boundary')
+            self.assertEqual(int(result.get('rewritten_bytes') or 0), 0)
 
 
 class _StopAfterOneRead:

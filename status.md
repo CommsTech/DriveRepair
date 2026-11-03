@@ -1,19 +1,22 @@
-**0.3.3b13 ENGINEERING CANDIDATE: PRIVATE TESTS ONLY.** Windows volume-lock fail-closed + cooperative scan Stop. Not a public physical-repair release. See `docs/WINDOWS_VOLUME_ACCESS_AND_STOP_0.3.3b13.md`.
+**0.3.3b13 ENGINEERING CANDIDATE: PRIVATE TESTS ONLY.** Not a public physical-repair release.
 
 # Status — 2026-11-02
 
-PRIVATE TEST — **0.3.3b13** partition-lock / scan-cancellation audit on disposable SanDisk 500GB USB SSD.
+## Product tip
 
-## Product
-
-- Version `0.3.3b13`: every enumerated partition needs a lockable Windows volume handle; RAW/unrecognized partitions block repair with `repair_blocked_prewrite_access` while preserving scan findings
-- Cooperative STOP for read-only `scan` / Qt escalation messaging
-- Prior: CIM/WMIC inventory + inventory-stable select fingerprints; Get-Disk write gate; bounded I/O / STOP (b12)
+- Synced `main` to `f0de381` (MSR GUID exact-match + portable CI fixture fixes)
+- Working branch `feature/issues-164-172-dock-preflight` addresses Gitea #164–#167, #170–#172
+- OpenClaw memory gateway unreachable from this host (Qdrant/Ollama/Honcho timeouts) — will retry write after hardware matrix
 
 ## Lab
 
-- Patient: SanDisk SDSSDH3 500G USB (sacrificial)
-- Journals: RAM-only (`--journal-backend memory`) for applicable write tests — no durable journal images on disk
-- Public release: **Blocked** pending Seagate ST1000LM048 elevated verify
+- Patients in USB dock: SanDisk PhysicalDrive2 (E: DRTEST500), Seagate PhysicalDrive3 ST1000LM048
+- Journals: RAM-only for write tests
+- Matrix script: `D:\DriveRepairLab\...\prelease_dual_drive_matrix.ps1` (fast busy-lock probe)
 
-Artifacts: `docs/releases/0.3.3b13/`
+## Gate before macOS
+
+1. Elevated dual-drive CLI matrix PASS
+2. Admin Qt GUI list/job/stop/results on both drives
+3. No leftover exclusive volume locks / no runaway Python after jobs
+4. Push reviewed fixes; close forge issues with PR links

@@ -4,7 +4,9 @@ import math
 import unittest
 from unittest import mock
 
-from driverepair_desktop.media_profiles import identify_profile, quick_coverage_plan, MIB
+from driverepair_desktop.media_profiles import (
+    identify_profile, quick_coverage_plan, format_quick_preflight, MIB,
+)
 from driverepair_desktop.guided_repair import tuned_scan, inspect_adjacent_regions
 from driverepair_desktop.scanner import scan_offsets, scan_reader
 from driverepair_desktop.adaptive_scan import calibrate_initial_read
@@ -75,6 +77,17 @@ class MediaProfileTests(unittest.TestCase):
         self.assertLessEqual(out['surface_coverage_pct'], 100.0)
         self.assertEqual(reader.writes, 0)
         self.assertEqual(out['unique_address_bytes'], out['attempted_bytes'])
+
+    def test_quick_preflight_covers_small_large_and_unknown_size(self):
+        small = format_quick_preflight(64 * MIB)
+        large = format_quick_preflight(10**12)
+        unknown = format_quick_preflight(None)
+        self.assertIn('10%', small)
+        self.assertIn('assumed 120 MiB/s', small)
+        self.assertIn('not a duration guarantee', large)
+        self.assertIn('capacity unknown', unknown)
+        self.assertNotIn('health certificate', unknown)  # only in sized path
+        self.assertIn('health certificate', small)
 
     def test_calibration_only_reads_and_bounds(self):
         reader = SyntheticReader(64*MIB)

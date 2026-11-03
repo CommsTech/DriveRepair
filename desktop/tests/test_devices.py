@@ -4,8 +4,8 @@ import unittest
 from unittest.mock import patch
 
 from driverepair_desktop.devices import (
-    Device, assert_windows_external_write_gate, linux_devices, macos_devices,
-    select_external_device, windows_devices,
+    Device, assert_windows_external_write_gate, canonicalize_windows_external_bus,
+    linux_devices, macos_devices, select_external_device, windows_devices,
 )
 
 
@@ -137,6 +137,27 @@ class DiscoveryTests(unittest.TestCase):
                    "usb", "0001", location="Bus 0 Port 1")
         self.assertEqual(a.fingerprint, b.fingerprint)
         self.assertEqual(a.fingerprint[:12], b.fingerprint[:12])
+
+    def test_canonicalize_windows_external_bus_aligns_cim_and_native_labels(self):
+        self.assertEqual(canonicalize_windows_external_bus('USB'), 'usb')
+        self.assertEqual(canonicalize_windows_external_bus('7'), 'usb')
+        self.assertEqual(canonicalize_windows_external_bus('bus_type_7'), 'usb')
+        self.assertEqual(canonicalize_windows_external_bus('SD'), 'sd')
+        self.assertEqual(canonicalize_windows_external_bus('12'), 'sd')
+        self.assertEqual(canonicalize_windows_external_bus('MMC'), 'mmc')
+        self.assertEqual(canonicalize_windows_external_bus('1394'), '1394')
+        self.assertEqual(canonicalize_windows_external_bus('firewire'), '1394')
+        self.assertIsNone(canonicalize_windows_external_bus('SATA'))
+        self.assertIsNone(canonicalize_windows_external_bus('NVMe'))
+        self.assertIsNone(canonicalize_windows_external_bus('bus_type_11'))
+
+    def test_native_and_cim_descriptions_share_fingerprint_when_bus_aligned(self):
+        cim = Device("windows:PhysicalDrive2", r"\\.\PhysicalDrive2", "Card",
+                     1048576, 512, "sd", "SER1", provenance="legacy-inventory")
+        native = Device("windows:PhysicalDrive2", r"\\.\PhysicalDrive2", "Card",
+                        1048576, 512, canonicalize_windows_external_bus("SD"),
+                        "SER1", provenance="native-ioctl")
+        self.assertEqual(cim.fingerprint, native.fingerprint)
 
 
 if __name__ == "__main__":

@@ -347,46 +347,72 @@ def _extension(fmt: str) -> str:
     }[fmt]
 
 
-def _signature_hits(formats: tuple[str, ...], buffer: bytes, base: int) -> list[tuple[int, str]]:
-    positions: list[tuple[int, str]] = []
+def _signature_scanners(formats: tuple[str, ...]) -> list[tuple[str, bytes, int]]:
+    """(format, needle, start_adjust) scanners for one window."""
+    scanners: list[tuple[str, bytes, int]] = []
     simple = (
         ('png', PNG_SIG),
         ('jpeg', JPG_SIG),
         ('pdf', PDF_SIG),
     )
     for fmt, sig in simple:
-        if fmt not in formats:
-            continue
-        pos = 0
-        while (pos := buffer.find(sig, pos)) >= 0:
-            positions.append((base + pos, fmt))
-            pos += 1
+        if fmt in formats:
+            scanners.append((fmt, sig, 0))
     ole_aliases = [f for f in ('ole', 'doc', 'xls') if f in formats]
     if ole_aliases:
         # One OLE hit is enough; classification picks doc/xls/ole later.
         fmt = 'doc' if 'doc' in ole_aliases else ('xls' if 'xls' in ole_aliases else 'ole')
-        # Prefer generic ole extraction path when multiple requested.
         if len(ole_aliases) > 1 or 'ole' in ole_aliases:
             fmt = 'ole'
-        pos = 0
-        while (pos := buffer.find(OLE_SIG, pos)) >= 0:
-            positions.append((base + pos, fmt))
-            pos += 1
+        scanners.append((fmt, OLE_SIG, 0))
     if 'mp4' in formats:
-        pos = 0
-        while (pos := buffer.find(FTYP_TAG, pos)) >= 0:
-            start = base + pos - 4
-            if start >= 0:
-                positions.append((start, 'mp4'))
-            pos += 1
+        scanners.append(('mp4', FTYP_TAG, -4))
     for fmt in ('docx', 'xlsx'):
-        if fmt not in formats:
-            continue
-        pos = 0
-        while (pos := buffer.find(ZIP_SIG, pos)) >= 0:
-            positions.append((base + pos, fmt))
+        if fmt in formats:
+            scanners.append((fmt, ZIP_SIG, 0))
+    return scanners
+
+
+def _iter_signature_hits(formats: tuple[str, ...], buffer: bytes, base: int):
+    """Yield signature hits in ascending offset order without materializing all matches.
+
+    Dense synthetic windows can contain hundreds of thousands of candidate
+    offsets per MiB; sorting a full materialization would OOM. Callers stop
+    after max_files successful extracts.
+    """
+    import heapq
+
+    def _next_hit(needle: bytes, adjust: int, from_pos: int) -> tuple[int, int] | None:
+        pos = from_pos
+        while True:
+            pos = buffer.find(needle, pos)
+            if pos < 0:
+                return None
+            start = base + pos + adjust
+            if start >= 0:
+                return start, pos + 1
             pos += 1
-    return positions
+
+    scanners = _signature_scanners(formats)
+    heap: list[tuple[int, int, str, int]] = []  # offset, scanner_idx, fmt, next_search
+    for idx, (fmt, needle, adjust) in enumerate(scanners):
+        hit = _next_hit(needle, adjust, 0)
+        if hit is not None:
+            start, nxt = hit
+            heapq.heappush(heap, (start, idx, fmt, nxt))
+    while heap:
+        start, idx, fmt, next_pos = heapq.heappop(heap)
+        yield start, fmt
+        needle, adjust = scanners[idx][1], scanners[idx][2]
+        hit = _next_hit(needle, adjust, next_pos)
+        if hit is not None:
+            nxt_start, nxt = hit
+            heapq.heappush(heap, (nxt_start, idx, fmt, nxt))
+
+
+def _signature_hits(formats: tuple[str, ...], buffer: bytes, base: int) -> list[tuple[int, str]]:
+    """Compatibility helper for tests; prefer _iter_signature_hits in carve loops."""
+    return list(_iter_signature_hits(formats, buffer, base))
 
 
 def carve_image(image: str, dest: str, *, formats: tuple[str, ...] = ('png', 'jpeg'),
@@ -428,7 +454,7 @@ def carve_image(image: str, dest: str, *, formats: tuple[str, ...] = ('png', 'jp
                 break
             buffer = tail + data
             base = cursor - len(tail)
-            for start, fmt in sorted(_signature_hits(formats, buffer, base)):
+            for start, fmt in _iter_signature_hits(formats, buffer, base):
                 if start in seen_offsets or len(results) >= max_files:
                     continue
                 seen_offsets.add(start)

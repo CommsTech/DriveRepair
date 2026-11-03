@@ -83,3 +83,23 @@ def quick_coverage_plan(size: int, chunk: int, *, fraction: float = 0.10) -> dic
     return {'samples': selected, 'requested_coverage_pct': fraction * 100,
             'planned_min_bytes': int(size * fraction), 'chunk': chunk,
             'estimated_min_read_seconds_at_120_mib_s': size * fraction / (120*MIB)}
+
+
+def format_quick_preflight(size: int | None, chunk: int = MIB, *, fraction: float = 0.10) -> str:
+    """Operator-facing preflight text. Never promises duration or drive health."""
+    if not size or size <= 0:
+        return ('Quick surface check: capacity unknown — planned coverage cannot be estimated. '
+                'Any time shown later is observed throughput, not a promise.')
+    plan = quick_coverage_plan(size, chunk, fraction=fraction)
+    planned = plan['planned_min_bytes']
+    seconds = plan['estimated_min_read_seconds_at_120_mib_s']
+    if planned >= MIB:
+        planned_txt = f'{planned / MIB:.1f} MiB'
+    else:
+        planned_txt = f'{planned} bytes'
+    return (
+        f'Quick surface check plans about {plan["requested_coverage_pct"]:.0f}% '
+        f'({planned_txt}, {plan["samples"]} samples). '
+        f'At an assumed 120 MiB/s this is roughly {seconds:.0f}s of reading — '
+        'not a duration guarantee and not a health certificate.'
+    )

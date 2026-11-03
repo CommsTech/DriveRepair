@@ -58,18 +58,36 @@ def _gui_debug_enabled() -> bool:
     return os.environ.get('DRIVEREPAIR_GUI_DEBUG', '').strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
+def _restrict_debug_log_access(path: Path) -> None:
+    """Best-effort local privacy for opt-in debug logs.
+
+    POSIX: chmod 0o600. Windows: ACL tightening is not claimed here; operators
+    should set DRIVEREPAIR_GUI_DEBUG_LOG to a private directory when needed.
+    """
+    try:
+        if os.name == 'posix':
+            os.chmod(path, 0o600)
+            if path.parent.exists():
+                os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
+
+
 def _open_gui_debug_log() -> Path | None:
-    """Mirror UI/engine diagnostics to a durable file when debug tracking is on."""
+    """Mirror UI/engine diagnostics to a local file when debug tracking is on.
+
+    Prefer an explicit path via DRIVEREPAIR_GUI_DEBUG_LOG; otherwise a per-user
+    temp directory. Never fall back to a hard-coded lab path.
+    """
     if not _gui_debug_enabled():
         return None
     import faulthandler
+    import tempfile
     faulthandler.enable(all_threads=True)
     stamp = time.strftime('%Y%m%dT%H%M%S')
     candidates = [
         Path(os.environ['DRIVEREPAIR_GUI_DEBUG_LOG']) if os.environ.get('DRIVEREPAIR_GUI_DEBUG_LOG') else None,
-        Path(r'D:\DriveRepairLab\seagate_st1000lm048_wipe_refresh_20261101') / f'gui_debug_{stamp}.log',
-        Path.home() / 'DriveRepairLab' / f'gui_debug_{stamp}.log',
-        Path(os.environ.get('TEMP', '.')) / f'DriveRepair_gui_debug_{stamp}.log',
+        Path(tempfile.gettempdir()) / 'DriveRepair' / 'debug' / f'gui_debug_{stamp}.log',
     ]
     for path in candidates:
         if path is None:
@@ -81,10 +99,13 @@ def _open_gui_debug_log() -> Path | None:
                     f'# DriveRepair GUI debug start {time.strftime("%Y-%m-%dT%H:%M:%S")}\n'
                     f'# pid={os.getpid()} python={sys.executable}\n'
                     f'# argv={sys.argv!r}\n'
+                    f'# retention=operator-managed local file; unset DRIVEREPAIR_GUI_DEBUG to stop\n'
                 )
+            _restrict_debug_log_access(path)
             latest = path.with_name('gui_debug_latest.log')
             try:
                 latest.write_text(f'active={path}\n', encoding='utf-8')
+                _restrict_debug_log_access(latest)
             except OSError:
                 pass
             print(f'[DriveRepair DEBUG] logging to {path}', flush=True)
@@ -920,6 +941,15 @@ def launch() -> None:
                 if dev not in inventory:
                     raise ValueError("Refresh disk inventory before selecting this patient")
                 mode = "quick" if kind == "sample" else "full"
+                if mode == "quick":
+                    from .media_profiles import format_quick_preflight
+                    size = getattr(inventory[dev], 'size_bytes', None)
+                    if not messagebox.askokcancel(
+                        'Quick Repair preflight',
+                        format_quick_preflight(size) +
+                        '\n\nQuick Repair then may rewrite slow-but-readable regions '
+                        '(destructive). Continue?'):
+                        return
                 volatile = quick_repair_storage.get().startswith('Volatile RAM')
                 journal = str(Path(journal_dir.get()).expanduser()) + (
                     f'-guided-{inventory[dev].fingerprint[:12]}-{time.time_ns()}')
@@ -944,6 +974,14 @@ def launch() -> None:
                        *flags, '--json'],
                       f'{mode.title()} scan + targeted in-place repair', risky=True, destructive=True)
             elif kind == "diagnose":
+                from .media_profiles import format_quick_preflight
+                size = getattr(inventory.get(dev), 'size_bytes', None) if dev in inventory else None
+                # Triage uses fewer samples than Quick Repair's ~10% plan; still show geometry estimate.
+                if not messagebox.askokcancel(
+                    'Read-only diagnosis preflight',
+                    format_quick_preflight(size) +
+                    '\n\nThis diagnosis path is read-only triage (not Quick Repair). Continue?'):
+                    return
                 start(["scan", "--device", dev, "--mode", "triage", "--json"],
                       "Read-only quick diagnosis", risky=True)
             elif kind == "benchmark":
@@ -1781,9 +1819,29 @@ def launch() -> None:
                         elapsed = float(v.get('elapsed_seconds') or 0)
                         if elapsed > 0 and int(v.get('recovered_bytes') or 0) > 0:
                             speed_var.set(f"{fmt_bytes(int(int(v['recovered_bytes']) / elapsed))}/s avg")
-                    is_scan = str(title).lower().find('scan') >= 0
-                    is_refresh = str(title).lower().find('refresh') >= 0
-                    if incomplete:
+                    job_status = str((last_result or {}).get('status') or '')
+                    title_l = str(title).lower()
+                    scan_statuses = job_status.startswith('completed_with_') or job_status in {
+                        'stopped_by_user', 'completed',
+                    }
+                    is_scan = (
+                        'diagnosis' in title_l
+                        or ('scan' in title_l and 'repair' not in title_l and 'refresh' not in title_l)
+                        or ('surface_coverage_pct' in (last_result or {}) and scan_statuses)
+                    )
+                    is_refresh = 'refresh' in title_l or 'in-place repair' in title_l
+                    coverage = (last_result or {}).get('surface_coverage_pct')
+                    coverage_txt = (
+                        f" Measured coverage ≈ {float(coverage):.1f}%."
+                        if isinstance(coverage, (int, float)) else ''
+                    )
+                    if incomplete and is_scan:
+                        warning_var.set(
+                            f'SCAN INCOMPLETE ({job_status or "unknown"}): findings may be partial.'
+                            f'{coverage_txt} This was diagnosis only — no recovery journal applies.'
+                        )
+                        warning_label.configure(fg=C['warn'])
+                    elif incomplete:
                         warning_var.set(
                             'INCOMPLETE IMAGE: some areas remain missing or unverified. Keep the recovery journal.'
                         )
@@ -1832,10 +1890,16 @@ def launch() -> None:
                         readiness = (last_result or {}).get('repair_readiness') or {}
                         blockers = readiness.get('blockers') or []
                         health = (last_result or {}).get('health') or {}
+                        findings = job_status.startswith('completed_with_')
                         warning_var.set(
-                            'DIAGNOSE ONLY — scan does not repair or rewrite sectors. '
-                            'Next: Rescue to a separate healthy image (safe), or In-place refresh '
-                            '(writes the patient; explicit risk acks required). '
+                            (
+                                f'SCAN COMPLETE WITH FINDINGS ({job_status}).{coverage_txt} '
+                                if findings else
+                                f'SCAN COMPLETE — no rewrite performed.{coverage_txt} '
+                            )
+                            + 'Read-only diagnosis is not Quick Repair (10% guided rewrite) '
+                            'and is not Full Repair. Next: Rescue to a separate healthy image, '
+                            'or an explicitly acknowledged in-place repair. '
                             + (
                                 'Blocked for repair triage: ' + '; '.join(blockers[:2])
                                 if blockers else
@@ -1844,7 +1908,7 @@ def launch() -> None:
                                 f"mechanical*={health.get('mechanical', '?')}."
                             )
                         )
-                        warning_label.configure(fg=C['warn'] if blockers else C['muted'])
+                        warning_label.configure(fg=C['warn'] if blockers or findings else C['muted'])
                     elif code == 0 and is_refresh:
                         warning_var.set(
                             'Refresh finished. Readback match is not restored lifespan; keep backups.'
