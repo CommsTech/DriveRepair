@@ -419,6 +419,8 @@ def parser() -> argparse.ArgumentParser:
                          help='Optional chassis IMU shock STOP (not platter wobble detection)')
         cmd.add_argument('--smart-deltas', action='store_true',
                          help='Record SMART counter deltas during the job as soft WATCH signals')
+        cmd.add_argument('--cooperative-stop-stdin', action='store_true',
+                         help='UI STOP line; stops only between committed transactions')
         cmd.add_argument('--json', action='store_true')
     cmd = sub.add_parser('ram-journal-check', help='Validate Linux RAM mount + local UPS/battery; READ-ONLY')
     cmd.add_argument('--journal', required=True, help='Proposed journal path under tmpfs/ramfs')
@@ -864,6 +866,7 @@ def _run_extras(args) -> int:
             result = {**result, "encryption_warnings": [f.public() for f in enc],
                       "guidance": encryption_guidance(enc)}
     elif args.command in {'refresh-image', 'refresh-external', 'refresh-system'}:
+        stop_control = StopControl(bool(getattr(args, 'cooperative_stop_stdin', False)))
         is_device = args.command != 'refresh-image'
         is_system = args.command == 'refresh-system'
         if args.consistency_reads < 2:
@@ -1072,7 +1075,7 @@ def _run_extras(args) -> int:
                 adaptive_samples=args.adaptive_samples, slow_multiplier=args.slow_multiplier,
                 journal_backend=args.journal_backend, auto_escalate=args.auto_escalate,
                 progress=check_progress, identity_check=identity_check,
-                pre_write_check=pre_write,
+                pre_write_check=pre_write, stop_requested=stop_control.requested,
             )
             result['sensors'] = sensors.public_summary()
             if not args.json:
@@ -1646,6 +1649,9 @@ def _scan_checkpoint_for(args, source_token: str, size: int, sector: int):
 def run(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
+        from .release_policy import block_public_physical_writes
+        block_public_physical_writes(args.command,
+                                     execute_optimization=bool(getattr(args, 'execute', False)))
         if args.command == 'inspect-storage':
             from .host_capabilities import inspect_readonly
             print(json.dumps(inspect_readonly(args.device),indent=2))

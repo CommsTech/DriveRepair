@@ -31,11 +31,15 @@ class SyntheticReader:
 
 class MediaProfileTests(unittest.TestCase):
     def test_seagate_model_confirmed_smr_even_with_usb(self):
-        for label in ('ST1000LM048', 'ST1000LM 048-2E7172'):
+        for label in ('ST1000LM048', 'ST1000LM 048-2E7172', 'ATA ST1000LM048'):
             p = identify_profile(model=label, bus='usb', sector=512)
             self.assertEqual(p.kind, 'smr')
             self.assertFalse(p.neighbor_rewrite)
             self.assertEqual(p.quick_fraction, .1)
+
+    def test_smr_model_prefix_is_not_authoritative(self):
+        for label in ('ST1000LM0480', 'ST1000LM048EXTRA', 'XXST1000LM048'):
+            self.assertEqual(identify_profile(model=label, bus='usb').kind, 'unknown')
 
     def test_usb_does_not_imply_cmr_or_ssd(self):
         p = identify_profile(model='mystery drive', bus='usb')

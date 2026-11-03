@@ -1,3 +1,31 @@
+# Changelog
+
+## Unreleased — post-0.3.3b13 image-first beta hardening (2026-11-02)
+
+These changes are made against the supplied 0.3.3b13 archive. **No new public version number, git tag, signed installer, or hardware qualification is claimed.** Historical release entries below are retained.
+
+### Safety, correctness and recovery
+
+- Add an explicitly selectable `--public-beta` zipapp build which embeds a **non-overridable distribution policy** blocking `care-image`, `refresh-image`, `care-external`, `refresh-external`, `refresh-system`, and `optimize-volume --execute` before any device access; the underlying image and physical-device writer constructors also deny access inside the public package. Engineering source and standard packages remain experimental and are **not** the public distribution.
+- Change Windows coarse `HealthStatus=Healthy` mapping from an implied media `OK` to `UNKNOWN` when SMART attributes are unavailable; actual reported failure/warnings remain visible.
+- Fix stale scan-checkpoint staging files blocking later saves by using uniquely named, fsynced temporary files and an atomic replace. Reject unaligned ranges in untrusted checkpoints.
+- Match documented SMR drive model part numbers at token boundaries rather than accepting arbitrary model-name prefixes; preserve conservative UNKNOWN for unidentified media.
+- Report refresh journal recovery capability separately: committed-boundary resume, in-flight crash restoration, and durable preimage. Hybrid/RAM backends must not be represented as crash-safe.
+- Add cooperative STOP support to `refresh-image`, `refresh-external` and `refresh-system`, honored only at the existing journal-safe transaction boundaries. Legacy Tk Stop and both GUIs' close actions no longer forcibly terminate active in-place writes.
+
+### Performance, UX and release quality
+
+- Maintain sorted, disjoint map intervals and cache exact covered bytes, avoiding repeated full interval sorting and recalculation during GUI redraws. No patient scan speedup or I/O improvement is claimed without hardware benchmarks.
+- Clarify read-only vs experimental write options in Qt/Tk and disable the Fix goal in the image-first public zipapp; present the build channel explicitly.
+- Add synthetic regression tests for the build policy, checkpoint interruption recovery, media classification, progress invariants, and stop control wiring.
+- Update canonical release status, public beta gates, README, desktop documentation, security policy and CI with explicit package deny-path checks. Retain historical engineering notes.
+
+### Unverified release gates
+
+Native Qt/Tk clickthrough and inaccessible-partition behavior on Windows, macOS discovery/safe read operations, physical HDD/SSD/SMR writes, USB unplug/power-loss, block-level lock/identity races, independent file-recovery corpora, Rust compilation/OS parity and competitor speed benchmarks require separate evidence. The image-first zipapp is a **candidate for review**, not an already-approved release.
+
+---
+
 ## 0.3.3b13 — Windows inaccessible partitions and cooperative read-only Stop
 
 - Preserve structured scan evidence when repair cannot exclusively lock Windows partition volumes.

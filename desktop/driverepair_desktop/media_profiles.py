@@ -37,13 +37,18 @@ def identify_profile(*, model: str = '', bus: str = '', media_type: str = '',
     """
     if sector <= 0 or sector & (sector - 1):
         raise ValueError('Invalid logical sector size')
-    model_id = re.sub(r'[^A-Z0-9]', '', model.upper())
+    # Match only a complete OEM part number (possibly after a vendor prefix),
+    # never a model family or an arbitrary longer suffix. Whitespace within a
+    # printed part number is tolerated, but firmware suffixes need boundaries.
+    model_id = re.sub(r'(?<=[A-Z0-9])\s+(?=[0-9])', '', model.upper().strip())
+    known_smr = any(re.search(rf'(?<![A-Z0-9]){part}(?![A-Z0-9])', model_id)
+                    for part in KNOWN_SMR_MODELS)
     bus_id = bus.strip().lower()
     recording_id = recording.strip().lower()
     medium = media_type.strip().lower()
     if recording_id not in {'', 'smr', 'cmr'}:
         raise ValueError('Unknown recording technology')
-    if recording_id == 'smr' or (not recording_id and any(model_id.startswith(m) for m in KNOWN_SMR_MODELS)):
+    if recording_id == 'smr' or (not recording_id and known_smr):
         kind, evidence = 'smr', ('confirmed recording' if recording_id else 'manufacturer model datasheet')
     elif recording_id == 'cmr':
         kind, evidence = 'cmr', 'confirmed recording'

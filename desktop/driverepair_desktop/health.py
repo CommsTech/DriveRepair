@@ -164,7 +164,9 @@ def media_from_smart(snapshot: dict | None) -> str:
     if status == "windows_health_warning":
         return "WARN"
     if status == "windows_health_limited":
-        return "OK"
+        # Windows Storage HealthStatus lacks SMART attributes. Even when it says
+        # 'Healthy', do not imply the medium passed an actual media-health check.
+        return "UNKNOWN"
     attrs = {
         int(item.get("id")): item.get("raw_value")
         for item in (snapshot.get("ata_selected_raw_attributes") or [])

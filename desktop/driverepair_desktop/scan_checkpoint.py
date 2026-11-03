@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import tempfile
 import time
 
 SCHEMA = 1
@@ -33,6 +34,8 @@ def load(path: str | Path, *, source_token: str, size: int, sector: int) -> dict
             data.get('source_token') != source_token or
             data.get('size') != size or data.get('sector') != sector):
         raise ValueError('Checkpoint does not match the freshly identified source')
+    if size <= 0 or sector <= 0 or size % sector:
+        raise ValueError('Invalid requested scan size or sector')
     state = data.get('state')
     if type(state) is not dict:
         raise ValueError('Invalid checkpoint state')
@@ -50,7 +53,8 @@ def load(path: str | Path, *, source_token: str, size: int, sector: int) -> dict
             if type(item) is not dict or type(item.get('offset')) is not int or \
                     type(item.get('length')) is not int or \
                     item['offset'] < 0 or item['length'] <= 0 or \
-                    item['offset'] + item['length'] > size:
+                    item['offset'] + item['length'] > size or \
+                    item['offset'] % sector or item['length'] % sector:
                 raise ValueError(f'Invalid checkpoint range in {name}')
     return state
 
@@ -77,14 +81,25 @@ class ScanCheckpoint:
         payload = json.dumps(doc, separators=(',', ':')).encode('utf-8')
         if len(payload) > 1024 * 1024:
             raise ValueError('Scan checkpoint limit exceeded')
-        tmp = self.path.with_suffix(self.path.suffix + '.pending')
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0), 0o600)
+        # A dead process may have left a .pending file. Never erase another
+        # process's checkpoint or follow a staged symlink: use a unique private
+        # temporary name, and replace only after its contents are durable.
+        fd, temporary_name = tempfile.mkstemp(prefix=self.path.name + '.pending-',
+                                              dir=self.path.parent)
+        tmp = Path(temporary_name)
         try:
             with os.fdopen(fd, 'wb') as handle:
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
+            if self.path.is_symlink():
+                raise ValueError('Unsafe checkpoint destination')
             os.replace(tmp, self.path)
+            if os.name == 'posix':
+                directory_fd = os.open(self.path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
         finally:
-            if tmp.exists():
-                tmp.unlink()
+            tmp.unlink(missing_ok=True)

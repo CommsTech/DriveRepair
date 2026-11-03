@@ -32,6 +32,7 @@ from typing import Callable, Protocol
 from .compat import binary_open_flags, pwrite
 from .devices import Device
 from .recovery import _merge_ranges, _state_save
+from . import release_policy
 
 STATE_SAVED = "SAVED"
 STATE_WRITING = "WRITING"
@@ -53,6 +54,7 @@ class ImageReadWriter:
     """Regular-file media for synthetic validation and fault injection."""
 
     def __init__(self, path: str) -> None:
+        release_policy.assert_image_patient_writer_available()
         candidate = path.replace("\\", "/")
         real = os.path.realpath(path).replace("\\", "/")
         if (
@@ -221,6 +223,7 @@ class WindowsReadWriter:
     """Win32 physical-drive RW handle with write-through."""
 
     def __init__(self, device: Device, *, defer_raw_open: bool = False) -> None:
+        release_policy.assert_raw_device_writer_available()
         if sys.platform != "win32" or not device.path.startswith("\\\\.\\PhysicalDrive"):
             raise ValueError("Not a Windows physical drive")
         from ctypes import wintypes
@@ -353,6 +356,7 @@ class WindowsReadWriter:
 
 class UnixReadWriter:
     def __init__(self, device: Device) -> None:
+        release_policy.assert_raw_device_writer_available()
         if not device.path.startswith("/dev/"):
             raise ValueError("Refusing a non-device path")
         flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_SYNC", 0)
@@ -366,6 +370,10 @@ class UnixReadWriter:
                 raise ValueError("Selected device is not a block device")
             if sys.platform == "darwin" and not stat.S_ISCHR(st.st_mode):
                 raise ValueError("Selected device is not a raw character device")
+            # Refuse path re-enumeration between OS handle open and validation.
+            # This is only a race guard; it is NOT proof of model/serial identity.
+            if os.stat(device.path).st_rdev != st.st_rdev:
+                raise RuntimeError('Patient device path changed while opening writer')
         except BaseException:
             os.close(self.fd)
             raise
@@ -384,6 +392,7 @@ class UnixReadWriter:
 
 
 def open_device_readwrite(device: Device, *, auto_lock_volumes: bool = False) -> ReadWriter:
+    release_policy.assert_raw_device_writer_available()
     if sys.platform == "win32":
         media = WindowsReadWriter(device, defer_raw_open=True)
         number = int(device.path.rsplit("PhysicalDrive", 1)[-1])
@@ -1260,7 +1269,12 @@ def refresh_media(
         "journal": None if store.backend == "memory" else store.journal_dir,
         "journal_backend": journal_backend,
         "volatile_ram_only": journal_backend == "memory",
-        "resume_possible_after_exit": journal_backend != "memory",
+        # Hybrid keeps the in-flight preimage in RAM: metadata may resume
+        # at committed boundaries, but cannot restore a torn current region.
+        "resume_possible_after_exit": journal_backend in {'disk', 'ramdisk'},
+        "resume_at_committed_boundary": journal_backend != 'memory',
+        "recover_inflight_region_after_crash": journal_backend == 'disk',
+        "preimage_durable": journal_backend == 'disk',
         "cursor": meta.get("cursor"),
         "queue_remaining": len(meta.get("queue") or []),
         "target_count": meta.get("target_count", 0),

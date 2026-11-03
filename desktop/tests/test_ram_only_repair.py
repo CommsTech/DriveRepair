@@ -161,6 +161,7 @@ class RamOnlyTests(unittest.TestCase):
         with (mock.patch.object(cli, 'select_external_device', return_value=disk),
               mock.patch.object(cli, 'list_external_devices', return_value=[disk]),
               mock.patch.object(cli, 'assert_patient_idle_windows'),
+              mock.patch.object(cli, 'assert_windows_external_write_gate'),
               mock.patch.object(cli, '_verify_linux_patient_not_in_use'),
               mock.patch.object(cli, '_validate_live_refresh_preflight') as preflight,
               mock.patch.object(cli, 'open_device_readonly', return_value=fixture),

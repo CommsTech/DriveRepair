@@ -79,7 +79,7 @@ class HealthTests(unittest.TestCase):
                 snap = try_health_snapshot(device, run=runner)
         self.assertIsNotNone(snap)
         self.assertEqual(snap['status'], 'windows_health_limited')
-        self.assertEqual(media_from_smart(snap), 'OK')
+        self.assertEqual(media_from_smart(snap), 'UNKNOWN')
         self.assertEqual(snap['source'], 'windows_storage_healthstatus')
 
 if __name__ == '__main__':

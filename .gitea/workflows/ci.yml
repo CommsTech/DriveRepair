@@ -85,6 +85,12 @@ jobs:
       - name: Smoke check portable desktop build
         run: python scripts/build_desktop.py --no-wheel
 
+      - name: Build image-first public candidate and verify raw-write deny paths
+        run: |
+          python scripts/build_desktop.py --public-beta --no-wheel
+          VERSION=$(python -c 'from scripts.build_desktop import VERSION; print(VERSION)')
+          python scripts/check_public_beta.py "dist/DriveRepair-${VERSION}-public-beta.pyz"
+
       - name: Portable GUI to recovery engine image test
         run: |
           VERSION=$(python -c 'from scripts.build_desktop import VERSION; print(VERSION)')

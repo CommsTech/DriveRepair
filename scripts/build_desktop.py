@@ -5,6 +5,7 @@ All build/test steps operate on files and synthetic fixtures; never touch disks.
 """
 import argparse
 import hashlib
+import re
 import shutil
 import subprocess
 import sys
@@ -14,7 +15,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 DESKTOP = REPO / 'desktop'
-VERSION = '0.3.3b13'
+# Packaging version follows the desktop project metadata, avoiding CI artifact drift.
+_project_meta = (DESKTOP / 'pyproject.toml').read_text(encoding='utf-8')
+_version_match = re.search(r'^version\s*=\s*"([^"]+)"', _project_meta, re.MULTILINE)
+if _version_match is None:
+    raise RuntimeError('Missing desktop project version')
+VERSION = _version_match.group(1)
 
 
 def command(args: list[str], cwd: Path = DESKTOP) -> None:
@@ -22,7 +28,7 @@ def command(args: list[str], cwd: Path = DESKTOP) -> None:
     subprocess.run(args, cwd=cwd, check=True)
 
 
-def build(include_wheel: bool = True) -> list[Path]:
+def build(include_wheel: bool = True, *, public_beta: bool = False) -> list[Path]:
     dist = REPO / 'dist'
     dist.mkdir(exist_ok=True)
     command([sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-v'])
@@ -32,12 +38,19 @@ def build(include_wheel: bool = True) -> list[Path]:
         payload = Path(temporary)
         shutil.copytree(DESKTOP / 'driverepair_desktop', payload / 'driverepair_desktop',
                         ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-        outfile = dist / f'DriveRepair-{VERSION}.pyz'
+        if public_beta:
+            policy_file = payload / 'driverepair_desktop' / 'release_policy.py'
+            current = policy_file.read_text(encoding='utf-8')
+            marker = 'PUBLIC_BETA_IMAGE_ONLY = False'
+            if current.count(marker) != 1:
+                raise RuntimeError('Public beta policy marker missing or ambiguous')
+            policy_file.write_text(current.replace(marker, 'PUBLIC_BETA_IMAGE_ONLY = True'), encoding='utf-8')
+        outfile = dist / f'DriveRepair-{VERSION}{"-public-beta" if public_beta else ""}.pyz'
         zipapp.create_archive(payload, outfile, interpreter='/usr/bin/env python3',
                               main='driverepair_desktop.cli:main', compressed=True)
         outputs.append(outfile)
     command([sys.executable, str(outputs[0]), '--help'], cwd=REPO)
-    if include_wheel:
+    if include_wheel and not public_beta:
         command([sys.executable, '-m', 'pip', 'wheel', '.', '--no-deps',
                  '--no-build-isolation', '-w', str(dist)])
         outputs.extend(dist.glob(f'driverepair_desktop-{VERSION}-*.whl'))
@@ -49,7 +62,9 @@ def build(include_wheel: bool = True) -> list[Path]:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--public-beta', action='store_true',
+                        help='Build image-first zipapp with all in-place patient writes disabled')
     parser.add_argument('--no-wheel', action='store_true',
                         help='Build zipapp only when Python wheel build tooling is unavailable')
     opts = parser.parse_args()
-    build(not opts.no_wheel)
+    build(not opts.no_wheel, public_beta=opts.public_beta)
