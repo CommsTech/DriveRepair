@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased — Qt workstation and evidence-driven rescue refinement (2026-11-18)
+
+- The **Rescue data** goal defaults to copying a selected external drive to a new,
+  separate image with explicit read-risk confirmation. Image-to-image rescue is
+  retained as a second operation; public builds still block in-place writes.
+- Refresh the Qt workstation's three-stage hierarchy, scrollable sizing,
+  active goal selection, focus/accessibility styling, journal-driven progress,
+  copy-throughput counters, and coarse rescued/missing/unknown map. No invented
+  physical-sector health claims or false retry-pass 100%.
+- Targeted rescue retry now isolates failing chunk requests into logical-sector
+  ranges; allows 0–2 additional bounded attempts per failing sector; requires
+  two identical reads to accept data newly recovered during retry; otherwise
+  leaves an unresolved hole in the persistent map. No neural model or synthetic
+  sector bytes are supplied.
+- Explicitly prioritize repeatable recovered read-error candidates and then
+  worst observed slow regions when limiting an experimental targeted rewrite
+  batch. Final queue retains offset order; independent read/lock/identity and
+  journaling rules are unchanged.
+- Add fault-injection regressions for transient failures, disagreeing sector
+  reads, finite retry counts, retry phase percentage and selection priority.
+  No physical disk read/write validation is claimed.
+
 ## Unreleased — post-0.3.3b13 image-first beta hardening (2026-11-02)
 
 These changes are made against the supplied 0.3.3b13 archive. **No new public version number, git tag, signed installer, or hardware qualification is claimed.** Historical release entries below are retained.

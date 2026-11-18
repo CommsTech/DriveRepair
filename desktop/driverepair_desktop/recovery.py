@@ -329,7 +329,8 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
                   max_failed_reads: int = 4096,
                   resume: bool = False, retry_missing: bool = False,
                   progress: Callable[[dict], None] | None = None,
-                  max_chunks: int | None = None) -> dict:
+                  max_chunks: int | None = None,
+                  retry_sector_attempts: int = 1) -> dict:
     """Rescue readable data to image; no writes to reader/source.
 
     Recovered means OS returned all requested bytes, not that bytes match
@@ -337,7 +338,8 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
     """
     if (size <= 0 or sector <= 0 or size % sector or chunk < sector or
             chunk % sector or chunk > 64 * 1024 * 1024 or
-            not 1 <= max_failed_reads <= 100000 or not source_token):
+            not 1 <= max_failed_reads <= 100000 or not source_token or
+            type(retry_sector_attempts) is not int or not 0 <= retry_sector_attempts <= 2):
         raise ValueError('Invalid size, alignment, chunk, source token or failure budget')
     output = _safe_path(output)
     journal = output + '.rescue.json'
@@ -375,6 +377,7 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
         if retry_missing:
             if 'retry_pending_ranges' not in state:
                 state['retry_pending_ranges'] = state['missing_ranges']
+                state['retry_total_bytes'] = sum(n for _, n in state['retry_pending_ranges'])
                 state['missing_ranges'] = []
                 state['status'] = 'retry_in_progress'
                 _state_save(journal, state)
@@ -389,33 +392,44 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
             segments: list[tuple[int, bytes]] = []
             def recover(start: int, n: int) -> None:
                 nonlocal attempts
-                try:
-                    got = reader.read_at(start, n)
-                    if len(got) == n:
+                # Full-size reads are intentionally attempted only ONCE on the
+                # fast first pass. When retrying, split failed requests to
+                # isolate recoverable sectors without rewriting the patient.
+                # Require a fresh identical read for recovered retry ranges:
+                # repeatability is NOT a source checksum or a neural guess.
+                tries = (1 + retry_sector_attempts if retry_missing and n == sector else 1)
+                for attempt in range(tries):
+                    try:
+                        got = reader.read_at(start, n)
+                        if len(got) != n:
+                            raise OSError(errno.EIO, f'short read: {len(got)} of {n}')
+                        if retry_missing:
+                            check = reader.read_at(start, n)
+                            if len(check) != n or got != check:
+                                state['inconsistent_retry_reads'] = (int(
+                                    state.get('inconsistent_retry_reads', 0)) + 1)
+                                raise OSError(errno.EIO, 'Non-repeatable rescue bytes')
                         segments.append((start, got))
                         return
-                    raise OSError(errno.EIO, f'short read: {len(got)} of {n}')
-                except OSError as exc:
-                    if exc.errno in _FATAL:
-                        raise
-                    attempts += 1
-                    if attempts + state['failed_read_attempts'] > max_failed_reads:
-                        raise RuntimeError('Read error limit exceeded; progress journal preserved')
-                    # Fast first pass: intentionally no sleep/backoff — burning
-                    # patient lifetime isolating every bad sector is worse than
-                    # marking the chunk unknown and finishing readable regions.
-                    # Targeted --retry-missing does binary-split isolation with a
-                    # short backoff so USB bridges can settle between halves.
-                    if not retry_missing or n <= sector:
-                        new_missing.append([start, n])
-                        return
-                    half = ((n // sector) // 2) * sector
-                    if half <= 0:
-                        half = sector
-                    time.sleep(0.005)
-                    recover(start, half)
-                    time.sleep(0.005)
-                    recover(start + half, n - half)
+                    except OSError as exc:
+                        if exc.errno in _FATAL:
+                            raise
+                        attempts += 1
+                        if attempts + state['failed_read_attempts'] > max_failed_reads:
+                            raise RuntimeError('Read error limit exceeded; progress journal preserved')
+                        if attempt + 1 < tries:
+                            # Bounded retries only at a single logical sector;
+                            # NEVER spin on a stalled USB or failing controller.
+                            time.sleep(min(0.025, 0.005 * (attempt + 1)))
+                if not retry_missing or n <= sector:
+                    new_missing.append([start, n])
+                    return
+                half = ((n // sector) // 2) * sector
+                if half <= 0:
+                    half = sector
+                time.sleep(0.005)
+                recover(start, half)
+                recover(start + half, n - half)
             recover(offset, length)
             for start, data in segments:
                 _write_all(fd, data, start)
@@ -471,7 +485,8 @@ def rescue_reader(reader: Reader, *, size: int, sector: int, output: str,
                   max_failed_reads: int = 4096,
                   resume: bool = False, retry_missing: bool = False,
                   progress: Callable[[dict], None] | None = None,
-                  max_chunks: int | None = None) -> dict:
+                  max_chunks: int | None = None,
+                  retry_sector_attempts: int = 1) -> dict:
     """Rescue with exclusive OS lock to prevent concurrent output/map writers."""
     with _rescue_writer_lock(output):
         return _rescue_reader_locked(
@@ -479,5 +494,5 @@ def rescue_reader(reader: Reader, *, size: int, sector: int, output: str,
             source_token=source_token, chunk=chunk,
             max_failed_reads=max_failed_reads, resume=resume,
             retry_missing=retry_missing, progress=progress,
-            max_chunks=max_chunks,
+            max_chunks=max_chunks, retry_sector_attempts=retry_sector_attempts,
         )

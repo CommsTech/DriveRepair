@@ -52,6 +52,14 @@ def progress_percent(event: dict, disk_size: int = 0) -> float:
     A quick scan's 100% means all planned sample probes, NOT all LBAs.
     A refresh's 100% means all approved write transactions, NOT full-drive repair.
     """
+    if event.get('workflow') == 'rescue':
+        if str(event.get('phase', '')).upper() == 'RETRY':
+            retry_total = int(event.get('retry_total_bytes') or 0)
+            if retry_total > 0:
+                remaining = min(retry_total, max(0, int(event.get('retry_remaining_bytes') or 0)))
+                return 100.0 * (retry_total - remaining) / retry_total
+        total = int(event.get('total_bytes') or 0)
+        return max(0.0, min(100.0, 100.0 * int(event.get('processed_bytes') or 0) / total)) if total else 0.0
     for done_key,total_key in (('refresh_index','refresh_total'), ('probe_index','probe_total')):
         if event.get(done_key) is not None and event.get(total_key):
             return max(0.0, min(100.0, 100.0 * float(event[done_key]) / float(event[total_key])))
@@ -136,7 +144,7 @@ def launch():
         from PySide6.QtGui import QColor, QFont, QPainter
         from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
             QLabel, QPushButton, QFrame, QProgressBar, QComboBox, QLineEdit, QFileDialog,
-            QPlainTextEdit, QMessageBox, QCheckBox, QToolButton)
+            QPlainTextEdit, QMessageBox, QCheckBox, QToolButton, QScrollArea)
     except ImportError as exc:
         raise RuntimeError('Qt workstation requires the optional PySide6 package: python -m pip install PySide6') from exc
 
@@ -153,18 +161,23 @@ def launch():
         except OSError:
             pass
 
-    C = {'bg':'#0a111e','panel':'#111c2d','panel2':'#17263b','line':'#283a54',
-         'text':'#eef4ff','muted':'#9ab0c8','accent':'#4d9fff','green':'#32ba9e',
+    C = {'bg':'#0b1321','panel':'#132135','panel2':'#1b2d46','line':'#30445f',
+         'text':'#f4f8ff','muted':'#b1c4db','accent':'#66b2ff','green':'#32ba9e',
          'orange':'#f7a749','red':'#f46e7c','yellow':'#e9ca60'}
     css = f'''QWidget {{ background:{C['bg']};color:{C['text']}; font-family:'Segoe UI','Inter',sans-serif; font-size:13px; }}
-        QFrame#card {{ background:{C['panel']}; border:1px solid {C['line']}; border-radius:15px; }}
+        QFrame#card {{ background:{C['panel']}; border:1px solid {C['line']}; border-radius:14px; }}
+        QScrollArea {{ border:0; }}
+        QScrollBar:vertical {{ background:{C['bg']}; width:11px; }}
+        QScrollBar::handle:vertical {{background:{C['line']}; border-radius:5px;min-height:35px;}}
         QLabel#muted {{ color:{C['muted']}; }}
         QLabel#heading {{ font-size:23px; font-weight:750; }}
         QLabel#metric {{ font-size:23px; font-weight:700; }}
         QLabel#eyebrow {{ color:{C['muted']}; font-size:11px; font-weight:700; }}
         QPushButton {{ background:{C['panel2']}; border:1px solid {C['line']}; padding:12px 17px; border-radius:9px; font-weight:650; }}
         QPushButton:hover {{border:1px solid {C['accent']}; background:#203450;}}
-        QPushButton:disabled {{color:#708399;}}
+        QPushButton:focus,QComboBox:focus,QLineEdit:focus {{border:2px solid {C['accent']};}}
+        QPushButton:disabled {{color:#9fb1c5;background:#1b283b;}}
+        QPushButton#goal:checked {{background:#224f82; border:2px solid {C['accent']}; color:white;}}
         QPushButton#primary {{background:#2e7be6; color:white; border:0;}}
         QPushButton#primary:hover {{background:#4295ff;}}
         QPushButton#danger {{background:#743742;border:1px solid #a95f67;}}
@@ -202,6 +215,7 @@ def launch():
             super().__init__()
             self.setMinimumHeight(130)
             self.coverage = SurfaceCoverage()
+            self.rescue_map = ''
             self.setMouseTracking(True)
 
         @property
@@ -209,10 +223,20 @@ def launch():
             return self.coverage.size
 
         def reset(self, size):
+            self.rescue_map = ''
             self.coverage.reset(max(0, int(size or 0)))
             self.update()
 
         def ingest(self, event):
+            if event.get('workflow') == 'rescue':
+                size = int(event.get('total_bytes') or 0)
+                if size and size != self.total:
+                    self.reset(size)
+                value = str(event.get('map') or '')
+                if value and set(value) <= set('.?oX'):
+                    self.rescue_map = value
+                    self.update()
+                return
             size = int(event.get('size') or self.total or 0)
             if size <= 0:
                 return
@@ -242,6 +266,19 @@ def launch():
                 y = (index // cols) * (height + gap)
                 p.setBrush(QColor('#253951'))
                 p.drawRoundedRect(QRectF(x, y, width, height), 2, 2)
+                if self.rescue_map:
+                    # Coarse journal summary; aggregate every represented glyph
+                    # and prefer UNKNOWN over a false recovered-data claim.
+                    glyphs = self.rescue_map
+                    lo = index * len(glyphs) // len(self.coverage.cells)
+                    hi = max(lo + 1, (index + 1) * len(glyphs) // len(self.coverage.cells))
+                    sample = glyphs[lo:hi]
+                    state = ('X' if 'X' in sample else '?' if '?' in sample else
+                             'o' if all(g == 'o' for g in sample) else '.')
+                    if state != '.':
+                        p.setBrush(QColor({'X':'#ed6472', '?':'#eeaa52', 'o':'#36b794'}[state]))
+                        p.drawRoundedRect(QRectF(x, y, width, height), 2, 2)
+                    continue
                 if cell.fraction > 0:
                     # Fill from bottom: e.g. 10% of a cell stays 90% unknown.
                     h = max(1.0, height * cell.fraction)
@@ -263,6 +300,11 @@ def launch():
             col = int(event.position().x() // (width + gap))
             row = int(event.position().y() // (height + gap))
             if 0 <= col < 48 and 0 <= row < 8:
+                if self.rescue_map:
+                    self.setToolTip('Approximate rescue journal: green = copied from a readable source, '
+                                    'red = unreadable source range, amber = partial work, dark = unprocessed. '
+                                    'Copied bytes are not guaranteed to match original file checksums.')
+                    return
                 cell = self.coverage.cells[row * cols + col]
                 self.setToolTip(f'Device offsets {cell.start:,}–{cell.end:,} bytes\n'
                                 f'{cell.fraction:.1%} read successfully\n'
@@ -274,8 +316,8 @@ def launch():
         def __init__(self):
             super().__init__()
             self.setWindowTitle('DriveRepair | Recovery Workstation')
-            self.resize(1210,850)
-            self.setMinimumSize(850,640)
+            self.resize(1250,870)
+            self.setMinimumSize(800,620)
             self._pending = None
             self._mode = None
             self._buf = {'stdout':'','stderr':''}
@@ -293,6 +335,8 @@ def launch():
             self._last_io_offset=0
             self._last_io_length=0
             self._stop_requested=False
+            self._rescue_started_at=None
+            self._rescue_sample=None
             self._heartbeat=QTimer(self)
             self._heartbeat.setInterval(1000)
             self._heartbeat.timeout.connect(self.check_stall)
@@ -303,8 +347,12 @@ def launch():
             self.proc = None
             self.inventory_proc = None
             self.setStyleSheet(css)
+            scroll=QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            self.setCentralWidget(scroll)
             central=QWidget()
-            self.setCentralWidget(central)
+            scroll.setWidget(central)
             root=QVBoxLayout(central)
             root.setContentsMargins(22,18,22,16)
             root.setSpacing(14)
@@ -331,12 +379,12 @@ def launch():
             hero = card(root)
             status_row=QHBoxLayout()
             hero.addLayout(status_row)
-            self.status=QLabel('Ready to help')
+            self.status=QLabel('Choose a recovery goal')
             self.status.setObjectName('heading')
             status_row.addWidget(self.status)
             status_row.addWidget(help_icon('Each phase reports only evidence actually observed. A readable block is not proof of correct files, and rewriting data does not restore physical lifespan.'))
             status_row.addStretch()
-            self.help=QLabel('Choose a drive and what you need to do. Nothing starts until you press Start.')
+            self.help=QLabel('1. Identify the correct drive    2. Choose a safe workflow    3. Review the outcome. Nothing runs automatically.')
             self.help.setWordWrap(True)
             self.help.setObjectName('muted')
             hero.addWidget(self.help)
@@ -415,15 +463,21 @@ def launch():
             drive_panel.addWidget(self.profile_note)
             self.device_box.currentIndexChanged.connect(self.update_drive_profile)
             workflow=card(left)
-            title=QLabel('02  Choose a goal')
+            title=QLabel('02  Choose a workflow')
             title.setStyleSheet('font-weight:700;font-size:15px')
             workflow.addWidget(title)
-            goals=QHBoxLayout()
+            goals=QVBoxLayout()
+            goals.setSpacing(8)
             workflow.addLayout(goals)
-            for title,goal in [('Fix my drive','carequick'),('Recover files','rescue'),('Check drive','scanquick')]:
+            self.goal_buttons={}
+            for title,goal in [('Repair weak regions','carequick'),('Rescue data','rescue'),('Diagnose drive','scanquick')]:
                 if PUBLIC_BETA_IMAGE_ONLY and goal == 'carequick':
                     title = 'Fix my drive (engineering only)'
                 b=QPushButton(title)
+                b.setObjectName('goal')
+                b.setCheckable(True)
+                b.setAccessibleDescription('Choose the workflow; no disk operation starts automatically')
+                self.goal_buttons[goal]=b
                 if PUBLIC_BETA_IMAGE_ONLY and goal == 'carequick':
                     b.setEnabled(False)
                     b.setToolTip('Public beta offers image rescue and read-only diagnostics. Physical rewrites are disabled.')
@@ -438,7 +492,8 @@ def launch():
                 'fix':[('Quick targeted repair (experimental)','carequick'),
                        ('Full scan + targeted repair (experimental)','carefull'),
                        ('Resume an interrupted journaled repair','careresume')],
-                'recover':[('Rescue image / recover files','rescue')],
+                'recover':[('Rescue selected external drive to NEW image','rescue'),
+                           ('Recover from existing disk image','rescueimage')],
                 'check':[('Check disk health (read-only)','health'),
                          ('Quick surface check (read-only)','scanquick'),
                          ('Full surface scan (read-only)','scanfull'),
@@ -480,7 +535,7 @@ def launch():
             map_card=card(right)
             map_head=QHBoxLayout()
             map_card.addLayout(map_head)
-            map_title=QLabel('Full-drive surface coverage')
+            map_title=QLabel('Evidence map  •  untested areas remain unknown')
             map_title.setStyleSheet('font-weight:700;font-size:15px')
             map_head.addWidget(map_title)
             map_head.addWidget(help_icon('Each cell always represents the same fixed portion of the ENTIRE drive. Only the portion actually read fills green. Orange/red markers show slow or failed requests, not confirmed physical damage. Hover over a cell for its offsets and coverage.'))
@@ -498,6 +553,9 @@ def launch():
             self.advice.setObjectName('muted')
             map_card.addWidget(self.advice)
             result_card=card(right)
+            results_heading=QLabel('03  Results and next action')
+            results_heading.setStyleSheet('font-size:15px;font-weight:700;')
+            result_card.addWidget(results_heading)
             self.result=QLabel('No job running')
             self.result.setStyleSheet('font-size:16px;font-weight:700')
             result_card.addWidget(self.result)
@@ -535,7 +593,10 @@ def launch():
 
         def select_goal(self, goal):
             family = ('fix' if goal.startswith('care') else
-                      'recover' if goal == 'rescue' else 'check')
+                      'recover' if goal in {'rescue', 'rescueimage'} else 'check')
+            active = {'fix':'carequick', 'recover':'rescue', 'check':'scanquick'}[family]
+            for name, button in self.goal_buttons.items():
+                button.setChecked(name == active)
             self.job_box.blockSignals(True)
             self.job_box.clear()
             for title, key in self._jobs[family]:
@@ -571,7 +632,7 @@ def launch():
                 self.dest.setText(path)
         def choice_changed(self):
             kind=self.job_box.currentData()
-            is_image=kind=='rescue'
+            is_image=kind=='rescueimage'
             self.dest.setVisible(is_image)
             self.browse.setVisible(is_image)
             self.auto_resume.setVisible(kind in {'scanfull','resume','carefull'})
@@ -581,9 +642,13 @@ def launch():
                    'carequick':'Investigates slow regions; may rewrite only consistently readable targets after consent.',
                    'carefull':'Full scan and bounded repair. Writes require separate explicit approval.',
                    'careresume':'Reopens a previously durable journal on a separate healthy disk and verifies patient identity before resuming interrupted writes.',
-                   'rescue':'Rescue data from an existing image to a new file, leaving the original unchanged.',
+                   'rescue':'Copy readable sectors directly from the selected EXTERNAL drive to a NEW image on another healthy disk. The patient is read-only.',
+                   'rescueimage':'Copy data from an existing source image to a different NEW image. Neither source is overwritten.',
                    'resume':'Rechecks identity before continuing the saved read-only scan position.'}
             self.opts.setText(hints.get(kind,''))
+            self.start.setText('Start '+('read-only rescue' if kind in {'rescue','rescueimage'} else
+                                         'diagnostics' if kind in {'health','scanquick','scanfull','resume'} else
+                                         'authorized repair'))
         def refresh_devices(self):
             if self.inventory_proc and self.inventory_proc.state()!=QProcess.NotRunning:
                 return
@@ -682,18 +747,40 @@ def launch():
                     'Select Check for a read-only scan, or Recover to a NEW image.')
                 return
             d=self.selected()
-            if kind=='rescue':
-                src=self.dest.text().strip()
-                if not Path(src).is_file():
+            if kind in {'rescue','rescueimage'}:
+                if kind == 'rescue' and not d:
+                    QMessageBox.warning(self,'Choose an external drive','Select the SOURCE drive to rescue first.')
+                    return
+                src=self.dest.text().strip() if kind == 'rescueimage' else ''
+                if kind == 'rescueimage' and not Path(src).is_file():
                     QMessageBox.warning(self,'Source required','Select a readable source image.')
                     return
-                out,_=QFileDialog.getSaveFileName(self,'New recovery image (must not exist)','recovered.img','Disk image (*.img);;All files (*)')
+                out,_=QFileDialog.getSaveFileName(self,'NEW rescue image (choose another healthy drive)',
+                                                 'recovered.img','Disk image (*.img);;All files (*)')
                 if not out:
                     return
-                if os.path.exists(out):
-                    QMessageBox.warning(self,'Destination exists','Choose a new file; no existing image will be overwritten.')
+                if os.path.lexists(out) or os.path.lexists(out+'.rescue.json'):
+                    QMessageBox.warning(self,'Existing recovery data','Choose a NEW image path; existing files and journals are never overwritten.')
                     return
-                args=['rescue-image','--image',src,'--output',out,'--multi-pass','--progress-jsonl','--no-live-dashboard','--json']
+                if kind == 'rescueimage':
+                    if os.path.realpath(src) == os.path.realpath(out):
+                        QMessageBox.warning(self,'Unsafe destination','Source and destination must be different.')
+                        return
+                    args=['rescue-image','--image',src,'--output',out]
+                else:
+                    question=QMessageBox.question(self,'Confirm image-first rescue',
+                        f"Source: {d.get('model','Unknown')}  ({display_size(d.get('size_bytes') or 0)})\n"
+                        f"Identity hint: {d.get('identity_hint','unknown')}\n"
+                        f"Destination: {out}\n\n"
+                        'This reads the selected failing drive and writes ONLY to the new destination image. '
+                        'The destination must be on a SEPARATE, healthy physical disk. '
+                        'A first pass is followed by bounded rereads of missing ranges; extra reads may '
+                        'worsen a severely damaged drive. For irreplaceable data consider a recovery lab. Proceed?',
+                        QMessageBox.Yes | QMessageBox.No)
+                    if question != QMessageBox.Yes:
+                        return
+                    args=['rescue-external','--device',d['id'],'--output',out,'--ack-risk']
+                args+=['--multi-pass','--progress-jsonl','--no-live-dashboard','--json']
             else:
                 if not d:
                     QMessageBox.warning(self,'Choose a drive','Connect a drive and select it first.')
@@ -821,6 +908,9 @@ def launch():
             self.progress.setValue(0)
             self.phase_progress.setValue(0)
             self.overall_label.setText('0% estimated')
+            self.total_caption.setText('Rescue pass progress · not proof of disk health'
+                if self._last_job_kind in {'rescue','rescueimage'} else
+                'Estimated whole-job progress · staged estimate, not disk coverage')
             self._stop_requested=False
             self.map.reset(int((self.selected() or {}).get('size_bytes') or 0))
             self.result.setText('Running — monitoring the device')
@@ -831,6 +921,8 @@ def launch():
             self._final_stdout=''
             self._scanned=0
             self._last_progress_at=time.monotonic()
+            self._rescue_started_at=self._last_progress_at
+            self._rescue_sample=None
             self._last_phase=None
             self._last_debug_event_at=0.0
             self._last_io_offset=0
@@ -870,6 +962,8 @@ def launch():
                     self._pending=obj
         def progress_event(self,event):
             self._last_progress_at=time.monotonic()
+            if event.get('workflow') == 'rescue':
+                return self.rescue_progress_event(event)
             self._last_io_offset=int(event.get('offset') or 0)
             self._last_io_length=int(event.get('read_length') or 0)
             # Trace actionable telemetry, not just final errors. Throttle logs
@@ -890,6 +984,7 @@ def launch():
                 self.metric_labels['rate'].setText('Measuring…')
                 self.metric_labels['avg'].setText('Measuring…')
             self.metric_headers['read'].setText('DATA REWRITTEN' if phase=='REFRESH' else 'DATA READ')
+            self.metric_headers['errors'].setText('READ ERRORS')
             phase_number={'SCANNING':1, 'INVESTIGATING':2, 'REFRESH':3}.get(phase)
             self.phase_caption.setText(
                 f'Phase {phase_number} of up to 3 · {phase.title()}' if phase_number and
@@ -924,6 +1019,50 @@ def launch():
             self.map.ingest(event)
             self.advice.setText(f'Full-drive map: {self.map.coverage.coverage_pct:.2f}% read successfully. '
                                 'Colored stripes mark observations, not full-region certification.')
+        def rescue_progress_event(self, event):
+            phase=str(event.get('phase') or 'FORWARD').upper()
+            self.status.setText('Rescuing readable data' if phase == 'FORWARD' else 'Retrying missing ranges')
+            self.phase_caption.setText('First pass  •  save readable data' if phase == 'FORWARD'
+                                       else 'Targeted retry  •  isolate unreadable sectors')
+            pct=progress_percent(event)
+            self.phase_progress.setValue(round(pct * 10))
+            # Retry is separately presented, not incorrectly counted as 100%
+            # complete merely because the entire source was visited once.
+            self.progress.setValue(round(pct * 10))
+            self.overall_label.setText(f'{pct:.1f}% of '+('retry pass' if phase == 'RETRY' else 'source visited'))
+            self.metric_headers['read'].setText('SAVED TO IMAGE')
+            self.metric_headers['errors'].setText('MISSING DATA')
+            self.metric_labels['done'].setText(f'{pct:.1f}%')
+            self.metric_labels['read'].setText(display_size(event.get('recovered_bytes') or 0))
+            self.metric_labels['errors'].setText(display_size(event.get('unreadable_bytes') or 0))
+            now=time.monotonic()
+            processed=int(event.get('processed_bytes') or 0)
+            saved=int(event.get('recovered_bytes') or 0)
+            elapsed=max(0.001, now - (self._rescue_started_at or now))
+            self.metric_labels['avg'].setText(display_size(saved / elapsed)+'/s')
+            prior=self._rescue_sample
+            if prior and now - prior[0] >= 0.1 and prior[3] == phase:
+                dt=now-prior[0]
+                velocity=max(0.0, saved - prior[2]) / dt
+                traversal=max(0.0, processed - prior[1]) / dt
+                self.metric_labels['rate'].setText(display_size(velocity)+'/s')
+                remaining=max(0, int(event.get('total_bytes') or 0) - processed)
+                self.metric_labels['eta'].setText(
+                    format_eta(remaining / traversal) if phase == 'FORWARD' and traversal > 0 else 'Unknown')
+            else:
+                self.metric_labels['rate'].setText('Measuring…')
+                self.metric_labels['eta'].setText('Unknown' if phase == 'RETRY' else 'Estimating…')
+            self._rescue_sample=(now, processed, saved, phase)
+            self.map.ingest(event)
+            self.help.setText('Recovery image is a working copy, not proof of restored source drive health. '
+                              'Unrecovered bytes remain marked missing in the journal.')
+            self.advice.setText('Green = source data saved to image; red = missing/failed ranges; '
+                                'amber = partial work; dark = unprocessed. Map is approximate, not a file checksum.')
+            self.result.setText(f"{display_size(event.get('recovered_bytes') or 0)} rescued  •  "
+                                f"{display_size(event.get('unreadable_bytes') or 0)} unresolved")
+            self.explain.setText('The source drive is never written. Inspect the .rescue.json map '
+                                 'before using the image; recovered bytes are not certified correct.')
+
         def job_done(self,exit_code,_status):
             self.consume('stdout')
             self.consume('stderr')
@@ -959,7 +1098,13 @@ def launch():
                 coverage_txt=(f' Measured coverage ≈ {float(coverage):.1f}%.'
                               if isinstance(coverage,(int,float)) else '')
                 status_code=str(result.get('status') or '')
-                if self._last_job_kind in ('scanquick','scanfull','resume') or 'surface_coverage_pct' in result:
+                if self._last_job_kind in ('rescue','rescueimage'):
+                    missing=sum(length for _, length in result.get('missing_ranges', []))
+                    self.result.setText(f"Data copied: {display_size(result.get('recovered_bytes') or 0)}")
+                    self.explain.setText(f"Unresolved: {display_size(missing)}. "
+                        'Source drive left unchanged. Review the rescue journal before using the image; '
+                        'unreadable areas were NOT reconstructed or replaced with invented bytes.')
+                elif self._last_job_kind in ('scanquick','scanfull','resume') or 'surface_coverage_pct' in result:
                     if status_code.startswith('completed_with_'):
                         self.result.setText(f'Scan complete with findings ({status_code})')
                     else:

@@ -279,6 +279,10 @@ def plan_targeted_refresh(scan: dict, *, sector: int, chunk: int,
         return {"status": "blocked", "reasons": reasons, "targets": [], "candidate_count": 0}
     size = int(scan["device_size_bytes"])
     regions = []
+    # Evidence-driven prioritization, NOT a learned neural model. The hottest
+    # consistently readable weak regions get the limited batch slots; final
+    # targets remain sorted by offset for deterministic transaction ordering.
+    priority: dict[tuple[int, int], float] = {}
     original_errors = scan.get('read_error_ranges') or []
     unstable_ranges = (scan.get('inconsistent_reads') or []) + (scan.get('repeat_probe_failed_ranges') or [])
     if int(scan.get('read_error_chunks') or 0) and not original_errors:
@@ -302,7 +306,10 @@ def plan_targeted_refresh(scan: dict, *, sector: int, chunk: int,
         # Never treat an error-bearing parent chunk as reliable simply because
         # it also had slow reads. Follow-up subranges are handled separately.
         if not overlaps(off, length, original_errors + unstable_ranges):
-            regions.append((off, length))
+            target = (off, length)
+            regions.append(target)
+            priority[target] = max(priority.get(target, 0.0),
+                                   min(60000.0, float(raw['latency_ms'])))
     investigation = scan.get('error_investigation') or {}
     if investigation.get('device_unstable'):
         return {'status': 'blocked', 'reasons': [
@@ -314,7 +321,12 @@ def plan_targeted_refresh(scan: dict, *, sector: int, chunk: int,
             if (type(off) is int and type(length) is int and off >= 0 and length >= sector
                     and off + length <= size and off % sector == 0 and length % sector == 0
                     and not overlaps(off, length, unstable_ranges)):
-                regions.append((off, length))
+                target = (off, length)
+                regions.append(target)
+                # Read-error regions recovered twice are deliberately eligible
+                # only in balanced mode; their original I/O error gives them
+                # higher investigation priority than merely slow regions.
+                priority[target] = max(priority.get(target, 0.0), 60001.0)
     regions = sorted(set(regions))
     if any(a[0] + a[1] > b[0] for a, b in zip(regions, regions[1:])):
         return {"status": "blocked", "reasons": ["Overlapping suspect regions"],
@@ -325,7 +337,9 @@ def plan_targeted_refresh(scan: dict, *, sector: int, chunk: int,
     # later explicitly authorized cycle and a new pre-write verification.
     limited_candidates = len(regions) > max_regions
     if limited_candidates:
-        regions = regions[:max_regions]
+        # No new writes are authorized by a priority score. The existing
+        # journal, consent, identity and fresh readback checks still apply.
+        regions = sorted(sorted(regions, key=lambda r: (-priority.get(r, 0.0), r[0]))[:max_regions])
     unresolved = (scan_incomplete or limited_candidates or bool(scan.get('slow_regions_truncated')) or
                   bool(scan.get('skipped_untested_ranges')) or bool(unstable_ranges) or
                   (bool(scan.get('read_error_chunks')) and (
@@ -343,6 +357,7 @@ def plan_targeted_refresh(scan: dict, *, sector: int, chunk: int,
         "reasons": [], "targets": regions, "candidate_count": len(regions),
         "remaining_candidate_count": all_candidates_count - len(regions),
         "incremental_batch": limited_candidates,
+        "batch_selection": "repeatable_error_then_slow_latency" if limited_candidates else "all_safe_candidates",
         "unresolved_data": bool(unresolved),
         "notes": ("Rewritten candidates are repeatably readable, NOT bit-perfect by proof. "
                   "Unknown/unreadable regions are EXCLUDED. The write engine rereads "

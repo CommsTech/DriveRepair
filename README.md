@@ -8,8 +8,8 @@
 
 | Your situation | Start with | What the result means |
 |---|---|---|
-| A drive is slow, unreadable or making errors | **Check drive** (read-only) and prioritize imaging to healthy storage | A completed read or green map cell does not prove correct files or a healthy drive |
-| You have a disk image and need another copy | **Recover files → Rescue image** (new destination) | The rescue map records readable and missing regions; an apparent full-size sparse file is not proof of recovery |
+| A drive is slow, unreadable or making errors | **Rescue data → Rescue selected external drive** to a NEW image on a separate healthy disk, then diagnose if the source can tolerate more reads | Source is not written; rescued data is not checksum-certified and bad sectors remain marked missing |
+| You have a disk image and need another copy | **Rescue data → Recover from existing disk image** (new destination) | The rescue map records readable and missing regions; an apparent full-size sparse file is not proof of recovery |
 | Files were deleted or a filesystem is damaged | Work from a **copy of the image** using FAT32/TSK/extraction or ext clone-repair tools | Results are limited, may be incomplete and do not guarantee original file contents |
 | You want to refresh/repair the original image or physical drive in place | **Not available in the public image-first build** | Engineering-only, requires an independent safety assessment and sacrificial hardware validation |
 
@@ -45,6 +45,34 @@ Never use the patient disk as the recovery destination. If data is irreplaceable
 **Stop and recovery rules:** read-only Stop requests are honored at completed I/O boundaries; Windows/USB drivers can stall inside a kernel read. In-place operations never intentionally abort a transaction mid-write; a disk-backed journal holds only the active region, not a backup. Volatile RAM and hybrid modes cannot provide durable in-flight restoration. SMART HealthStatus lacking attributes is **UNKNOWN**, not a clean bill of health. A quick 10% sample is not whole-drive verification.
 
 **Build and release authority:** `docs/RELEASE_STATUS.md` is the current capability/release gate. The historical sections below document previous engineering changes and are **not** statements that those operations are public-ready. For exact incremental changes after b13 see `CHANGELOG.md` → Unreleased. No speed or recovery superiority over SpinRite, DiskGenius or Acronis has been independently benchmarked.
+
+## Workstation and rescue retry improvements (unreleased, November 18, 2026)
+
+The optional Qt workstation provides a three-step workflow, keyboard-focus styling,
+scrollable layout, highlighted goal selection, live patient-to-image rescue, and a
+journal-backed rescue map/status that distinguishes bytes **saved** from source
+**errors**. The default **Rescue data** operation now copies the selected external
+drive to a **new** image on a different healthy physical disk; the existing
+image-to-image operation remains separately available. Physical-drive rescue
+requires an explicit risk confirmation and source identity checks in the CLI.
+
+A targeted second pass can split unreadable requests to logical sectors, retry
+a failing sector with at most 0–2 extra reads (`--retry-sector-attempts`, default
+1), and require **two identical reads** before copying data newly recovered in
+the second pass. Mismatched bytes remain unresolved in the journal instead of
+being invented. This is an evidence-driven adaptive recovery method **not** a
+trained neural model, a CRC/cryptographic source proof, or a guarantee of
+successful restoration.
+
+Engineering-only in-place repair planning now prioritizes repeatably readable
+error areas and then high-latency weak areas when the operator's bounded
+candidate count is exceeded. The existing journal, exclusive access, device
+identity, preimage preservation, and read-back verification still gate every
+write. Public image-first packages keep physical writes blocked.
+
+See [engineering validation and handoff](docs/UI_RESCUE_ENGINE_HANDOFF_2026-11-18.md)
+for tests, limitations, and manual release gates. **No real-drive repair or
+neural-model success has been demonstrated by this code update.**
 
 ## Windows access and read-only Stop (0.3.3b13)
 
