@@ -25,19 +25,19 @@ from .release_policy import PUBLIC_BETA_IMAGE_ONLY, IN_PLACE_WRITE_COMMANDS
 
 # Industrial dark palette (high-contrast status colors, no purple/glow stack).
 C = {
-    "bg": "#0f1419",
-    "panel": "#171d25",
-    "panel2": "#1c2430",
-    "border": "#2a3544",
-    "text": "#e8eef5",
-    "muted": "#8b9aab",
-    "accent": "#3d8fd1",
-    "ok": "#3fa76a",
-    "warn": "#d4a017",
-    "fail": "#d14949",
-    "slow": "#c47a20",
-    "pending": "#243041",
-    "current": "#5eb0ef",
+    "bg": "#0c1420",
+    "panel": "#142133",
+    "panel2": "#1b2b40",
+    "border": "#293c51",
+    "text": "#eff5fb",
+    "muted": "#aebfd0",
+    "accent": "#40cfb5",
+    "ok": "#35b99c",
+    "warn": "#e6b45b",
+    "fail": "#f07e87",
+    "slow": "#e6a75b",
+    "pending": "#24374a",
+    "current": "#66c8ff",
 }
 
 

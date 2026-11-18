@@ -1,8 +1,14 @@
-# DriveRepair desktop — 0.3.3b13 + unreleased beta hardening
+# DriveRepair desktop — 0.3.3b13 + workstation UI refresh
 
 **Recommended user path:** build the image-first public zipapp (`python scripts/build_desktop.py --public-beta --no-wheel`) and launch with `python dist/DriveRepair-0.3.3b13-public-beta.pyz gui`. It can scan physical drives read-only and work with regular image files, but denies in-place original-image and physical-drive writes in the embedded CLI policy. Use a separate healthy drive for rescue output. An accurate coverage map does not certify media or files.
 
 The Qt UI is optional (`pip install PySide6`); Tk is the fallback. Stop on scanning takes effect after a completed I/O; Stop on an in-place engineering write is cooperative and **never forcibly kills the active transaction**. A dead USB driver may prevent a timely stop. On macOS, physical raw writes remain disabled. Rust remains an optional regular-file image rescue core, not the primary GUI or a hardware-qualified engine. See `../docs/RELEASE_STATUS.md` for the current scope and unresolved gates.
+
+## Qt workstation — navigation and evidence display (November 18, 2026)
+
+The optional Qt workstation now features a persistent workbench sidebar, a sticky Start/Stop and readiness bar, clear operation-impact labels, measured throughput trend, explicit separation of operation progress and measured read coverage, and a quick switcher (`Ctrl+K`). The sidebar shortcuts are `Ctrl+1` Diagnose and `Ctrl+2` Rescue (`Ctrl+3` enables engineering-only repair outside the public beta). `Ctrl+L` toggles the expert log. The existing-image rescue path requires only a source image, not physical-drive discovery. None of these interface changes bypass CLI safety policy.
+
+The Tk fallback has aligned dark colors, but does **not** gain the full Qt sidebar layout. For screenshots, Windows clickthrough, scaling and recovery QA, see [`../docs/WORKSTATION_UI_REDESIGN_20261118.md`](../docs/WORKSTATION_UI_REDESIGN_20261118.md). Native Qt verification is still required before claiming production UI signoff.
 
 ---
 

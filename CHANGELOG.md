@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — workstation UI decision-first redesign (2026-11-18)
+
+- Redesign the primary Qt workstation with a compact navigation sidebar, searchable `Ctrl+K` operation switcher, persistent safe Start/Stop dock, read-only/write-risk indicator, and clear per-operation readiness messaging.
+- Separate measured full-drive read coverage from planned operation progress and rescue-map state; add a measured throughput trace without a remote charting dependency.
+- Show source-image rescue without requiring a physical drive selection, keep actions disabled when necessary prerequisites are missing, and preserve active-job target selection against accidental navigation.
+- Add evidence-focused next steps and a user-triggered local operator summary. Align the legacy Tk palette without replacing its established workflows.
+- Add Qt-free presentation/gating tests and a Windows/Qt accessibility + safety handoff. **This release changes desktop presentation only**, not recovery, neural reconstruction, or physical-device write behavior.
+
 ## Unreleased — Qt workstation and evidence-driven rescue refinement (2026-11-18)
 
 - The **Rescue data** goal defaults to copying a selected external drive to a new,
