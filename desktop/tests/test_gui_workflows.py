@@ -204,12 +204,12 @@ class RealGuiWorkflowTests(unittest.TestCase):
     def test_map_legend_matches_color_cells_and_repair_policies_visible(self):
         def scenario(root, errors):
             widgets = list(all_widgets(root))
-            for caption, expected in [('Not scanned', '#243041'),
-                                      ('Read successfully', '#3fa76a'),
-                                      ('In progress', '#5eb0ef'),
-                                      ('Slow region', '#c47a20'),
-                                      ('Needs investigation', '#d4a017'),
-                                      ('Read error / unknown', '#d14949')]:
+            for caption, expected in [('Not scanned', '#24374a'),
+                                      ('Read successfully', '#35b99c'),
+                                      ('In progress', '#66c8ff'),
+                                      ('Slow region', '#e6a75b'),
+                                      ('Needs investigation', '#e6b45b'),
+                                      ('Read error / unknown', '#f07e87')]:
                 title = next((w for w in widgets if isinstance(w, tk.Label)
                               and w.cget('text') == caption), None)
                 self.assertIsNotNone(title, caption)
