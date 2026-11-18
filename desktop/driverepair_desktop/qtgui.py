@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 from .surface_map import SurfaceCoverage
-from .release_policy import PUBLIC_BETA_IMAGE_ONLY
+from .release_policy import PUBLIC_BETA_IMAGE_ONLY, REPAIR_BETA_GUARDED
 from .workstation_ui import (
     WORKSPACES, can_start, operation_impact, operation_family, operator_summary,
 )
@@ -474,6 +474,7 @@ def launch():
             nav.addWidget(self.legacy)
             nav.addStretch()
             channel=QLabel('IMAGE-FIRST PUBLIC BETA' if PUBLIC_BETA_IMAGE_ONLY
+                           else 'GUIDED HDD REPAIR BETA' if REPAIR_BETA_GUARDED
                            else 'EXPERIMENTAL ENGINEERING')
             channel.setObjectName('eyebrow')
             channel.setWordWrap(True)
@@ -643,7 +644,7 @@ def launch():
             workflow.addWidget(self.job_box)
             help_row=QHBoxLayout()
             workflow.addLayout(help_row)
-            help_row.addWidget(help_icon('Fix: engineering-only rewrites require authorization and independent checks. Recover: copies to a separate image. Diagnose: read-only evidence.'))
+            help_row.addWidget(help_icon('Repair: suitable HDDs only in the guarded beta, with SMART evidence, a separate journal and exclusive disk access. Rescue: new image. Diagnose: reads only.'))
             self.auto_resume=QCheckBox('Resume read-only full scan when the same USB drive reconnects')
             self.auto_resume.setChecked(True)
             self.auto_resume.setToolTip('Only a read-only full scan with a saved checkpoint can restart automatically. No in-place writes or RAM-only transactions restart after a disconnect.')
@@ -656,7 +657,7 @@ def launch():
             pathrow.addWidget(self.dest,1)
             pathrow.addWidget(self.browse)
             workflow.addLayout(pathrow)
-            self.opts=QLabel('Automatic settings  •  Read-only by default  •  No uploads')
+            self.opts=QLabel('Media-aware strategy  •  Source writes require explicit approval  •  Local-only')
             self.opts.setObjectName('muted')
             workflow.addWidget(self.opts)
             right=QVBoxLayout()
@@ -1129,6 +1130,24 @@ def launch():
                         QMessageBox.Yes | QMessageBox.No)
                     if answer!=QMessageBox.Yes:
                         return
+                    # No silent consent: --ack-no-backup and media-warning flags
+                    # must correspond to a deliberate operator decision.
+                    consent=QMessageBox.question(self,'Confirm recovery and data-loss risk',
+                        'A repair does NOT recover unreadable original bytes or restore the lifespan of failing hardware.\n\n'
+                        'Have you rescued your important data to separate storage, or have you explicitly chosen '
+                        'to accept the possibility of permanent data loss?\n\n'
+                        'YES means I accept the risk and allow the application to continue to the final identity checks.',
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                    if consent != QMessageBox.Yes:
+                        return
+                    warning_consent=QMessageBox.question(self,'SMART warning policy',
+                        'If this drive reports reallocated, pending or uncorrectable sectors, '
+                        'do you separately authorize attempting a small, journaled rewrite of '
+                        'repeatably readable regions?\n\n'
+                        'An unreadable sector is NEVER overwritten by this operation. '
+                        'Choose No to block writes whenever SMART reports a media warning.',
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                    media_warning_args=['--ack-media-warning'] if warning_consent == QMessageBox.Yes else []
                     from PySide6.QtWidgets import QInputDialog
                     typed,ok=QInputDialog.getText(self,'Confirm target disk',
                         f"Type this disk fingerprint to allow in-place writes:  {d['identity_hint']}")
@@ -1157,7 +1176,8 @@ def launch():
                         dialog.setText('Where should DriveRepair protect the original bytes during a rewrite?')
                         dialog.setInformativeText('A small durable journal on another healthy drive makes a torn transaction potentially recoverable. RAM-only creates no file but cannot recover an interrupted write after memory is lost.')
                         durable=dialog.addButton('Use separate-drive journal (recommended)',QMessageBox.AcceptRole)
-                        volatile=dialog.addButton('RAM-only — high risk',QMessageBox.DestructiveRole)
+                        volatile=(None if REPAIR_BETA_GUARDED else
+                                  dialog.addButton('RAM-only — high risk',QMessageBox.DestructiveRole))
                         dialog.addButton(QMessageBox.Cancel)
                         dialog.exec()
                         selected_choice=dialog.clickedButton()
@@ -1172,7 +1192,7 @@ def launch():
                                     'Use Resume interrupted repair or select a new empty parent folder.')
                                 return
                             journal_args=['--journal-backend','disk','--journal',location]
-                        elif selected_choice==volatile:
+                        elif volatile is not None and selected_choice==volatile:
                             confirm=QMessageBox.warning(self,'Volatile memory risk',
                                 'Continue with NO backup and RAM-only journal? Power loss, USB resets or a crash can permanently destroy the active region. '
                                 'Interrupted RAM-only writes cannot be resumed. This is an experimental mode.',
@@ -1192,8 +1212,15 @@ def launch():
                     args=['care-external','--cooperative-stop-stdin','--device',dev,'--mode','full' if kind=='carefull' else 'quick',
                           *journal_args,'--auto-lock-volumes','--confirm-identity',d['identity_hint'],
                           '--ack-risk','--ack-destructive','--ack-no-backup','--ack-data-loss-risk',
-                          '--ack-usb-bridge-risk','--ack-unvalidated-hardware','--ack-unknown-health',
+                          '--ack-usb-bridge-risk','--ack-unvalidated-hardware',
+                          *media_warning_args,
                           '--progress-jsonl','--json']
+                    if REPAIR_BETA_GUARDED:
+                        args += ['--max-regions','16']
+                    else:
+                        # Engineering builds can explicitly investigate unknown health;
+                        # a guarded release requires full smartctl evidence.
+                        args += ['--ack-unknown-health']
                     if save_scan_map:
                         args+=['--scan-checkpoint','auto']
             self._last_good_device=(None if kind == 'rescueimage' else d)
@@ -1424,11 +1451,25 @@ def launch():
                         f'Read-only diagnosis finished.{coverage_txt} '
                         'This is not Quick Repair and does not rewrite sectors. '
                         'A completed read is not proof of file integrity.')
+                elif status_code == 'completed_targeted_refresh':
+                    pv=result.get('postverification') or {}
+                    completed=int((result.get('repair') or {}).get('rewritten_bytes') or 0)
+                    self.result.setText(f'Journaled HDD repair complete · {display_size(completed)} rewritten')
+                    self.explain.setText(
+                        f"Independent prewrite-digest check: {pv.get('status','unavailable')}. "
+                        'The source remains at risk: back up, monitor SMART and perform a long self-test. '
+                        'A rewrite cannot restore worn hardware.')
+                    self.next_action.setText('Verify important recovered files and schedule a SMART long test. Replace disks with recurring errors.')
                 else:
                     self.result.setText('Job finished — review results')
                     self.explain.setText(
                         f'A completed read or readback match is not proof of file integrity or restored lifespan.'
                         f'{coverage_txt}')
+            elif result.get('status') in {'repair_postverify_failed','repair_postverify_unavailable','repair_health_deteriorated'}:
+                self.result.setText('Repair verification raised a media warning')
+                self.explain.setText('A repeat read or SMART check indicates the drive cannot be treated as repaired. '
+                    'Stop writes, rescue important files to healthy storage, and consider replacement.')
+                self.next_action.setText('Rescue data; inspect the repair journal and verification report.')
             elif result.get('status') == 'repair_blocked_prewrite_access':
                 self.result.setText('Scan preserved — Windows blocked physical repair')
                 self.explain.setText(str(result.get('error') or 'No lockable volume handle')[:280] +

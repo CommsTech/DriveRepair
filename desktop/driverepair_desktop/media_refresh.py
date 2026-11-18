@@ -934,6 +934,16 @@ def _commit_transaction(store: JournalStore, meta: dict, *, verified: bool) -> N
     meta["rewritten_bytes"] = int(meta["rewritten_bytes"]) + length
     if verified:
         meta["verified_bytes"] = int(meta["verified_bytes"]) + length
+        if meta.get("mode") == "targeted":
+            # Hash of the *original* double-read preimage, persisted atomically
+            # with COMMITTED state. Allows independent post-repair comparison
+            # using a fresh readonly handle without retaining patient bytes.
+            records = meta.setdefault("committed_digest_records", [])
+            record = [offset, length, str(tx["sha256"])]
+            if record not in records:
+                records.append(record)
+            if len(records) > 256:
+                raise RuntimeError("Targeted digest journal limit exceeded")
     tx["state"] = STATE_COMMITTED
     store.save_meta(meta)  # COMMITTED persists progress before deletion.
     store.clear_region()
@@ -1280,6 +1290,7 @@ def refresh_media(
         "target_count": meta.get("target_count", 0),
         "rewritten_bytes": meta["rewritten_bytes"],
         "verified_bytes": meta["verified_bytes"],
+        "committed_digest_records": meta.get("committed_digest_records") or [],
         "skipped_ranges": meta.get("skipped_ranges") or [],
         "inconsistent_ranges": meta.get("inconsistent_ranges") or [],
         "failed_read_attempts": meta["failed_read_attempts"],

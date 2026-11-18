@@ -28,7 +28,9 @@ def command(args: list[str], cwd: Path = DESKTOP) -> None:
     subprocess.run(args, cwd=cwd, check=True)
 
 
-def build(include_wheel: bool = True, *, public_beta: bool = False) -> list[Path]:
+def build(include_wheel: bool = True, *, public_beta: bool = False, repair_beta: bool = False) -> list[Path]:
+    if public_beta and repair_beta:
+        raise ValueError('Choose one release channel')
     dist = REPO / 'dist'
     dist.mkdir(exist_ok=True)
     command([sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-v'])
@@ -45,7 +47,15 @@ def build(include_wheel: bool = True, *, public_beta: bool = False) -> list[Path
             if current.count(marker) != 1:
                 raise RuntimeError('Public beta policy marker missing or ambiguous')
             policy_file.write_text(current.replace(marker, 'PUBLIC_BETA_IMAGE_ONLY = True'), encoding='utf-8')
-        outfile = dist / f'DriveRepair-{VERSION}{"-public-beta" if public_beta else ""}.pyz'
+        if repair_beta:
+            policy_file = payload / 'driverepair_desktop' / 'release_policy.py'
+            current = policy_file.read_text(encoding='utf-8')
+            marker = 'REPAIR_BETA_GUARDED = False'
+            if current.count(marker) != 1:
+                raise RuntimeError('Repair-beta policy marker missing or ambiguous')
+            policy_file.write_text(current.replace(marker, 'REPAIR_BETA_GUARDED = True'), encoding='utf-8')
+        suffix = '-repair-beta' if repair_beta else '-public-beta' if public_beta else ''
+        outfile = dist / f'DriveRepair-{VERSION}{suffix}.pyz'
         zipapp.create_archive(payload, outfile, interpreter='/usr/bin/env python3',
                               main='driverepair_desktop.cli:main', compressed=True)
         outputs.append(outfile)
@@ -64,7 +74,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--public-beta', action='store_true',
                         help='Build image-first zipapp with all in-place patient writes disabled')
+    parser.add_argument('--repair-beta', action='store_true',
+                        help='Build hardware-repair beta: HDD-only guided journaled writes with strict gates')
     parser.add_argument('--no-wheel', action='store_true',
                         help='Build zipapp only when Python wheel build tooling is unavailable')
     opts = parser.parse_args()
-    build(not opts.no_wheel, public_beta=opts.public_beta)
+    build(not opts.no_wheel, public_beta=opts.public_beta, repair_beta=opts.repair_beta)

@@ -62,7 +62,8 @@ def health_snapshot(device: Device,
         'rotation_rate_rpm': rpm if type(rpm) is int and rpm > 0 else None,
         'temperature_c': temp.get('current'),
         'nvme': {k: nvme.get(k) for k in ('percentage_used', 'media_errors',
-                 'num_err_log_entries', 'unsafe_shutdowns', 'critical_warning', 'power_on_hours')
+                 'num_err_log_entries', 'unsafe_shutdowns', 'critical_warning', 'power_on_hours',
+                 'available_spare', 'available_spare_threshold', 'temperature')
                  if k in nvme},
         'ata_selected_raw_attributes': attrs,
         'notes': 'Read-only SMART health snapshot. Raw ATA counters are manufacturer-specific. '

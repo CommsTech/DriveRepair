@@ -161,7 +161,8 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument('--ack-volatile-journal', action='store_true',
                          help='I accept loss of active region data on crash/power failure')
         cmd.add_argument('--resume', action='store_true', help='Resume the targeted refresh journal without rescanning')
-        cmd.add_argument('--max-regions', type=int, default=64)
+        cmd.add_argument('--max-regions', type=int, default=16 if name == 'care-external' else 64,
+                         help='Maximum independently verified physical rewrite candidates (guarded HDD max=16)')
         cmd.add_argument('--recording', choices=['auto', 'cmr', 'smr'], default='auto',
                          help='Advanced: externally verified recording technology; auto never assumes CMR')
         cmd.add_argument('--rewrite-neighbors', action='store_true',
@@ -1296,10 +1297,15 @@ def _run_care(args) -> int:
         assert_stable_identity(selected, latest)
         size, sector, token = selected.size_bytes, selected.sector_size, selected.fingerprint
         snapshot = try_health_snapshot(selected)
+        # Guarded repair-beta builds do not inherit engineering-only overrides.
+        # Check actual SMART evidence and bus/media type BEFORE scanning or RW.
+        from .release_policy import check_guarded_repair_preflight
+        guarded_advice = check_guarded_repair_preflight(args, snapshot, selected)
     else:
         token, size = _refresh_image_token(args.image)
         sector = 512 if size % 512 == 0 else 1
         snapshot = None
+        guarded_advice = None
 
     # Lock only after the journal's separate-storage location was validated.
     # Volatile mode creates ZERO files, including no sidecar lock. Physical
@@ -1484,6 +1490,8 @@ def _run_care(args) -> int:
                         return 2
             scan['media_profile'] = {k: settings[k] for k in
                 ('profile', 'profile_evidence', 'media_note', 'requested_coverage_pct') if k in settings}
+            if guarded_advice and guarded_advice.get('status') != 'engineering_build':
+                scan['media_advice'] = guarded_advice
             scan['media_profile']['bounded_rewrite_region_bytes'] = repair_chunk
             scan['media_profile']['max_rewrite_transactions'] = effective_max_regions
             scan['media_profile']['notes'] = ('Logical transfer limits, not physical track or NAND layout. '
@@ -1617,14 +1625,48 @@ def _run_care(args) -> int:
             )
         finally:
             writer.close()
+        # Reopen read-only after releasing the writer's exclusive handles.
+        # Compare the journaled prewrite SHA-256 digests against two fresh reads.
+        postverify = None
+        if repair['status'] == 'completed':
+            records = repair.get('committed_digest_records') or []
+            if records:
+                from .postverify import verify_committed_regions
+                try:
+                    if is_hardware:
+                        assert_stable_identity(selected, select_external_device(args.device))
+                    reopened = open_device_readonly(selected) if is_hardware else ImageReader(args.image)
+                    try:
+                        postverify = verify_committed_regions(reopened, records, size=size, sector=sector)
+                    finally:
+                        reopened.close()
+                except (OSError, RuntimeError, ValueError) as exc:
+                    postverify = {'status': 'postverify_failed', 'verified_bytes': 0,
+                                  'failures': [{'classification': 'postverify_unavailable',
+                                                'error_type': type(exc).__name__}],
+                                  'notes': 'Fresh post-write evidence unavailable; no verified repair claim.'}
+            else:
+                postverify = {'status': 'not_available_legacy_journal',
+                              'notes': 'Older journal lacks prewrite SHA-256 digest records.'}
+        from .health_deltas import compare_health
+        health_after = try_health_snapshot(selected) if is_hardware else None
+        health_delta = compare_health(snapshot, health_after) if is_hardware else None
         if ram_only:
             repair['journal'] = None
-        result = {'status': ('partial_repair_unresolved_data' if repair['status'] == 'completed'
+        result = {'status': ('repair_postverify_failed' if postverify and
+                             postverify['status'] == 'postverify_failed' else
+                             'repair_postverify_unavailable' if postverify and
+                             postverify['status'] == 'not_available_legacy_journal' else
+                             'repair_health_deteriorated' if health_delta and
+                             health_delta['status'] == 'deteriorated' else
+                             'partial_repair_unresolved_data' if repair['status'] == 'completed'
                              and plan and plan.get('unresolved_data') else
                              'completed_targeted_refresh' if repair['status'] == 'completed'
                              else 'repair_stopped_safely' if repair['status'] == 'stopped_at_safe_boundary'
                              else 'repair_incomplete'), 'scan': scan,
                   'repair_plan': plan, 'repair': repair,
+                  'postverification': postverify,
+                  'smart_health_comparison': health_delta,
                   'volatile_ram_only': ram_only,
                   'notes': 'Rewriting consistently readable regions does not restore unreadable files or physical lifespan.'}
         print(json.dumps(result, indent=2) if args.json else result, flush=True)
