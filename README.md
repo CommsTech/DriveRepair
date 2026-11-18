@@ -11,7 +11,7 @@
 | A drive is slow, unreadable or making errors | **Rescue data → Rescue selected external drive** to a NEW image on a separate healthy disk, then diagnose if the source can tolerate more reads | Source is not written; rescued data is not checksum-certified and bad sectors remain marked missing |
 | You have a disk image and need another copy | **Rescue data → Recover from existing disk image** (new destination) | The rescue map records readable and missing regions; an apparent full-size sparse file is not proof of recovery |
 | Files were deleted or a filesystem is damaged | Work from a **copy of the image** using FAT32/TSK/extraction or ext clone-repair tools | Results are limited, may be incomplete and do not guarantee original file contents |
-| You want to refresh/repair the original image or physical drive in place | **Not available in the public image-first build** | Engineering-only, requires an independent safety assessment and sacrificial hardware validation |
+| You want to refresh/repair the original image or physical drive in place | **Guarded `-repair-beta.pyz` build permits guided HDD-targeted writes; the image-first public build remains read-only** | Experimental. Requires SMART, separate durable journal, identity and exclusive-access checks, explicit consent and hardware validation |
 
 ### Installation and first run (Python 3.10+)
 
@@ -30,6 +30,15 @@ python dist/DriveRepair-0.3.3b13-public-beta.pyz rescue-image --image source.img
 python dist/DriveRepair-0.3.3b13-public-beta.pyz rescue-status --output recovered.img --json
 ```
 
+For experimental **actual guided HDD repair** using a *separate*, explicitly restricted build, run:
+
+```sh
+python scripts/build_desktop.py --repair-beta --no-wheel
+python dist/DriveRepair-0.3.3b13-repair-beta.pyz qt-gui
+```
+
+This build enables **guided `care-external` physical writes** (not unconditional write commands). It requires smartctl evidence of an HDD, separate disk-backed journal, fingerprint confirmation and exclusive locking; unknown/SSD/NVMe media are not rewrite targets. The GUI requests explicit data-loss and SMART-warning consent. This is for *sacrificial hardware testing*, not qualification for valuable media. See [repair-beta engineering and hardware handoff](docs/REPAIR_BETA_ENGINEERING_20261118.md).
+
 Never use the patient disk as the recovery destination. If data is irreplaceable or hardware is rapidly failing, minimize further reads, prefer a validated imaging workflow, and consider a professional lab. No software can reliably reconstruct bytes never read or already overwritten.
 
 ### Platform and capability status (not a certification)
@@ -38,7 +47,7 @@ Never use the patient disk as the recovery destination. If data is irreplaceable
 |---|---|---|---|
 | Regular image scanning and image-based recovery | Implemented in Python; synthetic tests | Implemented; local synthetic tests | Implemented in Python; native execution unverified here |
 | Physical-drive inventory / read-only scan | Implementation present; USB/dock fault testing remains open | Implementation present; privileged device QA open | Discovery/read-only path present; native hardware QA open |
-| Physical in-place sector writes | Engineering-only, conservative locking; **public beta blocked** | Engineering-only, offline and journal prerequisites; **public beta blocked** | Disabled pending volume-lock qualification |
+| Physical in-place sector writes | Engineering path and guarded HDD repair-beta available; image-first public beta blocked | Engineering path and guarded HDD repair-beta available; physical hardware unverified | Disabled pending volume-lock qualification |
 | Standalone Rust core | Optional **regular-image rescue** backend only; OS parity not proven in this review | Optional regular-image rescue; Cargo build unavailable in this review | Optional source backend; OS parity not proven in this review |
 | UEFI/BIOS/ISO boot environment | Experimental source/recipe, not qualified | Experimental source/recipe, not qualified | Not a validated recovery environment |
 

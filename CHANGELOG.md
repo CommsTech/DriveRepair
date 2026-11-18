@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — guarded HDD repair beta and independent post-write verification (2026-11-18)
+
+- Add separate `--repair-beta` build with actual guarded `care-external` raw-disk write path, while preserving the original image-first public package. Reject unqualified direct raw-refresh commands in this artifact.
+- Introduce evidence-based media decision logic: actual SMART + verified HDD identification for journaled refresh; SSD/NVMe, unknown medium, unsafe temperature, critical SMART and transport warnings block generic HDD rewrites. Explicit SMART warning approval remains required.
+- Require separate durable disk journaling, at most 16 bounded repair regions, no inferred recording override or neighboring writes in the guarded channel. The Qt workflow now asks the operator for data-loss and SMART-warning consent rather than supplying some risk acknowledgements without an explicit prompt.
+- Persist the SHA-256 digest of the prewrite bytes at each targeted transaction commit, and perform a second read-only reopening check with two fresh reads after writer handles close. Errors or mismatched bytes downgrade completion status; unreadable data is never invented.
+- Compare available SMART counters before and after writes; report deterioration separately from immediate data readability. Add media policy, crash-safe digest journal, postverification, and health-delta regression tests and an image-only targeted-write smoke test.
+- **No hardware success or learned neural reconstruction is claimed.** Rust image-only core is unchanged because Cargo was not installed in the review environment; Rust physical I/O migration and native platform tests remain mandatory before public qualification. See `docs/REPAIR_BETA_ENGINEERING_20261118.md`.
+
 ## Unreleased — workstation UI decision-first redesign (2026-11-18)
 
 - Redesign the primary Qt workstation with a compact navigation sidebar, searchable `Ctrl+K` operation switcher, persistent safe Start/Stop dock, read-only/write-risk indicator, and clear per-operation readiness messaging.
@@ -266,8 +275,6 @@ See `docs/BOUNDED_IO_AND_SAFE_STOP_0.3.3b12.md` for operational notes.
 - Multi-FS detection + `recover-image` (FAT32/NTFS/exFAT undelete; Btrfs/ZFS/APFS/ext → RAW carve) with expanded carve formats.
 - Soft mechanical indicators on refresh: `--acoustic-watch`, `--shock-guard`, `--smart-deltas` (WATCH/STOP only; latency/SMART remain primary; not platter metrology).
 - Updated guides, benchmark plan and honest public-beta safety gates; original bootloader sources preserved as experimental.
-
-# Changelog
 
 ## 0.2.9b1 — Public-beta candidate safety and throughput groundwork (2026-11-01)
 

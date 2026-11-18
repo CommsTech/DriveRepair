@@ -2,6 +2,8 @@
 
 **Repository source baseline:** 0.3.3b13 plus the changes in the `CHANGELOG.md` Unreleased section. The version in `desktop/pyproject.toml` remains 0.3.3b13; no public version number or tag is declared by this patch.
 
+**Guarded experimental repair candidate (separate channel):** `python scripts/build_desktop.py --repair-beta --no-wheel` produces `DriveRepair-0.3.3b13-repair-beta.pyz`. This deliberately enables guided, restricted HDD-targeted physical repair with native OS lock/identity validation, separate durable journal, SMART evidence and independently verified preimage digests. It is *not* a broad public release or proof that defective drives regain reliability. Testing on sacrificial hardware is required. See `docs/REPAIR_BETA_ENGINEERING_20261118.md`.
+
 **Release recommendation:** image-first public beta *candidate only*. Publish solely a `DriveRepair-0.3.3b13-public-beta.pyz` built with `python scripts/build_desktop.py --public-beta --no-wheel`, after review and manual platform smoke tests. The source checkout and normal wheel/zipapp retain raw-write engineering capabilities and must NOT be presented as the public beta binary. The package policy is a safety default for unmodified builds, **not a tamper-resistant sandbox or OS permission boundary**.
 
 ## Confirmed from this source-review environment
