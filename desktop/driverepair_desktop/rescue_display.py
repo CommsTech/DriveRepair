@@ -23,6 +23,8 @@ def rescue_event(state: dict, *, total: int, phase: str, destination: str,
     missing = state.get('missing_ranges') or []
     pending = state.get('retry_pending_ranges') or []
     unreadable = sum(length for _, length in missing) + sum(length for _, length in pending)
+    retry_total = int(state.get('retry_total_bytes') or 0)
+    retry_remaining = sum(length for _, length in pending)
     # Map: o = fully processed region, . = not processed, ? = current fractional cell.
     # X marks a processed cell containing known unreadable bytes. Neither o nor X
     # represents file correctness or SMART health. Tiny areas are approximate.
@@ -46,6 +48,8 @@ def rescue_event(state: dict, *, total: int, phase: str, destination: str,
         'total_bytes': total, 'processed_bytes': cursor,
         'recovered_bytes': recovered, 'unreadable_bytes': unreadable,
         'missing_regions': len(missing) + len(pending),
+        'retry_total_bytes': retry_total, 'retry_remaining_bytes': retry_remaining,
+        'inconsistent_retry_reads': int(state.get('inconsistent_retry_reads', 0)),
         'failed_reads': int(state.get('failed_read_attempts', 0)),
         'destination_free_bytes': free_bytes, 'destination': destination,
         'map': ''.join(glyphs),

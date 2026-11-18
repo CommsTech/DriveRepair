@@ -1,0 +1,2 @@
+e9643e647702427719cbcfd3e8c39ec8d5c5b10b9daa442426e133822fbbeb71  DriveRepair_2026-11-18_UI_Rescue_Optimization.patch
+f6c6afe322b30e971f1d2a1b8c6f1b81c9bb87c98e9bb0f863284babae01713a  DriveRepair_2026-11-18_Improved_Source.zip

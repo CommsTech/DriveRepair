@@ -197,6 +197,8 @@ def parser() -> argparse.ArgumentParser:
             cmd.add_argument('--engine', choices=['python', 'rust'], default='python',
                              help='Rust engine is optional / image-only / requires a separately built core')
         cmd.add_argument("--retry-missing", action="store_true", help="Retry missing ranges after initial pass")
+        cmd.add_argument('--retry-sector-attempts', type=int, choices=[0, 1, 2], default=1,
+                         help='Extra bounded reads for failing individual sectors during retry (0–2). Retry successes require two identical reads.')
         cmd.add_argument("--multi-pass", action="store_true",
                          help="After first-pass rescue, automatically retry missing regions in smaller pieces")
         cmd.add_argument("--chunk-mib", type=int, choices=[1, 2, 4, 8], default=1)
@@ -1195,7 +1197,8 @@ def _run_extras(args) -> int:
                                            max_failed_reads=args.max_read_errors,
                                            resume=args.resume, retry_missing=args.retry_missing,
                                            progress=check_progress,
-                                           max_chunks=getattr(args, 'max_chunks', None))
+                                           max_chunks=getattr(args, 'max_chunks', None),
+                                           retry_sector_attempts=args.retry_sector_attempts)
                     if args.multi_pass and result.get('status') == 'completed_with_missing_data':
                         # Revalidate device immediately before targeted retries.
                         check_progress(result, force=True)
@@ -1206,7 +1209,8 @@ def _run_extras(args) -> int:
                                                max_failed_reads=args.max_read_errors,
                                                resume=True, retry_missing=True,
                                                progress=check_progress,
-                                               max_chunks=getattr(args, 'max_chunks', None))
+                                               max_chunks=getattr(args, 'max_chunks', None),
+                                               retry_sector_attempts=args.retry_sector_attempts)
                     check_progress(result, force=True)
                     if rescue_console:
                         rescue_console.finish()
