@@ -554,6 +554,7 @@ def launch():
             self._manufacturer_rated_hours={}
             self._last_health_snapshot=None
             self._health_by_device={}  # keyed by fingerprint; prevents cross-disk inference
+            self._smart_probe_failures={}  # keep per-drive reason visible after worker exit
             self._auto_probe_proc=None
             self._auto_probe_hint=None
             self._auto_probe_attempted=set()
@@ -808,6 +809,7 @@ def launch():
                 'No repair or drive writes start here. Available in the Repair workspace.')
             self.smart_check_button.clicked.connect(lambda:self.probe_selected_media(force=True))
             tool_row.addWidget(self.smart_check_button)
+            self.smart_check_button.hide()  # consolidated into contextual repair action
             self.enable_smart_button=QPushButton('Enable SMART tools')
             self.enable_smart_button.setToolTip('Use the packaged SMART component when present, '
                 'or explicitly install upstream smartmontools with Windows Package Manager. '
@@ -816,6 +818,7 @@ def launch():
             from .dependencies import smartctl_path
             self.enable_smart_button.setVisible(sys.platform=='win32' and not smartctl_path())
             tool_row.addWidget(self.enable_smart_button)
+            self.enable_smart_button.hide()  # readiness action exposes this without extra buttons
             tool_row.addStretch()
             self.device_box=QComboBox()
             self.device_box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
@@ -848,6 +851,14 @@ def launch():
             self.repair_help.clicked.connect(self.explain_repair_eligibility)
             drive_panel.addWidget(self.repair_help)
             self.repair_help.hide()
+            # One next action replaces a row of competing SMART/setup/help controls.
+            # This does not bypass the CLI's independent physical-write checks.
+            self.repair_next=QPushButton('Check drive readiness')
+            self.repair_next.setAccessibleName('Next step for HDD repair eligibility')
+            self.repair_next.setToolTip('Read-only SMART check, optional approved tool setup, or rescue. Never authorizes an HDD write.')
+            self.repair_next.clicked.connect(self.resolve_repair_next)
+            self.repair_next.hide()
+            drive_panel.addWidget(self.repair_next)
             self.profile_note=QLabel('Identifying media…')
             self.profile_note.setWordWrap(True)
             self.profile_note.setObjectName('muted')
@@ -1145,6 +1156,7 @@ def launch():
                     'DriveRepair can use the packaged or installed smartctl executable. '
                     'USB bridge passthrough support still depends on hardware.')
                 self.enable_smart_button.hide()
+                self.update_action_state()
                 return
             if sys.platform!='win32' or not shutil.which('winget'):
                 QMessageBox.warning(self,'SMART support missing',
@@ -1176,7 +1188,8 @@ def launch():
                 self._smart_install_proc=None
                 self.enable_smart_button.setEnabled(True)
                 installed=bool(smartctl_path())
-                self.enable_smart_button.setVisible(not installed)
+                self.enable_smart_button.hide()
+                self.update_action_state()
                 if installed:
                     d=self.selected() or {}
                     self._auto_probe_attempted.discard(d.get('identity_hint'))
@@ -1277,6 +1290,26 @@ def launch():
             if info.clickedButton()==rescue:
                 self.select_goal('rescue')
 
+        def resolve_repair_next(self):
+            if self.proc and self.proc.state()!=QProcess.NotRunning:
+                return
+            from .repair_readiness import readiness_next_action
+            from .dependencies import smartctl_path
+            d=self.selected()
+            decision=readiness_next_action(d, 'carequick',
+                self._health_by_device.get((d or {}).get('identity_hint')),
+                smartctl_available=bool(smartctl_path()))
+            if decision['action']=='probe':
+                self.probe_selected_media(force=True)
+            elif decision['action']=='setup':
+                self.enable_smart_tools()
+            elif decision['action']=='rescue':
+                self.select_goal('rescue')
+            elif decision['action']=='select':
+                self.device_box.setFocus()
+            else:
+                self.explain_repair_eligibility()
+
         def update_drive_profile(self, _index=None):
             d=self.selected()
             if not d:
@@ -1335,6 +1368,8 @@ def launch():
             if force:
                 self.smart_check_note.setText('Checking USB SMART / ATA identity read-only… '
                     'the drive is not being repaired or rewritten.')
+            self.repair_next.setText('Checking drive SMART…')
+            self.repair_next.setEnabled(False)
             self._auto_probe_attempted.add(key)
             self._auto_probe_hint=key
             child=QProcess(self)
@@ -1354,13 +1389,29 @@ def launch():
             if child is not self._auto_probe_proc:
                 return
             self._auto_probe_proc=None
-            if code == 0:
-                try:
-                    report=json.loads(bytes(child.readAllStandardOutput()).decode('utf-8','replace'))
-                except (ValueError,UnicodeError):
-                    report=None
-                if isinstance(report,dict) and report.get('status'):
+            raw_stdout=bytes(child.readAllStandardOutput()).decode('utf-8','replace')
+            raw_stderr=bytes(child.readAllStandardError()).decode('utf-8','replace')
+            try:
+                report=json.loads(raw_stdout) if code == 0 else None
+            except (ValueError,UnicodeError):
+                report=None
+            if isinstance(report,dict) and report.get('status'):
+                # Health CLI includes the full inventory fingerprint in its
+                # result, not just a model label; refuse foreign/stale evidence.
+                reported=(report.get('device') or {}).get('identity_hint')
+                if reported == key:
                     self._health_by_device[key]=report
+                    reason=report.get('smart_unavailable_reason') or report.get('reason')
+                    if reason:
+                        self._smart_probe_failures[key]=str(reason)[:500]
+                    else:
+                        self._smart_probe_failures.pop(key,None)
+                else:
+                    self._smart_probe_failures[key]='SMART response did not match selected disk identity.'
+            else:
+                self._smart_probe_failures[key]=(raw_stderr or 'SMART probe produced no valid health evidence.')[-500:]
+            if self._smart_probe_failures.get(key):
+                self.note_log('Read-only SMART identification unavailable: '+self._smart_probe_failures[key])
             if self.selected() and self.selected().get('identity_hint') == key:
                 current=self._health_by_device.get(key)
                 from .repair_readiness import ui_repair_readiness
@@ -1370,6 +1421,9 @@ def launch():
                     'SMART/rotation check passed the UI eligibility stage; '
                     'device identity, locks and journal remain mandatory.' if permitted else
                     'HDD repair is not authorized: '+explanation)
+                if not permitted and self._smart_probe_failures.get(key):
+                    self.smart_check_note.setText(
+                        'SMART identification incomplete: '+self._smart_probe_failures[key]+'\n'+explanation)
                 self.update_drive_profile()
             self.update_action_state()
 
@@ -1394,7 +1448,8 @@ def launch():
                     break
             self.job_box.blockSignals(False)
             self.smart_check_note.setVisible(family=='fix')
-            self.repair_help.setVisible(family=='fix')
+            self.repair_help.hide()  # explanation is available through contextual next action
+            self.repair_next.setVisible(family=='fix')
             self.choice_changed()
             if not (self.proc and self.proc.state()!=QProcess.NotRunning):
                 self.set_live_focus(False)
@@ -1625,7 +1680,8 @@ def launch():
             self.auto_pause.setVisible(kind in {'scanquick','scanfull','resume'})
             self.batch_button.setVisible(kind == 'rescue')
             self.batch_status.setVisible(kind == 'rescue')
-            self.smart_check_button.setVisible(kind in {'carequick','carefull','careresume'})
+            self.smart_check_button.hide()
+            self.repair_next.setVisible(kind in {'carequick','carefull','careresume'})
             self.smart_check_note.setVisible(kind in {'carequick','carefull','careresume'})
             self.offline_devices.setVisible(sys.platform=='linux' and kind == 'rescue')
             if kind != 'rescue' and self.offline_devices.isChecked():
@@ -1735,6 +1791,20 @@ def launch():
                 elif enabled:
                     advice='High-risk write/restore test. Use only a backed-up, disposable USB; an unreliable controller can overwrite unrelated data.'
             self.start.setEnabled(enabled)
+            if kind in {'carequick','carefull','careresume'}:
+                from .repair_readiness import readiness_next_action
+                from .dependencies import smartctl_path
+                d=self.selected() or {}
+                state=readiness_next_action(d,kind,
+                    self._health_by_device.get(d.get('identity_hint')),
+                    smartctl_available=bool(smartctl_path()))
+                self.repair_next.setText(state['label'])
+                self.repair_next.setToolTip(state['reason'])
+                self.repair_next.setEnabled(not running and
+                    not (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning))
+                if self._smart_probe_failures.get(d.get('identity_hint')) and not enabled:
+                    advice=('SMART check: '+self._smart_probe_failures[d['identity_hint']]
+                            +' | '+advice)
             # Keyboard start obeys exactly the same readiness decision.
             self.start_shortcut.setEnabled(enabled)
             # When a repair is ineligible, expose the non-destructive next step

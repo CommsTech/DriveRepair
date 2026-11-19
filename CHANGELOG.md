@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3b23 — 2026-11-19: actionable repair readiness and USB SMART evidence
+
+- Consolidated the Qt repair preflight into one contextual action: choose a disk, enable SMART tools with consent if absent, retry read-only SMART/ATA identity, or route to image rescue. A disabled hardware-write button no longer leaves the user guessing about the next step.
+- Preserve and display the real per-device SMART query error, including USB bridge/SAT failures; ignore health responses whose disk fingerprint does not match the selected disk.
+- When USB smartctl autodetection supplies a rotational speed **but returns an error**, try a bounded SAT pass-through read to obtain a valid complete ATA snapshot. Never downgrade existing SMART failure warnings or treat OS HealthStatus/model names as physical-write authorization.
+- Restore a single, cleaner repair context instead of multiple competing setup and help buttons. Keep the independent engine/journal/lock/identity safety checks unchanged.
+- Added synthetic tests for the UI decision states, misleading partial USB SMART results, device-identity gates and flash-media inhibition. This is **not** evidence of repaired physical media.
+
 ## Unreleased — SMART breadth: full attribute table, read-only logs, more USB bridges (2026-11-19)
 
 - Health snapshots now retain the **whole ATA attribute table** (bounded at 64)

@@ -135,7 +135,11 @@ def health_snapshot(device: Device,
     failure_reported = bool(proc.returncode & (0x08 | 0x10)) or (raw.get('smart_status') or {}).get('passed') is False
     # Do not conceal an existing SMART media failure with a second, potentially
     # optimistic response. Do not send ATA commands to positively NVMe devices.
-    needs_rotation = type(raw.get('rotation_rate')) is not int
+    # A bridge may report a rotation rate yet still return a transport/command
+    # error. In that case a different SAT mode may produce a valid, complete
+    # result; never treat the partial auto response as write-eligibility proof.
+    needs_rotation = (type(raw.get('rotation_rate')) is not int
+                      or bool(proc.returncode & 0x07))
     if (device.bus.lower() in {'usb', 'thunderbolt', 'firewire'}
             and needs_rotation and not failure_reported
             and 'nvme' not in device_protocol

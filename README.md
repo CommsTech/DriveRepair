@@ -2,7 +2,7 @@
 
 **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
 
-> **Release status:** `0.3.3b22` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+> **Release status:** `0.3.3b23` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
 
 The Qt workstation now selects an **automatic, bounded HDD investigation level** from available media and error evidence; it never uses a plan to bypass media-write safety. Expert CLI overrides remain for controlled laboratory work. Read [`docs/CAPACITY_AUTHENTICITY.md`](docs/CAPACITY_AUTHENTICITY.md) for the separate USB capacity-integrity test. See also `docs/STATISTICAL_SECTOR_RECOVERY_B18.md` for the level policies.
 
@@ -87,22 +87,22 @@ On Windows PowerShell, run these same commands using `py` if Python is installed
 
 ```bash
 python scripts/build_desktop.py --public-beta --no-wheel
-python dist/DriveRepair-0.3.3b22-public-beta.pyz gui
+python dist/DriveRepair-0.3.3b23-public-beta.pyz gui
 ```
 
 Install optional `PySide6` in that Python environment if you want the new Qt workstation. The **public-beta** package blocks physical in-place writes. The separate **repair-beta** package may attempt the guided, HDD-only write workflow on sacrificial hardware with all safeguards enabled:
 
 ```bash
 python scripts/build_desktop.py --repair-beta --no-wheel
-python dist/DriveRepair-0.3.3b22-repair-beta.pyz qt-gui
+python dist/DriveRepair-0.3.3b23-repair-beta.pyz qt-gui
 ```
 
 For a CLI image-only example, use a source **regular file** and an unused output path:
 
 ```bash
-python dist/DriveRepair-0.3.3b22-public-beta.pyz scan-image --image source.img --mode triage --json
-python dist/DriveRepair-0.3.3b22-public-beta.pyz rescue-image --image source.img --output recovered.img --json
-python dist/DriveRepair-0.3.3b22-public-beta.pyz rescue-status --output recovered.img --json
+python dist/DriveRepair-0.3.3b23-public-beta.pyz scan-image --image source.img --mode triage --json
+python dist/DriveRepair-0.3.3b23-public-beta.pyz rescue-image --image source.img --output recovered.img --json
+python dist/DriveRepair-0.3.3b23-public-beta.pyz rescue-status --output recovered.img --json
 ```
 
 A repair-beta build is **not** a recommendation to write to a failing or valuable patient. See [hardware testing requirements](docs/USB_REPAIR_PREFLIGHT_B17.md) and [release gates](docs/RELEASE_STATUS.md).
@@ -116,6 +116,10 @@ Select the actual *source* disk; double-check its capacity and masked serial suf
 After a quick or full scan with recorded read failures, **Address scan errors…** can perform bounded, read-only rereads of **those saved offsets** without repeating the full-drive scan, or route directly to image rescue. Reread success is not a physical repair or integrity certificate.
 
 The evidence map distinguishes **readable**, **slow**, **failed read requests**, and **untested** regions. Progress is the amount of the selected job completed; **measured read coverage** is the unique portion of the medium observed. These percentages can differ, especially on a quick sample. Failed read requests are not a count of bad sectors.
+
+### Repair eligibility on external USB drives
+
+In **HDD maintenance**, DriveRepair now shows one next action: **Enable SMART identification**, **Check drive SMART and identity**, **Rescue data to an image**, or **Review guarded repair**. If read-only SMART detection fails, the reason from the USB bridge is retained in the local expert log and the readiness guidance. An HDD model name or Windows HealthStatus alone cannot authorize physical writes; some USB bridges hide the underlying ATA rotational-media and SMART identity. If SMART evidence is sufficient, the actual engine still requires identity revalidation, a suitable durable journal, exclusive access and explicit write consent. If it is not sufficient, rescue remains available. See [Windows repair readiness checks](docs/REPAIR_READINESS_B23.md).
 
 ### 2. Rescue data (recommended first)
 
