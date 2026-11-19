@@ -1,0 +1,484 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 82e6f83..0bf4d12 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,13 @@
+ # Changelog
+ 
++## Unreleased — 2026-11-19 USB SMART identification and truthful preflight (0.3.3b17)
++
++- Apply the **same physical-repair eligibility decision in every Qt build**, not only the guarded beta. The UI checks stable serial, SMART evidence and actual media suitability before launching a repair subprocess; a Seagate SMR model label alone does not authorize patient writes. When repair is ineligible, show **Rescue to image instead** rather than a clickable Start button that predictably fails after launch. The CLI/engine remains independently authoritative.
++- Add **one bounded, read-only SAT (`smartctl -d sat`) fallback** for USB-attached SATA drives whose automatic SMART query omitted rotation rate. Accept the SAT result only when it actually supplies a numeric rotation-rate declaration and no command/open errors. Do not try SAT for positively identified NVMe; an unresponsive or incapable bridge remains UNKNOWN. Neither this probe nor a SMART pass certifies healthy media or authorizes writes by itself.
++- Simplify empty-workspace presentation: hide the blank health gauge and manufacturer-hour comparison until relevant SMART evidence exists. Clarify the flash wizard's image label as **ISO file checked; BIOS/UEFI unverified**. Keep the destructive erase confirmation unfilled and mandatory.
++- Correct misleading transient states: report device preflight as preflight (not a stalled disk read), and clear stale `Waiting on drive` indicators when the worker exits. This does not fix Windows kernel I/O cancellation.
++- Add synthetic tests for verified HDD permission, SSD/unknown refusal, SATA-through-USB SMART fallback, invalid SAT status and no unnecessary NVMe SAT probe. Passing tests do NOT qualify real device rewrites, ISO boot, or native Qt rendering. See `docs/USB_REPAIR_PREFLIGHT_B17.md`.
++
+ ## Unreleased — 2026-11-19 truthful partial-repair outcomes and strict SSD/USB gate (0.3.3b16)
+ 
+ - Fix Qt result translation: `partial_repair_unresolved_data` (nonzero exit) now shows rewritten/independently postverified bytes and unresolved scan evidence, rather than collapsing to generic `Stopped (2)`; failed read requests are NOT defective-sector counts; copied operator summaries use readable workflow names and that explicit distinction. Verification failure remains distinct from verified maintenance.
+diff --git a/README.md b/README.md
+index 2292649..3ed6f5b 100644
+--- a/README.md
++++ b/README.md
+@@ -39,6 +39,12 @@ The updated Qt workstation offers a 64×12 full-device evidence map with **aggre
+ 
+ See [workstation, batch, reliability and boot-handoff details](docs/MULTIDRIVE_CONDITION_AND_LIVE_UI_20261118.md) for completed changes, limitations and Windows testing checklist. **The new capabilities are source-level, not a hardware-certified release.**
+ 
++### 0.3.3b17: why an SMR Seagate can show “Repair ineligible” over USB
++
++The ST1000LM048 model is listed as a **5,400 RPM SMR HDD** in Seagate's BarraCuda 2.5 datasheet. That classifies the *model* for read-only sequential-first imaging; it does **not** verify what a USB bridge currently exposes or whether source writes are safe. A separate SMART ATA Identify result with a valid rotation rate and health information is required for the guided HDD-rewrite workflow. This revision tries one bounded read-only `smartctl -d sat` fallback when the automatic USB SMART query lacks media type. If that fails, the repair action remains disabled and offers **Rescue to image instead**. To unlock a suitable HDD for testing, install smartmontools and use a bridge with SAT SMART pass-through or connect the patient through a safe offline SATA interface, then verify identity and available SMART evidence. The engine independently enforces all existing locks, journal, and confirmation gates.
++
++A green map cell only means the bytes were readable during that request. An unreadable block is not reconstructed by HDD refresh; flash devices must never be treated like magnetic-sector repair targets. This is a bugfix and workflow update, **not** proof of revived drive lifetime or validation of Windows cancellation behavior.
++
+ ## Start here — choose the safest workflow
+ 
+ | Your situation | Start with | What the result means |
+@@ -54,22 +60,22 @@ The desktop interface uses Python, optional PySide6 (Qt UI), and a Tk fallback.
+ 
+ ```sh
+ python scripts/build_desktop.py --public-beta --no-wheel
+-python dist/DriveRepair-0.3.3b13-public-beta.pyz gui
++python dist/DriveRepair-0.3.3b17-public-beta.pyz gui
+ ```
+ 
+ For a CLI image-only example, use a source **regular file** and an unused output path:
+ 
+ ```sh
+-python dist/DriveRepair-0.3.3b13-public-beta.pyz scan-image --image source.img --mode triage --json
+-python dist/DriveRepair-0.3.3b13-public-beta.pyz rescue-image --image source.img --output recovered.img --json
+-python dist/DriveRepair-0.3.3b13-public-beta.pyz rescue-status --output recovered.img --json
++python dist/DriveRepair-0.3.3b17-public-beta.pyz scan-image --image source.img --mode triage --json
++python dist/DriveRepair-0.3.3b17-public-beta.pyz rescue-image --image source.img --output recovered.img --json
++python dist/DriveRepair-0.3.3b17-public-beta.pyz rescue-status --output recovered.img --json
+ ```
+ 
+ For experimental **actual guided HDD repair** using a *separate*, explicitly restricted build, run:
+ 
+ ```sh
+ python scripts/build_desktop.py --repair-beta --no-wheel
+-python dist/DriveRepair-0.3.3b13-repair-beta.pyz qt-gui
++python dist/DriveRepair-0.3.3b17-repair-beta.pyz qt-gui
+ ```
+ 
+ This build enables **guided `care-external` physical writes** (not unconditional write commands). It requires smartctl evidence of an HDD, separate disk-backed journal, fingerprint confirmation and exclusive locking; unknown/SSD/NVMe media are not rewrite targets. The GUI requests explicit data-loss and SMART-warning consent. This is for *sacrificial hardware testing*, not qualification for valuable media. See [repair-beta engineering and hardware handoff](docs/REPAIR_BETA_ENGINEERING_20261118.md).
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index 23d406d..4869a13 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b16"
++__version__ = "0.3.3b17"
+diff --git a/desktop/driverepair_desktop/health.py b/desktop/driverepair_desktop/health.py
+index 83c959a..dd3eb84 100644
+--- a/desktop/driverepair_desktop/health.py
++++ b/desktop/driverepair_desktop/health.py
+@@ -21,7 +21,7 @@ def health_snapshot(device: Device,
+     from .dependencies import smartctl_path
+     cmd = [smartctl_path() or 'smartctl', '--json', '--all', device.path]
+     try:
+-        proc = run(cmd, capture_output=True, timeout=30, check=False)
++        proc = run(cmd, capture_output=True, timeout=12, check=False)
+     except FileNotFoundError as exc:
+         raise RuntimeError('SMART support requires smartctl (smartmontools), not installed') from exc
+     except subprocess.TimeoutExpired as exc:
+@@ -32,6 +32,35 @@ def health_snapshot(device: Device,
+         raise RuntimeError('smartctl did not provide valid JSON; device health unknown') from exc
+     if not isinstance(raw, dict):
+         raise RuntimeError('Unexpected smartctl JSON structure')
++    # Many SATA drives are invisible to smartctl's automatic device detection
++    # behind a USB bridge. One OPTIONAL SAT pass-through probe can recover the
++    # actual ATA IDENTIFY rotation-rate and SMART attributes. It never writes,
++    # never guesses medium from USB/model, and has a separate short timeout.
++    # Do not try it for identified NVMe (SAT is ATA-specific) or when the first
++    # probe already reported rotation rate. A hung first probe is NOT retried.
++    source = 'smartctl_auto'
++    device_protocol = str((raw.get('device') or {}).get('protocol') or '').lower()
++    if (device.bus.lower() in {'usb', 'thunderbolt', 'firewire'}
++            and type(raw.get('rotation_rate')) is not int
++            and 'nvme' not in device_protocol
++            and not raw.get('nvme_smart_health_information_log')
++            # Never replace an existing device-failure or media-warning result
++            # with a more optimistic second view through the USB bridge.
++            and not (proc.returncode & (0x08 | 0x10))
++            and (raw.get('smart_status') or {}).get('passed') is not False
++            and not (raw.get('ata_smart_attributes') or {}).get('table')):
++        try:
++            sat = run([cmd[0], '--json', '--all', '-d', 'sat', device.path],
++                      capture_output=True, timeout=6, check=False)
++            sat_raw = json.loads(sat.stdout.decode('utf-8-sig'))
++            if (isinstance(sat_raw, dict) and not (sat.returncode & 0x07)
++                    and type(sat_raw.get('rotation_rate')) is int):
++                # SAT must supply a real ATA rotation declaration. Otherwise
++                # the auto probe remains authoritative and media stays unknown.
++                proc, raw, source = sat, sat_raw, 'smartctl_sat_passthrough'
++        except (FileNotFoundError, subprocess.TimeoutExpired, ValueError,
++                UnicodeError, AttributeError, OSError):
++            pass
+     # CLI command, open/identity and SMART command failures invalidate the snapshot.
+     # Other smartctl bits describe actual health concerns and must be retained.
+     if proc.returncode & 0x07:
+@@ -57,6 +86,7 @@ def health_snapshot(device: Device,
+                       'raw_value': (item.get('raw') or {}).get('value')})
+     result = {
+         'status': status,
++        'source': source,
+         'device': device.public(),
+         'smartctl_exit_status': proc.returncode,
+         'smart_status_passed': passed if isinstance(passed, bool) else None,
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+index 32fa317..3ba1b41 100644
+--- a/desktop/driverepair_desktop/qtgui.py
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -898,6 +898,9 @@ def launch():
+             result_card.addWidget(results_heading)
+             condition_row=QHBoxLayout()
+             self.condition_gauge=ConditionGauge()
++            # The big dial adds visual noise when there is no actual SMART
++            # measurement. Reveal it only after a meaningful score exists.
++            self.condition_gauge.setVisible(False)
+             condition_row.addWidget(self.condition_gauge)
+             condition_summary=QVBoxLayout()
+             self.condition_title=QLabel('Drive condition · not measured')
+@@ -912,6 +915,7 @@ def launch():
+             condition_row.addLayout(condition_summary,1)
+             result_card.addLayout(condition_row)
+             self.spec_button=QPushButton('Compare with documented service-hour rating…')
++            self.spec_button.setVisible(False)  # power-on evidence needed first
+             self.spec_button.setToolTip('Only supply a published model-specific operating-hour rating. Fleet MTBF is not a failure prediction.')
+             self.spec_button.clicked.connect(self.enter_manufacturer_specs)
+             result_card.addWidget(self.spec_button)
+@@ -933,6 +937,11 @@ def launch():
+             self.next_action.setTextFormat(Qt.PlainText)
+             result_card.addWidget(self.next_action)
+             report_row=QHBoxLayout()
++            self.rescue_instead=QPushButton('Rescue to image instead')
++            self.rescue_instead.setToolTip('Switch to read-only imaging of this selected drive; no source writes.')
++            self.rescue_instead.clicked.connect(lambda:self.select_goal('rescue'))
++            self.rescue_instead.setVisible(False)
++            report_row.addWidget(self.rescue_instead)
+             self.copy_summary_button=QPushButton('Copy operator summary')
+             self.copy_summary_button.setEnabled(False)
+             self.copy_summary_button.setToolTip('Copies only currently displayed local evidence. No data is sent anywhere.')
+@@ -1054,7 +1063,7 @@ def launch():
+                 if c.state()!=QProcess.NotRunning:
+                     self.note_log('SMART identification timed out; preserving unknown media. No writes attempted.')
+                     c.kill()
+-            QTimer.singleShot(12000,bound_probe)
++            QTimer.singleShot(22000,bound_probe)
+ 
+         def media_probe_done(self, child, key, code):
+             if child is not self._auto_probe_proc:
+@@ -1097,6 +1106,11 @@ def launch():
+                     and time.monotonic()-self._last_progress_at>8):
+                 self.metric_labels['rate'].setText('Waiting on drive')
+                 elapsed=int(time.monotonic()-self._last_progress_at)
++                if self._last_phase is None and elapsed < 30:
++                    self.help.setText('Waiting for device and access preflight to return. '
++                        'No scan or write has been confirmed yet.')
++                    self.phase_caption.setText('Preflight pending · zero confirmed I/O')
++                    return
+                 self.help.setText(f'Waiting {elapsed}s for the storage driver or USB device. '
+                     'No new I/O result; the operation is NOT necessarily progressing. '
+                     'Stop waits for a safe boundary and may not interrupt a blocked kernel request.')
+@@ -1227,27 +1241,20 @@ def launch():
+                 running=running, public_beta=PUBLIC_BETA_IMAGE_ONLY)
+             if enabled and kind in {'carequick','carefull','careresume'}:
+                 from .repair_readiness import ui_repair_readiness
+-                ready, reason = ui_repair_readiness(self.selected(),kind)
++                dev=self.selected() or {}
++                snap=self._health_by_device.get(dev.get('identity_hint'))
++                ready, reason = ui_repair_readiness(dev,kind,snapshot=snap)
+                 if not ready:
+                     enabled=False
+                     advice=reason
+-                elif REPAIR_BETA_GUARDED:
+-                    from .repair_strategy import advise
+-                    dev=self.selected() or {}
+-                    snap=self._health_by_device.get(dev.get('identity_hint'))
+-                    if not snap:
+-                        enabled=False
+-                        advice='Checking SMART media type before physical repair. If unavailable, rescue data instead.'
+-                    else:
+-                        decision=advise(model=dev.get('model',''),bus=dev.get('bus',''),
+-                            sector=int(dev.get('sector_size') or 512),snapshot=snap)
+-                        if not decision.can_attempt_hdd_refresh:
+-                            enabled=False
+-                            advice='Read-only only: '+decision.label+'. '+'; '.join(decision.reasons)
+             if self._pending_resume:
+                 enabled=False
+                 advice='Waiting for verified USB reconnect. Cancel reconnect to choose another operation.'
+             self.start.setEnabled(enabled)
++            # When a repair is ineligible, expose the non-destructive next step
++            # without a cryptic failed worker run. No source write is performed.
++            self.rescue_instead.setVisible(kind in {'carequick','carefull','careresume'}
++                and bool(self.selected()) and not enabled and not running)
+             self.ready_note.setText(advice)
+             self.start.setToolTip(advice)
+             self.device_box.setEnabled(not running)
+@@ -1312,6 +1319,8 @@ def launch():
+                 return
+             self.condition_gauge.set_assessment(report)
+             score=report.get('score')
++            self.condition_gauge.setVisible(type(score) in (int,float))
++            self.spec_button.setVisible(type(report.get('power_on_hours')) is int)
+             confidence=report.get('confidence') or 'unknown'
+             self.condition_title.setText('Condition index: ' +
+                 ('Unknown' if score is None else f"{score}/100 · {report.get('band','UNKNOWN')}") +
+@@ -1413,12 +1422,12 @@ def launch():
+                 'Never choose a recovery patient or a USB disk holding the ISO.')
+             caption.setWordWrap(True)
+             lay.addWidget(caption)
+-            image_label=QLabel('RECOVERY IMAGE READY  ·  '+Path(image['path']).name+'  ·  '+display_size(image['bytes']))
++            image_label=QLabel('ISO FILE CHECKED · BOOT UNVERIFIED  ·  '+Path(image['path']).name+'  ·  '+display_size(image['bytes']))
+             image_label.setObjectName('section')
+             image_label.setWordWrap(True)
+             lay.addWidget(image_label)
+             source_note=QLabel('Local image auto-selected. ISO markers checked; BIOS/UEFI boot unverified. '
+-                'To change the image, close this wizard and use the ISO selection override below.')
++                'Choose a different ISO below only if needed. The selected file is not yet boot-qualified.')
+             source_note.setObjectName('muted')
+             source_note.setWordWrap(True)
+             lay.addWidget(source_note)
+@@ -1438,7 +1447,7 @@ def launch():
+                     return
+                 image.update(new_image)
+                 self._media_settings.setValue('last_iso',new_image['path'])
+-                image_label.setText('RECOVERY IMAGE READY  ·  '+Path(image['path']).name+'  ·  '+display_size(image['bytes']))
++                image_label.setText('ISO FILE CHECKED · BOOT UNVERIFIED  ·  '+Path(image['path']).name+'  ·  '+display_size(image['bytes']))
+                 # On a new image size, all target choices must be reevaluated.
+                 target_box.clear()
+                 target_box.addItem('Choose a USB drive (nothing selected)',None)
+@@ -1926,7 +1935,8 @@ def launch():
+             d=self.selected()
+             if kind in {'carequick','carefull','careresume'}:
+                 from .repair_readiness import ui_repair_readiness
+-                ready, reason = ui_repair_readiness(d,kind)
++                ready, reason = ui_repair_readiness(d,kind,
++                    snapshot=self._health_by_device.get((d or {}).get('identity_hint')))
+                 if not ready:
+                     QMessageBox.warning(self,'Drive is not eligible for physical writes',reason)
+                     return
+@@ -2146,8 +2156,9 @@ def launch():
+             self.evidence_scope.setText('Untested is unknown')
+             self.result.setText('Running — monitoring the device')
+             self.explain.setText('Unknown regions remain unknown until observed.')
+-            self.status.setText('Working…')
+-            self.help.setText('Read-only where possible; no results are inferred from the progress bar.')
++            self.status.setText('Starting · validating device')
++            self.help.setText('Identifying the selected device and checking access before reads. '
++                'No media repair is claimed until readback verification completes.')
+             self._buf={'stdout':'','stderr':''}
+             self._final_stdout=''
+             self._scanned=0
+@@ -2309,6 +2320,11 @@ def launch():
+             self.start.setEnabled(True)
+             self.stop.setEnabled(False)
+             self.metric_labels['eta'].setText('—')
++            if self.metric_labels['rate'].text() == 'Waiting on drive':
++                self.metric_labels['rate'].setText('—')
++            self.help.setText('Worker exited. Only completed reads and verified transactions are evidence; '
++                              'a stalled kernel request may still require reconnecting the device.')
++            self.phase_caption.setText('Worker exited · final outcome shown below')
+             self.proc=None
+             self._stop_requested=False
+             if exit_code==0 and self._final_stdout.strip():
+@@ -2350,7 +2366,7 @@ def launch():
+                 self.show_condition(condition_report['after'], previous=condition_report.get('before'))
+             elif isinstance(result.get('condition_assessment'),dict):
+                 self.show_condition(result['condition_assessment'])
+-            text=str(result.get('status') or ('Completed' if exit_code==0 else 'Stopped / failed'))
++            text=str(result.get('status') or ('Completed' if exit_code==0 else 'Incomplete / attention needed'))
+             self.status.setText(text.replace('_',' ').title())
+             if user_stop_requested and exit_code!=0:
+                 self.result.setText('Stopped by operator — incomplete scan')
+diff --git a/desktop/driverepair_desktop/repair_readiness.py b/desktop/driverepair_desktop/repair_readiness.py
+index d441329..9af5638 100644
+--- a/desktop/driverepair_desktop/repair_readiness.py
++++ b/desktop/driverepair_desktop/repair_readiness.py
+@@ -1,23 +1,40 @@
+-"""Preflight hints for the GUI; the independent CLI remains authoritative.
++"""Read-only UI eligibility hints for guided physical repairs.
+ 
+-A USB bridge hiding the disk serial is not an authorization to weaken physical
+-write identity checks. Reject early before a lengthy scan falsely implies that
+-repair will follow.
++The CLI/engine independently rechecks identity, SMART, mounts, journal and locks.
++A model-label classification may select a *rescue* strategy but never grants a
++physical-write permit. Keep this decision identical across engineering and
++repair-beta UIs so a rejected operation does not briefly look like it started.
+ """
+ from __future__ import annotations
+ 
++from .repair_strategy import advise
+ 
+-def ui_repair_readiness(device: dict | None, operation: str) -> tuple[bool, str]:
+-    if operation not in {'carequick', 'carefull', 'careresume'}:
++REPAIR_OPERATIONS = frozenset({'carequick', 'carefull', 'careresume'})
++
++
++def ui_repair_readiness(device: dict | None, operation: str,
++                        snapshot: dict | None = None) -> tuple[bool, str]:
++    if operation not in REPAIR_OPERATIONS:
+         return True, ''
+     if not device:
+         return False, 'Select a physical drive before requesting a repair.'
+     suffix = str(device.get('serial_suffix') or '').strip().lower()
+     if not suffix or suffix in {'unavailable', 'unknown', 'none', 'null', 'n/a'}:
+-        return False, ('Repair unavailable: the USB bridge did not report a stable hardware serial. '
+-                       'Use Diagnose or Rescue Data; for physical repair, connect through a bridge '
+-                       'that exposes the hardware serial (or direct SATA), then Refresh. '
+-                       'Never invent a serial or override the identity gate.')
++        return False, ('The USB bridge did not expose a stable device serial. '
++                       'Rescue readable data to an image; for HDD repair, use a bridge '
++                       'that passes identity and SMART, or connect via direct SATA.')
+     if str(device.get('bus') or '').lower() not in {'usb', '1394', 'thunderbolt', 'firewire', 'sd', 'mmc'}:
+-        return False, 'Physical write target is not a positively identified external drive.'
+-    return True, 'Hardware serial reported. SMART, exclusive access and journal checks still apply.'
++        return False, 'The selected device is not an identified external whole disk.'
++    if not isinstance(snapshot, dict) or not snapshot:
++        return False, ('Rotational media and SMART health have not been established. '
++                       'Run Diagnose → SMART health (install smartmontools if needed), '
++                       'or Rescue Data now. A manufacturer model name alone is not a write permit.')
++    decision = advise(model=str(device.get('model') or ''),
++                      bus=str(device.get('bus') or ''),
++                      sector=int(device.get('sector_size') or 512), snapshot=snapshot)
++    if not decision.can_attempt_hdd_refresh:
++        return False, (decision.label + '. ' + '; '.join(decision.reasons) +
++                       ' Open Rescue Data to make a separate image without altering the source.')
++    return True, ('Rotational HDD and SMART evidence available. The engine must still '
++                  'recheck physical identity, exclusive access and a durable journal; '
++                  'no repair or improved lifespan is guaranteed.')
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index 61d0672..4bbe2f2 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b16"
++version = "0.3.3b17"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_health.py b/desktop/tests/test_health.py
+index 5bf0df9..58684d6 100644
+--- a/desktop/tests/test_health.py
++++ b/desktop/tests/test_health.py
+@@ -39,6 +39,51 @@ class HealthTests(unittest.TestCase):
+         self.assertEqual(result['nvme']['media_errors'], 2)
+         self.assertEqual(result['status'], 'smart_passed_limited')
+ 
++    def test_usb_sat_passthrough_identifies_rotational_hdd(self):
++        commands=[]
++        def runner(cmd, **kw):
++            commands.append(cmd)
++            if '-d' in cmd:
++                return subprocess.CompletedProcess(cmd,0,stdout=json.dumps({
++                    'rotation_rate':5400, 'smart_status':{'passed':True},
++                    'device':{'protocol':'ATA'}, 'ata_smart_attributes':{'table':[]},
++                }).encode())
++            return subprocess.CompletedProcess(cmd,0,stdout=json.dumps({
++                'device':{'protocol':'SCSI'},'smart_status':{'passed':True},
++            }).encode())
++        snapshot=health_snapshot(self.device,run=runner)
++        self.assertEqual(snapshot['reported_medium'],'hdd')
++        self.assertEqual(snapshot['rotation_rate_rpm'],5400)
++        self.assertEqual(snapshot['source'],'smartctl_sat_passthrough')
++        self.assertIn('-d',commands[-1])
++
++    def test_sat_fallback_does_not_fabricate_rotational_evidence(self):
++        def runner(cmd, **kw):
++            if '-d' in cmd:
++                return subprocess.CompletedProcess(cmd,2,stdout=b'{}')
++            return subprocess.CompletedProcess(cmd,0,stdout=b'{"smart_status":{"passed":true}}')
++        snapshot=health_snapshot(self.device,run=runner)
++        self.assertEqual(snapshot['reported_medium'],'unknown')
++        self.assertEqual(snapshot['source'],'smartctl_auto')
++
++    def test_sat_fallback_never_downgrades_critical_warning(self):
++        calls=[]
++        def runner(cmd, **kw):
++            calls.append(cmd)
++            return subprocess.CompletedProcess(cmd,8,stdout=b'{"smart_status":{"passed":false}}')
++        snapshot=health_snapshot(self.device,run=runner)
++        self.assertEqual(snapshot['status'],'failure_reported')
++        self.assertEqual(len(calls),1)
++
++    def test_sat_does_not_override_known_nvme(self):
++        commands=[]
++        def runner(cmd, **kw):
++            commands.append(cmd)
++            return subprocess.CompletedProcess(cmd,0,stdout=b'{"device":{"protocol":"NVMe"},"smart_status":{"passed":true}}')
++        snapshot=health_snapshot(self.device,run=runner)
++        self.assertEqual(snapshot['reported_medium'],'ssd')
++        self.assertEqual(len(commands),1)
++
+     def test_scan_health_tracker_latency_and_readiness(self):
+         from driverepair_desktop.health import ScanHealthTracker
+         tracker = ScanHealthTracker(bus='usb', smart=None)
+diff --git a/desktop/tests/test_recovery_media_catalog.py b/desktop/tests/test_recovery_media_catalog.py
+index ed7554f..9f3ac54 100644
+--- a/desktop/tests/test_recovery_media_catalog.py
++++ b/desktop/tests/test_recovery_media_catalog.py
+@@ -64,8 +64,19 @@ class RepairReadinessTests(unittest.TestCase):
+         self.assertTrue(ui_repair_readiness({'serial_suffix':'unavailable','bus':'usb'},'rescue')[0])
+ 
+     def test_serial_is_necessary_not_sufficient(self):
+-        self.assertTrue(ui_repair_readiness({'serial_suffix':'***abcd','bus':'usb'},'carequick')[0])
++        device={'serial_suffix':'***abcd','bus':'usb','model':'ST1000LM048','sector_size':512}
++        self.assertFalse(ui_repair_readiness(device,'carequick')[0])
+         self.assertFalse(ui_repair_readiness({'serial_suffix':'***abcd','bus':'sata'},'carequick')[0])
++        snap={'status':'smart_passed_limited','reported_medium':'hdd',
++              'rotation_rate_rpm':5400,'ata_selected_raw_attributes':[]}
++        ready,note=ui_repair_readiness(device,'carequick',snapshot=snap)
++        self.assertTrue(ready,note)
++        self.assertIn('engine must still',note)
++        for medium in ('ssd','unknown','flash drive'):
++            self.assertFalse(ui_repair_readiness(device,'carequick',snapshot={
++                'status':'smart_passed_limited','reported_medium':medium,
++                'ata_selected_raw_attributes':[]})[0])
++        self.assertTrue(ui_repair_readiness(device,'rescue')[0])
+ 
+ 
+ if __name__=='__main__': unittest.main()
+diff --git a/docs/USB_REPAIR_PREFLIGHT_B17.md b/docs/USB_REPAIR_PREFLIGHT_B17.md
+new file mode 100644
+index 0000000..94a9aa6
+--- /dev/null
++++ b/docs/USB_REPAIR_PREFLIGHT_B17.md
+@@ -0,0 +1,32 @@
++# DriveRepair 0.3.3b17 — USB SMART preflight and GUI QA handoff
++
++## Evidence from operator screenshots
++
++- Seagate `ST1000LM048` via USB shows manufacturer-model **SMR** classification but physical-write permission blocked due to missing independently measured media/SMART evidence. The screen previously still allowed **Start authorized repair** in engineering mode, then returned exit code 1 without a scan. This was a *preflight UX defect*; the model-name classification and the write restriction are two different claims.
++- SanDisk `SDSSDH3` is a published SSD family; it remains **not eligible** for HDD-specific rewrites. Removable flash and unknown media likewise remain image-first.
++- USB creator has a selected ISO and sacrificial USB target, but the ISO header check proves neither bootability nor a safe host/disk mapping. Typed `ERASE <disk-id>` plus the separate unchecked data-loss confirmation remain mandatory.
++
++## Implemented
++
++1. Qt checks the same `advise()`-based physical media decision for **all** release channels before opening a care subprocess. A missing SMART snapshot is a reason to scan/rescue, never a write pass. Core CLI gates are unchanged and authoritative.
++2. The repair pane exposes a direct **Rescue to image instead** action if repair preflight fails. Status now calls initial silence "preflight" rather than a device read stall and does not leave "Waiting on drive" as a completed job metric.
++3. A single bounded SATA pass-through SMART probe (`-d sat`, ATA only) is attempted for external USB drives when automatic smartctl cannot establish rotation rate. It only accepts a real rotation-rate declaration with a successful command/open result; unsupported bridges remain unknown.
++4. No dummy health gauge until a score exists; no manufacturer hours control until actual power-on-hours evidence exists. Flash wizard explicitly labels the ISO **boot unverified**.
++
++## Mandatory Windows hardware handoff (DO NOT use valuable data)
++
++- Install and locate a current smartmontools build; compare automatic SMART versus `-d sat` read-only output on a sacrificial Seagate ST1000LM048 through the actual dock. Record safe serial/rotation/health metadata *without full serials*. A bridge that does not pass SAT remains write-ineligible.
++- On a real SSD (including SDSSDH3) and a USB flash stick, verify that the HDD repair Start button is **disabled before launch** with a Rescue action. Confirm no physical open-for-write or scan job started. The CLI must independently refuse when invoked directly.
++- On a sacrificial rotational disk that reports SMART, confirm the UI permits the authorization wizard **only** once SMART media, lock, identity and journal requirements can be met. Check actual journal/verification before declaring a repair. A click alone proves nothing.
++- Run through failed SMART, OS metadata timeouts, drive change, USB unplug, Windows kernel-blocked read, and USB bridge serial duplicates. Validate the GUI never reports full repair or healthy data without independent evidence.
++- Visually test Qt in Windows at 100/125/150/200% DPI and smaller windows, screen-reader focus and keyboard-only navigation. The native Qt window was not executed in the code review environment.
++- Test USB flash only with an expendable stick and a **separately qualified** DriveRepair live ISO, then BIOS/UEFI boot and read-only patient behavior. No USB flash or boot occurred in this change.
++
++## Required output from hardware agent
++
++Capture selected drive/model/bus/sector, SMART probe result source (auto or SAT), media confidence, redacted identity hint, reason for repair readiness decision, command exit status, journal location (redacted), postwrite verification, whether any source write occurred, and a screenshot of each blocked/unblocked state. Mark unknowns explicitly. Do not upload raw SMART serials or private recovered data.
++
++## Source references
++
++- Seagate BarraCuda 2.5 DS1907.4-2507US, table: ST1000LM048, 5400 RPM, SMR.
++- smartmontools `smartctl(8)` device type / `-d sat` documentation. USB SAT translation depends on enclosure/controller support.

@@ -39,6 +39,51 @@ class HealthTests(unittest.TestCase):
         self.assertEqual(result['nvme']['media_errors'], 2)
         self.assertEqual(result['status'], 'smart_passed_limited')
 
+    def test_usb_sat_passthrough_identifies_rotational_hdd(self):
+        commands=[]
+        def runner(cmd, **kw):
+            commands.append(cmd)
+            if '-d' in cmd:
+                return subprocess.CompletedProcess(cmd,0,stdout=json.dumps({
+                    'rotation_rate':5400, 'smart_status':{'passed':True},
+                    'device':{'protocol':'ATA'}, 'ata_smart_attributes':{'table':[]},
+                }).encode())
+            return subprocess.CompletedProcess(cmd,0,stdout=json.dumps({
+                'device':{'protocol':'SCSI'},'smart_status':{'passed':True},
+            }).encode())
+        snapshot=health_snapshot(self.device,run=runner)
+        self.assertEqual(snapshot['reported_medium'],'hdd')
+        self.assertEqual(snapshot['rotation_rate_rpm'],5400)
+        self.assertEqual(snapshot['source'],'smartctl_sat_passthrough')
+        self.assertIn('-d',commands[-1])
+
+    def test_sat_fallback_does_not_fabricate_rotational_evidence(self):
+        def runner(cmd, **kw):
+            if '-d' in cmd:
+                return subprocess.CompletedProcess(cmd,2,stdout=b'{}')
+            return subprocess.CompletedProcess(cmd,0,stdout=b'{"smart_status":{"passed":true}}')
+        snapshot=health_snapshot(self.device,run=runner)
+        self.assertEqual(snapshot['reported_medium'],'unknown')
+        self.assertEqual(snapshot['source'],'smartctl_auto')
+
+    def test_sat_fallback_never_downgrades_critical_warning(self):
+        calls=[]
+        def runner(cmd, **kw):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd,8,stdout=b'{"smart_status":{"passed":false}}')
+        snapshot=health_snapshot(self.device,run=runner)
+        self.assertEqual(snapshot['status'],'failure_reported')
+        self.assertEqual(len(calls),1)
+
+    def test_sat_does_not_override_known_nvme(self):
+        commands=[]
+        def runner(cmd, **kw):
+            commands.append(cmd)
+            return subprocess.CompletedProcess(cmd,0,stdout=b'{"device":{"protocol":"NVMe"},"smart_status":{"passed":true}}')
+        snapshot=health_snapshot(self.device,run=runner)
+        self.assertEqual(snapshot['reported_medium'],'ssd')
+        self.assertEqual(len(commands),1)
+
     def test_scan_health_tracker_latency_and_readiness(self):
         from driverepair_desktop.health import ScanHealthTracker
         tracker = ScanHealthTracker(bus='usb', smart=None)

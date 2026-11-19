@@ -21,7 +21,7 @@ def health_snapshot(device: Device,
     from .dependencies import smartctl_path
     cmd = [smartctl_path() or 'smartctl', '--json', '--all', device.path]
     try:
-        proc = run(cmd, capture_output=True, timeout=30, check=False)
+        proc = run(cmd, capture_output=True, timeout=12, check=False)
     except FileNotFoundError as exc:
         raise RuntimeError('SMART support requires smartctl (smartmontools), not installed') from exc
     except subprocess.TimeoutExpired as exc:
@@ -32,6 +32,35 @@ def health_snapshot(device: Device,
         raise RuntimeError('smartctl did not provide valid JSON; device health unknown') from exc
     if not isinstance(raw, dict):
         raise RuntimeError('Unexpected smartctl JSON structure')
+    # Many SATA drives are invisible to smartctl's automatic device detection
+    # behind a USB bridge. One OPTIONAL SAT pass-through probe can recover the
+    # actual ATA IDENTIFY rotation-rate and SMART attributes. It never writes,
+    # never guesses medium from USB/model, and has a separate short timeout.
+    # Do not try it for identified NVMe (SAT is ATA-specific) or when the first
+    # probe already reported rotation rate. A hung first probe is NOT retried.
+    source = 'smartctl_auto'
+    device_protocol = str((raw.get('device') or {}).get('protocol') or '').lower()
+    if (device.bus.lower() in {'usb', 'thunderbolt', 'firewire'}
+            and type(raw.get('rotation_rate')) is not int
+            and 'nvme' not in device_protocol
+            and not raw.get('nvme_smart_health_information_log')
+            # Never replace an existing device-failure or media-warning result
+            # with a more optimistic second view through the USB bridge.
+            and not (proc.returncode & (0x08 | 0x10))
+            and (raw.get('smart_status') or {}).get('passed') is not False
+            and not (raw.get('ata_smart_attributes') or {}).get('table')):
+        try:
+            sat = run([cmd[0], '--json', '--all', '-d', 'sat', device.path],
+                      capture_output=True, timeout=6, check=False)
+            sat_raw = json.loads(sat.stdout.decode('utf-8-sig'))
+            if (isinstance(sat_raw, dict) and not (sat.returncode & 0x07)
+                    and type(sat_raw.get('rotation_rate')) is int):
+                # SAT must supply a real ATA rotation declaration. Otherwise
+                # the auto probe remains authoritative and media stays unknown.
+                proc, raw, source = sat, sat_raw, 'smartctl_sat_passthrough'
+        except (FileNotFoundError, subprocess.TimeoutExpired, ValueError,
+                UnicodeError, AttributeError, OSError):
+            pass
     # CLI command, open/identity and SMART command failures invalidate the snapshot.
     # Other smartctl bits describe actual health concerns and must be retained.
     if proc.returncode & 0x07:
@@ -57,6 +86,7 @@ def health_snapshot(device: Device,
                       'raw_value': (item.get('raw') or {}).get('value')})
     result = {
         'status': status,
+        'source': source,
         'device': device.public(),
         'smartctl_exit_status': proc.returncode,
         'smart_status_passed': passed if isinstance(passed, bool) else None,

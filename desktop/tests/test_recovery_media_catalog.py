@@ -64,8 +64,19 @@ class RepairReadinessTests(unittest.TestCase):
         self.assertTrue(ui_repair_readiness({'serial_suffix':'unavailable','bus':'usb'},'rescue')[0])
 
     def test_serial_is_necessary_not_sufficient(self):
-        self.assertTrue(ui_repair_readiness({'serial_suffix':'***abcd','bus':'usb'},'carequick')[0])
+        device={'serial_suffix':'***abcd','bus':'usb','model':'ST1000LM048','sector_size':512}
+        self.assertFalse(ui_repair_readiness(device,'carequick')[0])
         self.assertFalse(ui_repair_readiness({'serial_suffix':'***abcd','bus':'sata'},'carequick')[0])
+        snap={'status':'smart_passed_limited','reported_medium':'hdd',
+              'rotation_rate_rpm':5400,'ata_selected_raw_attributes':[]}
+        ready,note=ui_repair_readiness(device,'carequick',snapshot=snap)
+        self.assertTrue(ready,note)
+        self.assertIn('engine must still',note)
+        for medium in ('ssd','unknown','flash drive'):
+            self.assertFalse(ui_repair_readiness(device,'carequick',snapshot={
+                'status':'smart_passed_limited','reported_medium':medium,
+                'ata_selected_raw_attributes':[]})[0])
+        self.assertTrue(ui_repair_readiness(device,'rescue')[0])
 
 
 if __name__=='__main__': unittest.main()
