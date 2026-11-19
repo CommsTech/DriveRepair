@@ -413,3 +413,5 @@ resume is supported only on Unix. Filesystem identity is not a content hash:
 in-place changes, identifier reuse, adversarial changes, and some network or
 unusual filesystem behavior may not be detected. Keep the output and journal
 on reliable storage and protect them from modification during and between runs.
+
+**USB flashing:** The Qt workstation has a separate **Flash bootable USB** action for existing ISO-hybrid images. It destroys the selected USB, requires typed confirmation and reads the result back, but BIOS/UEFI boot remains unverified. Never select the patient disk.

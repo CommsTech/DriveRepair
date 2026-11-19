@@ -18,8 +18,11 @@ Encryption: BitLocker, FileVault and LUKS require authorized credentials/keys; r
 `./scripts/build_live_iso.sh /build/output` targets Debian trixie on x86-64
 with GRUB-PC and GRUB-EFI via live-build. The package includes DriveRepair,
 Python/Tk, smartctl, GNU ddrescue, testdisk and network mount tools.
-It does NOT write to USB or patient media. The output is explicitly
-`UNVERIFIED` until BIOS and UEFI VM and hardware boot tests pass. The
+The builder itself does NOT write to USB or patient media. The separate Qt
+**Flash bootable USB** workflow can write this ISO-hybrid onto a confirmed
+sacrificial USB and verify the written bytes. It DESTROYS the entire selected
+USB. It does not establish BIOS/UEFI bootability; this remains `UNVERIFIED`
+until real boot tests pass. The
 separately included bare-metal Rust boot code is NOT an established recovery OS.
 
 See `ONE_DRIVE_RECOVERY.md` for the guided live-mode internal disk imaging

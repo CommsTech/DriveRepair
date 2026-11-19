@@ -73,6 +73,12 @@ def parser() -> argparse.ArgumentParser:
     cli = argparse.ArgumentParser(
         prog="driverepair", description="Disk diagnostics, image rescue and file recovery without reboot")
     sub = cli.add_subparsers(dest="command", required=True)
+    usb = sub.add_parser('flash-usb', help='DESTRUCTIVE: write a hybrid ISO to verified external USB and read back')
+    usb.add_argument('--iso', required=True)
+    usb.add_argument('--device', required=True)
+    usb.add_argument('--confirm-identity', required=True)
+    usb.add_argument('--confirm-erase', required=True)
+    usb.add_argument('--ack-data-loss', action='store_true')
     listing = sub.add_parser("list", help="List externally attached whole disks")
     listing.add_argument("--json", action="store_true")
     probe = sub.add_parser('probe-region', help='READ-ONLY: bounded investigation of a previously failed disk range')
@@ -1716,6 +1722,19 @@ def run(argv: list[str] | None = None) -> int:
         from .release_policy import block_public_physical_writes
         block_public_physical_writes(args.command,
                                      execute_optimization=bool(getattr(args, 'execute', False)))
+        if args.command == 'flash-usb':
+            from .usb_flash import flash_usb_iso
+            def report(e):
+                print(json.dumps(e, separators=(',', ':')), flush=True)
+            control = StopControl(enabled=True)
+            info = flash_usb_iso(args.iso,args.device,
+                should_stop=control.requested,
+                expect_fingerprint=args.confirm_identity,
+                typed_confirmation=args.confirm_erase,
+                acknowledge_data_loss=args.ack_data_loss,
+                progress=report)
+            print(json.dumps(info, separators=(',', ':')), flush=True)
+            return 0
         if args.command == 'inspect-storage':
             from .host_capabilities import inspect_readonly
             print(json.dumps(inspect_readonly(args.device),indent=2))

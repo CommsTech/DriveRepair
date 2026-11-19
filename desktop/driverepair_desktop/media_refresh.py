@@ -222,8 +222,17 @@ def _windows_lock_paths(partitions, *, allow_mounted: bool) -> list[str]:
 class WindowsReadWriter:
     """Win32 physical-drive RW handle with write-through."""
 
-    def __init__(self, device: Device, *, defer_raw_open: bool = False) -> None:
-        release_policy.assert_raw_device_writer_available()
+    def __init__(self, device: Device, *, defer_raw_open: bool = False,
+                 usb_boot_flash: bool = False) -> None:
+        # Boot ISO flashing is a separate, explicitly destructive operation.
+        # This narrow USB exception must never unlock HDD repair capabilities.
+        if usb_boot_flash:
+            if device.bus != 'usb' or not device.path.startswith('\\\\.\\PhysicalDrive'):
+                raise PermissionError('Boot-media writer accepts only a verified USB physical disk')
+            from .devices import assert_windows_external_write_gate
+            assert_windows_external_write_gate(device)
+        else:
+            release_policy.assert_raw_device_writer_available()
         if sys.platform != "win32" or not device.path.startswith("\\\\.\\PhysicalDrive"):
             raise ValueError("Not a Windows physical drive")
         from ctypes import wintypes

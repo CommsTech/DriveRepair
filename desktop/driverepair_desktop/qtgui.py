@@ -544,7 +544,7 @@ def launch():
             self.legacy.setObjectName('nav')
             self.legacy.clicked.connect(self.open_legacy)
             nav.addWidget(self.legacy)
-            self.boot_button=QPushButton('Bootable media builder')
+            self.boot_button=QPushButton('Export ISO build kit')
             self.boot_button.setObjectName('nav')
             self.boot_button.setToolTip('Export a complete Linux live-ISO build kit; boot testing is required.')
             self.boot_button.clicked.connect(self.export_boot_kit)
@@ -554,6 +554,12 @@ def launch():
             self.iso_button.setToolTip('Build an UNVERIFIED ISO on a prepared Debian x86-64 root session; never writes USB disks.')
             self.iso_button.clicked.connect(self.build_iso)
             nav.addWidget(self.iso_button)
+            self.usb_flash_button=QPushButton('Flash bootable USB')
+            self.usb_flash_button.setObjectName('nav')
+            self.usb_flash_button.setToolTip('DESTROYS all data on a selected USB drive. Requires a hybrid ISO and verifies written bytes; boot tests are still required.')
+            self.usb_flash_button.clicked.connect(self.flash_boot_usb)
+            nav.addWidget(self.usb_flash_button)
+            self.flash_proc=None
             self.iso_proc=None
             self._iso_build_temp=None
             nav.addStretch()
@@ -1089,7 +1095,12 @@ def launch():
             self.browse.setEnabled(not running)
             self.batch_button.setEnabled(not running)
             self.boot_button.setEnabled(not running)
-            self.iso_button.setEnabled(not running and not (self.iso_proc and self.iso_proc.state()!=QProcess.NotRunning))
+            self.iso_button.setEnabled(not running and not (self.iso_proc and self.iso_proc.state()!=QProcess.NotRunning)
+                and not (self.flash_proc and self.flash_proc.state()!=QProcess.NotRunning))
+            self.boot_button.setEnabled(not running and not (self.flash_proc and self.flash_proc.state()!=QProcess.NotRunning))
+            self.usb_flash_button.setEnabled(not running and
+                not (self.flash_proc and self.flash_proc.state()!=QProcess.NotRunning) and
+                not (self.iso_proc and self.iso_proc.state()!=QProcess.NotRunning))
             for family, button in self.nav_buttons.items():
                 button.setEnabled(not running and (family != 'fix' or not PUBLIC_BETA_IMAGE_ONLY))
             self.refresh_button.setEnabled(not running)
@@ -1146,6 +1157,195 @@ def launch():
                 statement+=f" · Before {previous['score']}/100 → after {score}/100"
             self.condition_evidence.setText(statement +
                 '\nCondition scores reflect observed warning signs, NOT remaining life or repair success.')
+
+        def flash_boot_usb(self):
+            """Real USB write wizard. CLI rechecks identity and OS permissions.
+
+            GUI selection is advisory only; no raw handle is opened here.
+            """
+            if ((self.proc and self.proc.state()!=QProcess.NotRunning) or self._batch_running
+                    or (self.iso_proc and self.iso_proc.state()!=QProcess.NotRunning)
+                    or (self.flash_proc and self.flash_proc.state()!=QProcess.NotRunning)):
+                QMessageBox.warning(self,'Operation in progress',
+                    'Finish the current operation before preparing USB recovery media.')
+                return
+            from .usb_flash import inspect_hybrid_iso
+            from .devices import list_external_devices
+            iso,_=QFileDialog.getOpenFileName(self,'Select a HYBRID recovery ISO',
+                                              '','Hybrid ISO images (*.iso)')
+            if not iso:
+                return
+            try:
+                image=inspect_hybrid_iso(iso)
+                targets=[d for d in list_external_devices() if d.bus.lower()=='usb'
+                         and d.serial.strip() and d.size_bytes>=image['bytes']]
+                if not targets:
+                    raise RuntimeError('No verified USB whole disks with serial and enough space found. '
+                        'Reconnect USB and refresh inventory. Internal disks are never offered.')
+            except (OSError,ValueError,RuntimeError) as exc:
+                QMessageBox.warning(self,'Cannot prepare USB flash',str(exc))
+                return
+
+            class FlashDialog(QDialog):
+                def closeEvent(inner,event):
+                    if self.flash_proc and self.flash_proc.state()!=QProcess.NotRunning:
+                        QMessageBox.warning(inner,'Flash in progress',
+                            'The USB is being written or verified. Request Stop and leave it connected '
+                            'until the worker exits. A partial image is unusable.')
+                        event.ignore()
+                    else:
+                        event.accept()
+                def reject(inner):
+                    if self.flash_proc and self.flash_proc.state()!=QProcess.NotRunning:
+                        QMessageBox.warning(inner,'Flash in progress',
+                            'Request Stop first, then wait for the worker to finish.')
+                        return
+                    super().reject()
+
+            dlg=FlashDialog(self)
+            dlg.setWindowTitle('Create DriveRepair USB recovery media')
+            dlg.setMinimumWidth(560)
+            lay=QVBoxLayout(dlg)
+            title=QLabel('Flash hybrid ISO to USB')
+            title.setObjectName('heading')
+            lay.addWidget(title)
+            caption=QLabel('This ERASES THE ENTIRE SELECTED USB DRIVE — all partitions and files. '
+                'Bootability is NOT guaranteed until BIOS/UEFI tests succeed. '
+                'Never choose a recovery patient or a USB disk holding the ISO.')
+            caption.setWordWrap(True)
+            lay.addWidget(caption)
+            lay.addWidget(QLabel('ISO image: '+Path(iso).name+'  ·  '+display_size(image['bytes'])))
+            lay.addWidget(QLabel('1 · Select the sacrificial USB device'))
+            target_box=QComboBox()
+            target_box.addItem('Choose a USB drive (nothing selected)',None)
+            for dev in targets:
+                target_box.addItem(f'{dev.model}  ·  {display_size(dev.size_bytes)}  ·  '
+                    f'{dev.id}  ·  serial …{dev.serial[-4:]}',dev.id)
+            lay.addWidget(target_box)
+            lay.addWidget(QLabel('2 · Type the exact ERASE confirmation shown below'))
+            expected=QLabel('Select a USB target to view confirmation')
+            lay.addWidget(expected)
+            typed=QLineEdit()
+            typed.setPlaceholderText('ERASE windows:PhysicalDriveN or ERASE linux:/dev/sdX')
+            lay.addWidget(typed)
+            ack=QCheckBox('I understand ALL DATA on the selected USB will be irreversibly overwritten.')
+            ack.setChecked(False)
+            ack.setToolTip('Permanently overwrites all partitions and files on the selected USB device')
+            lay.addWidget(ack)
+            state=QLabel('Ready for selection — nothing has been written.')
+            state.setWordWrap(True)
+            lay.addWidget(state)
+            bar=QProgressBar()
+            bar.setRange(0,1000)
+            bar.setValue(0)
+            lay.addWidget(bar)
+            row=QHBoxLayout()
+            flash=QPushButton('Erase USB, write and verify')
+            flash.setObjectName('danger')
+            flash.setEnabled(False)
+            stop=QPushButton('Request safe stop')
+            stop.setEnabled(False)
+            done=QPushButton('Close')
+            done.clicked.connect(dlg.reject)
+            row.addWidget(flash)
+            row.addWidget(stop)
+            row.addWidget(done)
+            lay.addLayout(row)
+            details=QPlainTextEdit()
+            details.setReadOnly(True)
+            details.setMaximumHeight(110)
+            lay.addWidget(details)
+            active={'id':None,'fingerprint':None,'verified':False,'output':''}
+            byid={d.id:d for d in targets}
+            def update_confirm(*_):
+                did=target_box.currentData()
+                dev=byid.get(did)
+                active['id']=did
+                active['fingerprint']=dev.fingerprint[:12] if dev else None
+                expected.setText('ERASE '+did if did else 'Select a USB target to view confirmation')
+                flash.setEnabled(bool(dev and ack.isChecked() and typed.text()==f'ERASE {did}'
+                                  and not (self.flash_proc and self.flash_proc.state()!=QProcess.NotRunning)))
+            target_box.currentIndexChanged.connect(update_confirm)
+            typed.textChanged.connect(update_confirm)
+            ack.toggled.connect(update_confirm)
+
+            def begin():
+                did=active['id']
+                if not did or not ack.isChecked() or typed.text()!=f'ERASE {did}':
+                    return
+                if QMessageBox.question(dlg,'Final confirmation — ERASE USB',
+                    'PERMANENT DATA LOSS on '+did+'\n\n'
+                    'DriveRepair will replace the entire USB partition table and boot sectors. '
+                    'Only select a disposable USB drive, NEVER a patient. Continue?',
+                    QMessageBox.Yes|QMessageBox.No,QMessageBox.No)!=QMessageBox.Yes:
+                    return
+                flash.setEnabled(False)
+                target_box.setEnabled(False)
+                typed.setEnabled(False)
+                ack.setEnabled(False)
+                done.setEnabled(False)
+                stop.setEnabled(True)
+                details.clear()
+                active['verified']=False
+                child=QProcess(dlg)
+                self.flash_proc=child
+                cmd=cli_prefix()+['flash-usb','--iso',str(image['path']),
+                    '--device',did,'--confirm-identity',active['fingerprint'],
+                    '--confirm-erase','ERASE '+did,'--ack-data-loss']
+                child.setProgram(cmd[0])
+                child.setArguments(cmd[1:])
+                pending={'stdout':''}
+                def stdout_ready():
+                    pending['stdout']+=bytes(child.readAllStandardOutput()).decode('utf-8','replace')
+                    while '\n' in pending['stdout']:
+                        line,pending['stdout']=pending['stdout'].split('\n',1)
+                        try: event=json.loads(line)
+                        except (ValueError,TypeError):
+                            details.appendPlainText(line[:350])
+                            continue
+                        phase=str(event.get('phase') or event.get('status') or '').upper()
+                        if event.get('phase')=='DONE' and event.get('status')=='USB_FLASH_BYTE_VERIFIED_BOOT_UNTESTED':
+                            active['verified']=True
+                        total=int(event.get('total_bytes') or 0)
+                        if total:
+                            bar.setValue(max(0,min(1000,int(1000*int(event.get('processed_bytes') or 0)/total))))
+                        if phase:
+                            state.setText(phase+' · '+
+                                (display_size(int(event.get('processed_bytes') or 0))+' / '+display_size(total)
+                                 if total else str(event.get('status') or '')))
+                        if phase in ('DONE','FAILED'):
+                            details.appendPlainText(json.dumps(event,sort_keys=True)[:600])
+                child.readyReadStandardOutput.connect(stdout_ready)
+                def stderr_ready():
+                    msg=bytes(child.readAllStandardError()).decode('utf-8','replace').strip()
+                    if msg:
+                        details.appendPlainText(msg[-700:])
+                child.readyReadStandardError.connect(stderr_ready)
+                def finished(code,status):
+                    stdout_ready()
+                    stderr_ready()
+                    success=(code==0 and active['verified'])
+                    state.setText('USB image byte-verified — BIOS/UEFI boot not tested' if success
+                        else 'FLASH FAILED / INCOMPLETE — USB must NOT be used for recovery')
+                    bar.setValue(1000 if success else bar.value())
+                    details.appendPlainText('Exit code: '+str(code)+'. '
+                        +('Verify BIOS and UEFI boot on sacrificial hardware.' if success else
+                          'Target may contain a partially written image. Inspect the error; reflash fully.'))
+                    self.flash_proc=None
+                    done.setEnabled(True)
+                    stop.setEnabled(False)
+                    self.update_action_state()
+                child.finished.connect(finished)
+                self.update_action_state()
+                child.start()
+            flash.clicked.connect(begin)
+            def request_stop():
+                if self.flash_proc and self.flash_proc.state()!=QProcess.NotRunning:
+                    self.flash_proc.write(b'STOP\n')
+                    stop.setEnabled(False)
+                    state.setText('Stop requested — waiting for current USB I/O boundary')
+            stop.clicked.connect(request_stop)
+            dlg.exec()
 
         def export_boot_kit(self):
             """Make the existing Linux ISO builder discoverable without writing a USB."""
@@ -1996,6 +2196,12 @@ def launch():
                 QTimer.singleShot(0,self._launch_next_batch)
             self.update_action_state()
         def closeEvent(self, event):
+            if self.flash_proc and self.flash_proc.state()!=QProcess.NotRunning:
+                QMessageBox.warning(self,'USB flash underway',
+                    'Please wait for full image verification or request a safe stop. '
+                    'A partially flashed USB is not bootable or reliable.')
+                event.ignore()
+                return
             if self.iso_proc and self.iso_proc.state()!=QProcess.NotRunning:
                 QMessageBox.warning(self,'ISO build in progress',
                     'The experimental ISO builder is still running on this build VM. '

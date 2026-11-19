@@ -6,7 +6,7 @@
 
 ## Workstation updates — November 18 (unreleased, requires native validation)
 
-The updated Qt workstation offers a 64×12 full-device evidence map with **aggregated successful-read spans** (no more systematically undercounting throttled scan results), clearer current-phase vs. whole-job progress, visual condition indicators, multi-drive read-only rescue queueing, and two boot-media actions: export a Debian live-ISO build kit or run the experimental ISO builder on a qualified Linux build host. The builder **does not flash USB devices** and the ISO is not boot-certified. On trusted Linux live recovery, users can opt into read-only imaging of offline internal disks.
+The updated Qt workstation offers a 64×12 full-device evidence map with **aggregated successful-read spans** (no more systematically undercounting throttled scan results), clearer current-phase vs. whole-job progress, visual condition indicators, multi-drive read-only rescue queueing, and three distinct boot-media actions: export a Debian live-ISO build kit, run the experimental ISO builder on a qualified Linux build host, or **Flash bootable USB** from an existing ISO-hybrid image. The USB action performs explicitly authorized full-disk destructive writing with byte-for-byte verification; it does **not** build the ISO, repair patient disks or prove hardware bootability. On trusted Linux live recovery, users can opt into read-only imaging of offline internal disks.
 
 **Batch rescue is NOT batch repair.** Each source is revalidated, each output is a unique new image on healthy separate storage, and outcomes are logged. A Windows/USB kernel read can still stall; small I/O requests and worker supervision reduce but cannot eliminate this failure mode. The condition gauge is a **diagnostic evidence index**, never a warranty or remaining-life forecast. Exact-model vendor service-hour ratings may be entered manually; they are not auto-guessed from MTBF/AFR.
 
@@ -48,6 +48,36 @@ python dist/DriveRepair-0.3.3b13-repair-beta.pyz qt-gui
 This build enables **guided `care-external` physical writes** (not unconditional write commands). It requires smartctl evidence of an HDD, separate disk-backed journal, fingerprint confirmation and exclusive locking; unknown/SSD/NVMe media are not rewrite targets. The GUI requests explicit data-loss and SMART-warning consent. This is for *sacrificial hardware testing*, not qualification for valuable media. See [repair-beta engineering and hardware handoff](docs/REPAIR_BETA_ENGINEERING_20261118.md).
 
 Never use the patient disk as the recovery destination. If data is irreplaceable or hardware is rapidly failing, minimize further reads, prefer a validated imaging workflow, and consider a professional lab. No software can reliably reconstruct bytes never read or already overwritten.
+
+### Flash a DriveRepair recovery USB (experimental; erases selected USB)
+
+The **Qt GUI → Tools → Flash bootable USB** workflow now accepts an existing ISO-hybrid
+file. The separate **Export ISO build kit** action only creates a ZIP; it is not
+bootable media. On Debian, build an ISO first using the experimental live-build
+recipe. On Windows, select an existing hybrid ISO to flash; building the ISO
+still requires a prepared Debian environment.
+
+The flasher lists only discovered USB physical disks with a serial, checks the
+hybrid-ISO markers, requires typed `ERASE <device-id>` and a permanent-loss
+acknowledgement, blocks OS system disks, and verifies the full written ISO by
+readback. **All existing data and partitions on the selected USB are destroyed.**
+The ISO must be on a DIFFERENT physical disk. Elevated Windows access and
+exclusive volume locks (or root and unmounted media on Linux) are necessary.
+The process may fail if a USB bridge or Windows volume holds a handle; do not
+bypass OS locks. ISO file checksum verification against an independently
+trusted release and real BIOS/UEFI boot testing remain separate tasks.
+
+CLI (for advanced operators only; substitute live values from `driverepair list --json`):
+
+```text
+driverepair flash-usb --iso DriveRepair-Live-amd64-UNVERIFIED.iso \
+    --device windows:PhysicalDriveN --confirm-identity <12-character-fingerprint> \
+    --confirm-erase "ERASE windows:PhysicalDriveN" --ack-data-loss
+```
+
+The example is *not* a command to run literally and is destructive when
+filled in with real values. The GUI is the recommended confirmation path.
+See `docs/USB_FLASH_HARDWARE_QA_20261118.md`.
 
 ### Platform and capability status (not a certification)
 
