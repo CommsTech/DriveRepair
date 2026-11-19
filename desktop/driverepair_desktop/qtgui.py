@@ -203,7 +203,13 @@ def launch():
         QPushButton#goal:checked {{ background:#204344; border:2px solid {C['accent']}; color:white; }}
         QPushButton#primary {{ background:#269b90; color:#ffffff; border:1px solid #42beae; font-weight:750; }}
         QPushButton#primary:hover {{ background:#2cb8a4; }}
-        QPushButton#danger {{ background:#57343e; border:1px solid #93525c; }}
+        QPushButton#danger {{ background:#b94751; color:#ffffff; border:1px solid #ee8c91; font-weight:750; }}
+        QPushButton#danger:hover {{ background:#d75962; }}
+        QPushButton#danger:disabled {{ background:#372931; color:#a98b92; border-color:#574049; }}
+        QCheckBox {{ spacing:10px; padding:6px 3px; font-weight:550; }}
+        QCheckBox::indicator {{ width:20px; height:20px; border:2px solid #80a2bd; border-radius:4px; background:#0e1c2c; }}
+        QCheckBox::indicator:checked {{ background:#28b79f; border:2px solid #a3f5e2; image:none; }}
+        QCheckBox::indicator:disabled {{ border-color:#43576a; background:#1c2938; }}
         QPushButton#sponsor {{ color:#d5e3f5; background:#16263a; border:1px solid #3d5673; text-align:left; }}
         QPushButton#sponsor:hover {{ border:1px solid {C['accent']}; }}
         QComboBox,QLineEdit {{ background:{C['panel2']}; border:1px solid {C['line']}; padding:10px; border-radius:7px; }}
@@ -580,7 +586,7 @@ def launch():
             for family, label, key in (
                 ('check','01   Diagnose','scanquick'),
                 ('recover','02   Rescue data','rescue'),
-                ('fix','03   Targeted HDD repair','carequick')):
+                ('fix','03   HDD maintenance','carequick')):
                 b=QPushButton(label)
                 b.setObjectName('nav')
                 b.setCheckable(True)
@@ -599,10 +605,15 @@ def launch():
             self.details_button.setObjectName('nav')
             self.details_button.toggled.connect(self.show_details)
             nav.addWidget(self.details_button)
-            self.legacy=QPushButton('Legacy toolkit')
+            self.legacy=QPushButton('Specialist tools')
             self.legacy.setObjectName('nav')
-            self.legacy.clicked.connect(self.open_legacy)
+            self.legacy.clicked.connect(self.open_specialist_tools)
             nav.addWidget(self.legacy)
+            self.device_tools_button=QPushButton('Hardware diagnostics')
+            self.device_tools_button.setObjectName('nav')
+            self.device_tools_button.setToolTip('Read-only device capabilities, firmware, sampled speed and failed-offset investigation')
+            self.device_tools_button.clicked.connect(self.open_device_tools)
+            nav.addWidget(self.device_tools_button)
             self._media_settings=QSettings('DriveRepair', 'RecoveryWorkstation')
             # The primary route is one USB creator, not three equally prominent tools.
             self.usb_flash_button=QPushButton('Create recovery USB')
@@ -698,6 +709,7 @@ def launch():
             self.phase_caption=QLabel('Current phase · no job')
             self.phase_caption.setObjectName('muted')
             phase_row.addWidget(self.phase_caption)
+            self.phase_caption.hide()
             phase_row.addStretch()
             self.phase_progress=QProgressBar()
             self.phase_progress.setRange(0,1000)
@@ -710,15 +722,19 @@ def launch():
             self.total_caption=QLabel('Estimated guided-workflow progress · not media coverage')
             self.total_caption.setObjectName('muted')
             total_row.addWidget(self.total_caption)
+            self.total_caption.hide()
             total_row.addStretch()
             self.overall_label=QLabel('—')
             total_row.addWidget(self.overall_label)
+            self.overall_label.hide()
             hero.addWidget(self.progress)
+            self.progress.hide()  # show only while a real job has evidence
             metrics=QGridLayout()
             metrics.setHorizontalSpacing(10)
             metrics.setVerticalSpacing(4)
             hero.addLayout(metrics)
             self.metric_labels={}
+            self._has_job_evidence=False
             self.metric_headers={}
             self.metric_tiles={}
             for metric_index,(key,title) in enumerate([('done','CURRENT PHASE'),('read','DATA READ'),('rate','RECENT SPEED'),('avg','JOB AVERAGE'),('errors','READ ERRORS'),('eta','TIME LEFT')]):
@@ -743,8 +759,7 @@ def launch():
                 area.addWidget(v)
                 # Five high-value metrics; job-average remains available in the tooltip.
                 metrics.addWidget(tile, 0, {'done':0,'read':1,'rate':2,'errors':3,'eta':4,'avg':5}[key])
-                if key == 'avg':
-                    tile.hide()
+                tile.hide()  # no fake zero-value dashboard at idle
                 self.metric_tiles[key]=tile
                 self.metric_labels[key]=v
             body=QHBoxLayout()
@@ -790,11 +805,17 @@ def launch():
             self.device_note.setWordWrap(True)
             self.device_note.setObjectName('muted')
             drive_panel.addWidget(self.device_note)
-            self.smart_check_note=QLabel('HDD repair needs valid rotation and SMART evidence. '
+            self.smart_check_note=QLabel('Repair eligibility requires verified HDD media and SMART health. '
                 'If the USB adapter hides them, use read-only rescue or direct SATA.')
             self.smart_check_note.setObjectName('muted')
             self.smart_check_note.setWordWrap(True)
+            self.smart_check_note.hide()  # repair-specific guidance belongs in repair workspace
             drive_panel.addWidget(self.smart_check_note)
+            self.repair_help=QPushButton('Why is repair unavailable?')
+            self.repair_help.setToolTip('Explains the evidence required by the independent repair engine')
+            self.repair_help.clicked.connect(self.explain_repair_eligibility)
+            drive_panel.addWidget(self.repair_help)
+            self.repair_help.hide()
             self.profile_note=QLabel('Identifying media…')
             self.profile_note.setWordWrap(True)
             self.profile_note.setObjectName('muted')
@@ -874,6 +895,8 @@ def launch():
             workflow.parentWidget().setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
             left.addStretch(1)
             map_card=card(right)
+            self.map_card=map_card.parentWidget()
+            self.map_card.hide()  # don't present a vast empty evidence grid before the first scan
             map_head=QHBoxLayout()
             map_card.addLayout(map_head)
             map_title=QLabel('Evidence map  •  untested areas remain unknown')
@@ -1029,6 +1052,26 @@ def launch():
                 self.setWindowTitle(self.windowTitle() + ' [DEBUG]')
             self.select_goal('scanquick')
             QTimer.singleShot(100,self.refresh_devices)
+        def explain_repair_eligibility(self):
+            from .repair_readiness import ui_repair_readiness
+            d=self.selected() or {}
+            snap=self._health_by_device.get(d.get('identity_hint'))
+            allowed, reason=ui_repair_readiness(d,'carequick',snapshot=snap)
+            info=QMessageBox(self)
+            info.setWindowTitle('HDD repair readiness')
+            info.setIcon(QMessageBox.Information if allowed else QMessageBox.Warning)
+            info.setText('HDD eligibility confirmed for UI preflight' if allowed
+                         else 'DriveRepair cannot currently authorize a physical rewrite')
+            info.setInformativeText(reason+'\n\nFor USB bridges, SMART passthrough depends on the adapter. '
+                'Install smartmontools, try a known-compatible SAT bridge or direct SATA for a verified HDD. '
+                'Windows HealthStatus and model labels do not independently authorize raw writes. '
+                'You can always image readable data without changing the patient.')
+            info.addButton('Understood',QMessageBox.AcceptRole)
+            rescue=info.addButton('Rescue data',QMessageBox.ActionRole)
+            info.exec()
+            if info.clickedButton()==rescue:
+                self.select_goal('rescue')
+
         def update_drive_profile(self, _index=None):
             d=self.selected()
             if not d:
@@ -1051,7 +1094,7 @@ def launch():
                 title=profile.kind.upper().replace('_',' ') + ' · ' + profile.evidence
                 if profile.workload == 'surveillance':
                     title+=' · NVR / surveillance workload (NOT a recording type)'
-                self.profile_note.setText(title + '\n' + profile.recovery_method)
+                self.profile_note.setText('Detected: ' + title + '\nSuggested: ' + profile.recovery_method)
                 self.media_pipeline.set_policy(profile.kind,decision.can_attempt_hdd_refresh)
                 if self.job_box.currentData() in {'carequick','carefull','careresume'}:
                     from .automatic_maintenance import choose_maintenance
@@ -1145,6 +1188,8 @@ def launch():
                     self.job_box.setCurrentIndex(i)
                     break
             self.job_box.blockSignals(False)
+            self.smart_check_note.setVisible(family=='fix')
+            self.repair_help.setVisible(family=='fix')
             self.choice_changed()
         def check_stall(self):
             if (self.proc and self.proc.state()!=QProcess.NotRunning
@@ -1193,8 +1238,170 @@ def launch():
         def note_log(self, text: str) -> None:
             self.log.appendPlainText(text)
             debug_trace(text)
-        def open_legacy(self):
-            QMessageBox.information(self,'Legacy toolkit','For advanced file-system, forensic, firmware-information and refresh tools, run:  python -m driverepair_desktop gui-legacy  (the existing Tk interface).')
+        def open_device_tools(self):
+            """Read-only hardware tools; device IDs are revalidated by the child CLI."""
+            from .device_tools import DEVICE_ACTIONS, device_tool_args
+            d=self.selected()
+            if not d:
+                QMessageBox.information(self,'Select a drive','Choose a verified external whole disk first.')
+                return
+            if self.proc and self.proc.state()!=QProcess.NotRunning:
+                QMessageBox.information(self,'Busy','Finish the current operation first.')
+                return
+            labels=[name for name,_,_ in DEVICE_ACTIONS]
+            selected,ok=QInputDialog.getItem(self,'Read-only hardware diagnostics',
+                                              'Select an expert operation:',labels,0,False)
+            if not ok:
+                return
+            _,command,risk=DEVICE_ACTIONS[labels.index(selected)]
+            offset=None
+            letter=''
+            if command=='probe-region':
+                typed,accepted=QInputDialog.getText(self,'Failed region offset',
+                    'Enter a byte offset from a previous scan report:')
+                if not accepted:
+                    return
+                try:
+                    offset=int(typed)
+                except (TypeError,ValueError):
+                    QMessageBox.warning(self,'Invalid offset','Enter a nonnegative byte offset.')
+                    return
+            if command=='optimize-volume':
+                letter,accepted=QInputDialog.getText(self,'Advisory only',
+                    'Volume drive letter (for read-only Windows optimization advice):')
+                if not accepted:
+                    return
+            if risk:
+                confirmed=QMessageBox.warning(self,'Additional read stress',
+                    'This operation reads a potentially failing drive and may accelerate its failure. '
+                    'If data matters, make a rescue image first. Continue read-only investigation?',
+                    QMessageBox.Yes|QMessageBox.No,QMessageBox.No)
+                if confirmed!=QMessageBox.Yes:
+                    return
+            try:
+                args=device_tool_args(command,device_id=d['id'],fingerprint=str(d.get('identity_hint') or ''),
+                    offset=offset,volume_letter=letter,read_risk_approved=risk)
+            except (ValueError,PermissionError) as exc:
+                QMessageBox.warning(self,'Cannot start diagnostic',str(exc))
+                return
+            self._last_good_device=d
+            self._last_job_kind='device_diagnostic'
+            self._job_args=args
+            self.run_command(args)
+
+        def open_specialist_tools(self):
+            """Qt-native specialist image/forensics toolbox; no Tk subprocess."""
+            from .advanced_workflows import ACTIONS, build_specialist_command
+            if self.proc and self.proc.state()!=QProcess.NotRunning:
+                QMessageBox.information(self,'Job already active',
+                    'Finish or safely stop the active job before launching a specialist operation.')
+                return
+            dlg=QDialog(self)
+            dlg.setWindowTitle('DriveRepair · Specialist recovery tools')
+            dlg.setMinimumSize(620,490)
+            layout=QVBoxLayout(dlg)
+            layout.setSpacing(9)
+            heading=QLabel('Specialist recovery tools')
+            heading.setObjectName('heading')
+            layout.addWidget(heading)
+            note=QLabel('Work on regular-file images and NEW outputs; patient disks remain unchanged. '
+                        'The same CLI validation is applied after you start. Tools may require Sleuth Kit or e2fsprogs.')
+            note.setObjectName('muted')
+            note.setWordWrap(True)
+            layout.addWidget(note)
+            picker=QComboBox()
+            for item in ACTIONS:
+                picker.addItem(item.label)
+            layout.addWidget(picker)
+            description=QLabel()
+            description.setWordWrap(True)
+            description.setObjectName('muted')
+            layout.addWidget(description)
+            fields={}
+            for name,label in [('source','Source image / archive'), ('output','NEW output file / folder'),
+                               ('manifest','Trusted hash manifest'), ('reference','Known-good reference image'),
+                               ('file_ids','File IDs (comma separated)')]:
+                line=QHBoxLayout()
+                field_label=QLabel(label)
+                field_label.setMinimumWidth(185)
+                line.addWidget(field_label)
+                edit=QLineEdit()
+                edit.setAccessibleName(label)
+                edit.setPlaceholderText(label)
+                line.addWidget(edit,1)
+                browse=QPushButton('Browse…') if name!='file_ids' else None
+                if browse:
+                    def browse_for(n=name,e=edit):
+                        if n=='output':
+                            target,_=QFileDialog.getSaveFileName(dlg,'Choose NEW file or folder')
+                            if not target:
+                                target=QFileDialog.getExistingDirectory(dlg,'Select destination directory')
+                        else:
+                            target,_=QFileDialog.getOpenFileName(dlg,'Choose '+n)
+                        if target:
+                            e.setText(target)
+                    browse.clicked.connect(browse_for)
+                    line.addWidget(browse)
+                layout.addLayout(line)
+                fields[name]=(field_label,edit,browse)
+            details=QLabel('The selected operation will run locally in DriveRepair’s separate worker process.')
+            details.setWordWrap(True)
+            details.setObjectName('muted')
+            layout.addWidget(details)
+            buttons=QHBoxLayout()
+            launch_button=QPushButton('Run selected tool')
+            launch_button.setObjectName('primary')
+            cancel_button=QPushButton('Close')
+            cancel_button.clicked.connect(dlg.reject)
+            buttons.addStretch()
+            buttons.addWidget(cancel_button)
+            buttons.addWidget(launch_button)
+            layout.addLayout(buttons)
+            def changed(*_):
+                item=ACTIONS[picker.currentIndex()]
+                description.setText(item.description)
+                fields['source'][0].setText(item.source_label)
+                fields['output'][0].setText(item.output_label)
+                for name,visible in [('output',bool(item.output_flag)),('manifest',item.manifest),
+                                     ('reference',item.reference),('file_ids',item.file_ids)]:
+                    for widget in fields[name]:
+                        if widget:
+                            widget.setVisible(visible)
+            picker.currentIndexChanged.connect(changed)
+            changed()
+            def begin():
+                item=ACTIONS[picker.currentIndex()]
+                needs_approval=item.clone_change
+                approved=False
+                if needs_approval:
+                    answer=QMessageBox.warning(dlg,'Modify only a NEW copy',
+                        'This operation may change or discard data in a NEW output copy. '
+                        'The original is read-only. If using reference data, verify both files '
+                        'represent the exact same point in time. Proceed?',
+                        QMessageBox.Yes|QMessageBox.No,QMessageBox.No)
+                    if answer!=QMessageBox.Yes:
+                        return
+                    text,ok=QInputDialog.getText(dlg,'Confirm recovery-copy modification',
+                                                 'Type REPAIR COPY to proceed:')
+                    if not ok or text!='REPAIR COPY':
+                        return
+                    approved=True
+                try:
+                    args=build_specialist_command(item,
+                        source=fields['source'][1].text(),output=fields['output'][1].text(),
+                        manifest=fields['manifest'][1].text(),reference=fields['reference'][1].text(),
+                        file_ids=fields['file_ids'][1].text(),clone_approved=approved)
+                except (ValueError,PermissionError,FileExistsError) as exc:
+                    QMessageBox.warning(dlg,'Check the operation',str(exc))
+                    return
+                dlg.accept()
+                self._last_job_kind='specialist'
+                self._last_good_device=None
+                self._job_args=args
+                self.run_command(args)
+            launch_button.clicked.connect(begin)
+            dlg.exec()
+
         def pick_image(self):
             path,_=QFileDialog.getOpenFileName(self,'Select source disk image','','Disk images (*.img *.dd *.raw);;All files (*)')
             if path:
@@ -1403,7 +1610,6 @@ def launch():
             QTimer.singleShot(2500,lambda:self.copy_summary_button.setText('Copy operator summary'))
 
         def enter_manufacturer_specs(self):
-            from PySide6.QtWidgets import QInputDialog
             d=self._last_good_device or self.selected()
             if not d:
                 QMessageBox.warning(self,'Select a drive','Select a specific drive first.')
@@ -1454,7 +1660,7 @@ def launch():
                 QMessageBox.warning(self,'Operation in progress',
                     'Finish the current operation before preparing USB recovery media.')
                 return
-            from .usb_flash import inspect_hybrid_iso
+            from .boot_validation import qualify_live_iso
             from .recovery_media_catalog import find_local_recovery_iso
             from .devices import list_external_devices
             image=find_local_recovery_iso(preferred=str(self._media_settings.value('last_iso') or ''))
@@ -1463,8 +1669,8 @@ def launch():
                 # a boot-tested OS image. Never silently substitute a random ISO.
                 choose=QMessageBox(self)
                 choose.setWindowTitle('DriveRepair recovery image not installed')
-                choose.setText('No local DriveRepair live ISO was found.')
-                choose.setInformativeText('A real bootable ISO must be built or included with the release first. '
+                choose.setText('No structurally complete DriveRepair live ISO was found.')
+                choose.setInformativeText('A complete DriveRepair live ISO (kernel, initramfs, squashfs and BIOS/UEFI entries) must be built or included with the release. A 32 MiB placeholder with ISO markers is not enough. '
                     'On Windows, export the build kit for a Debian build host. '
                     'If you already have a hybrid ISO, select it once; it will be preselected next time.')
                 browse=choose.addButton('Use existing ISO…',QMessageBox.AcceptRole)
@@ -1486,7 +1692,7 @@ def launch():
                 if not iso:
                     return
                 try:
-                    image=inspect_hybrid_iso(iso)
+                    image=qualify_live_iso(iso)
                 except (OSError,ValueError) as exc:
                     QMessageBox.warning(self,'Invalid ISO',str(exc))
                     return
@@ -1530,12 +1736,12 @@ def launch():
                 'Never choose a recovery patient or a USB disk holding the ISO.')
             caption.setWordWrap(True)
             lay.addWidget(caption)
-            image_label=QLabel('ISO FILE CHECKED · BOOT UNVERIFIED  ·  '+Path(image['path']).name+'  ·  '+display_size(image['bytes']))
+            image_label=QLabel('LIVE CONTENTS CHECKED · BOOT UNVERIFIED  ·  '+Path(image['path']).name+'  ·  '+display_size(image['bytes']))
             image_label.setObjectName('section')
             image_label.setWordWrap(True)
             lay.addWidget(image_label)
-            source_note=QLabel('Local image auto-selected. ISO markers checked; BIOS/UEFI boot unverified. '
-                'Choose a different ISO below only if needed. The selected file is not yet boot-qualified.')
+            source_note=QLabel('Local image auto-selected. Kernel, root filesystem and BIOS/UEFI catalog checked; firmware boot unverified. '
+                'Choose a different ISO below only if needed. The image still requires actual boot testing.')
             source_note.setObjectName('muted')
             source_note.setWordWrap(True)
             lay.addWidget(source_note)
@@ -1558,7 +1764,7 @@ def launch():
                 if not new_path:
                     return
                 try:
-                    new_image=inspect_hybrid_iso(new_path)
+                    new_image=qualify_live_iso(new_path)
                 except (OSError,ValueError) as exc:
                     QMessageBox.warning(dlg,'Invalid ISO',str(exc))
                     return
@@ -1567,7 +1773,7 @@ def launch():
                     return
                 image.update(new_image)
                 self._media_settings.setValue('last_iso',new_image['path'])
-                image_label.setText('ISO FILE CHECKED · BOOT UNVERIFIED  ·  '+Path(image['path']).name+'  ·  '+display_size(image['bytes']))
+                image_label.setText('LIVE CONTENTS CHECKED · BOOT UNVERIFIED  ·  '+Path(image['path']).name+'  ·  '+display_size(image['bytes']))
                 # On a new image size, all target choices must be reevaluated.
                 target_box.clear()
                 target_box.addItem('Choose a USB drive (nothing selected)',None)
@@ -1591,9 +1797,11 @@ def launch():
             typed=QLineEdit()
             typed.setPlaceholderText('ERASE windows:PhysicalDriveN or ERASE linux:/dev/sdX')
             lay.addWidget(typed)
-            ack=QCheckBox('REQUIRED: I authorize erasing every partition and file on this USB drive.')
+            ack=QCheckBox('I understand: THIS USB DRIVE WILL BE ERASED PERMANENTLY')
             ack.setChecked(False)
-            ack.setToolTip('Permanently overwrites all partitions and files on the selected USB device')
+            ack.setToolTip('This deliberate confirmation is never preselected. The source/recovery patient must not be the USB target.')
+            ack.setMinimumHeight(36)
+            ack.setAccessibleDescription('Destructive operation confirmation, unchecked until accepted by the operator')
             lay.addWidget(ack)
             state=QLabel('Step 1/3: Select a disposable USB drive. Nothing has been written.')
             state.setWordWrap(True)
@@ -1603,7 +1811,7 @@ def launch():
             bar.setValue(0)
             lay.addWidget(bar)
             row=QHBoxLayout()
-            flash=QPushButton('Flash USB · erase and verify')
+            flash=QPushButton('Create recovery USB · erase and verify')
             flash.setObjectName('danger')
             flash.setEnabled(False)
             stop=QPushButton('Request safe stop')
@@ -1671,7 +1879,8 @@ def launch():
                     pending['stdout']+=bytes(child.readAllStandardOutput()).decode('utf-8','replace')
                     while '\n' in pending['stdout']:
                         line,pending['stdout']=pending['stdout'].split('\n',1)
-                        try: event=json.loads(line)
+                        try:
+                            event=json.loads(line)
                         except (ValueError,TypeError):
                             details.appendPlainText(line[:350])
                             continue
@@ -2228,7 +2437,6 @@ def launch():
                         'Choose No to block writes whenever SMART reports a media warning.',
                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
                     media_warning_args=['--ack-media-warning'] if warning_consent == QMessageBox.Yes else []
-                    from PySide6.QtWidgets import QInputDialog
                     typed,ok=QInputDialog.getText(self,'Confirm target disk',
                         f"Type this disk fingerprint to allow in-place writes:  {d['identity_hint']}")
                     if not ok or typed.strip()!=d['identity_hint']:
@@ -2309,6 +2517,19 @@ def launch():
             self._last_job_kind=kind
             self._job_args=args
             self.run_command(args)
+        def reveal_job_evidence(self):
+            if self._has_job_evidence:
+                return
+            self._has_job_evidence=True
+            self.progress.show()
+            self.phase_caption.show()
+            self.total_caption.show()
+            self.overall_label.show()
+            for key,tile in self.metric_tiles.items():
+                if key!='avg':
+                    tile.show()
+            self.map_card.show()
+
         def run_command(self,args):
             self.progress.setValue(0)
             self.phase_progress.setValue(0)
@@ -2379,6 +2600,7 @@ def launch():
                 else:
                     self._pending=obj
         def progress_event(self,event):
+            self.reveal_job_evidence()
             self._last_progress_at=time.monotonic()
             if event.get('workflow') == 'rescue':
                 return self.rescue_progress_event(event)
@@ -2452,6 +2674,7 @@ def launch():
             self.coverage_label.setText(f'MEASURED COVERAGE  ·  {self.map.coverage.coverage_pct:.2f}%')
             self.evidence_scope.setText('Read coverage ≠ media health')
         def rescue_progress_event(self, event):
+            self.reveal_job_evidence()
             phase=str(event.get('phase') or 'FORWARD').upper()
             self.status.setText('Rescuing readable data' if phase == 'FORWARD' else 'Retrying missing ranges')
             self.phase_caption.setText('First pass  •  save readable data' if phase == 'FORWARD'

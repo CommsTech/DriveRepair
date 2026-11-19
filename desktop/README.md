@@ -10,7 +10,7 @@ python -m pip install -e ".[qt]"
 python -m driverepair_desktop qt-gui
 ```
 
-Use `python -m driverepair_desktop gui` to allow the Tk fallback. CLI commands are listed with `python -m driverepair_desktop --help`. You can run synthetic tests with `python -m unittest discover -s tests` from this directory.
+Use `python -m driverepair_desktop gui` to launch the Qt workstation; there is no Tk fallback. CLI commands are listed with `python -m driverepair_desktop --help`. You can run synthetic tests with `python -m unittest discover -s tests` from this directory.
 
 ### Distribution
 

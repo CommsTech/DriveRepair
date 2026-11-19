@@ -10,7 +10,7 @@ sudo bash scripts/build_live_iso.sh /path/to/empty-output
 bash scripts/check_live_iso.sh /path/to/empty-output/*.iso
 ```
 
-This produces an experimental hybrid ISO. Validate its provenance and ability to boot BIOS/UEFI in a disposable VM and on sacrificial USB hardware before distributing it. The desktop **Create recovery USB** wizard then flashes an already-built ISO to a chosen disposable USB disk; it *permanently destroys* that disk's contents. Never select a patient disk. Written ISO byte verification is not BIOS/UEFI boot certification.
+This produces an experimental hybrid ISO. `check_live_iso.sh` now rejects marker-only/placeholder images without the live kernel, initramfs, squashfs, BIOS and UEFI boot-catalog entries. Validate its provenance and ability to boot BIOS/UEFI in a disposable VM and on sacrificial USB hardware before distributing it. The desktop **Create recovery USB** wizard then flashes an already-built ISO to a chosen disposable USB disk; it *permanently destroys* that disk's contents. Never select a patient disk. Written ISO byte verification is not BIOS/UEFI boot certification.
 
 After booting a trusted recovery OS, use read-only rescue to image failing drives onto separate healthy storage. A disk's failure to pass SMART, connect reliably, or return sector data is not fixed by booting a live environment.
 

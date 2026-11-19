@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 from driverepair_desktop.recovery_media_catalog import find_local_recovery_iso
+from unittest.mock import patch
 from driverepair_desktop.repair_readiness import ui_repair_readiness
 
 
@@ -23,12 +24,9 @@ class ImageDiscoveryTests(unittest.TestCase):
     def test_no_iso_does_not_invent_or_download_one(self):
         self.assertIsNone(find_local_recovery_iso(search_roots=[self.root]))
 
-    def test_preselects_real_driverepair_hybrid(self):
+    def test_rejects_unbootable_placeholder_even_with_hybrid_signatures(self):
         minimal_hybrid(self.root/'DriveRepair-Live-amd64.iso')
-        found=find_local_recovery_iso(search_roots=[self.root])
-        self.assertIsNotNone(found)
-        self.assertEqual(Path(found['path']).name,'DriveRepair-Live-amd64.iso')
-        self.assertEqual(found['selection'],'local_driverepair_image')
+        self.assertIsNone(find_local_recovery_iso(search_roots=[self.root]))
 
     def test_bad_image_skipped_and_generic_iso_not_auto_selected(self):
         (self.root/'DriveRepair-Live-broken.iso').write_bytes(b'not an ISO')
@@ -38,14 +36,18 @@ class ImageDiscoveryTests(unittest.TestCase):
     def test_preferred_image_used_after_restart(self):
         custom=self.root/'custom.iso'
         minimal_hybrid(custom)
-        self.assertEqual(find_local_recovery_iso(preferred=str(custom),search_roots=[])['selection'],
-                         'previously_selected')
+        with patch('driverepair_desktop.recovery_media_catalog.qualify_live_iso',
+                   return_value={'path':str(custom.resolve()),'bytes':custom.stat().st_size}):
+            self.assertEqual(find_local_recovery_iso(preferred=str(custom),search_roots=[])['selection'],
+                             'previously_selected')
 
     def test_bad_preferred_falls_back_to_local_build(self):
         good=self.root/'DriveRepair-Live-amd64.iso'
         minimal_hybrid(good)
-        selected=find_local_recovery_iso(preferred=str(self.root/'missing.iso'),search_roots=[self.root])
-        self.assertEqual(selected['path'],str(good.resolve()))
+        with patch('driverepair_desktop.recovery_media_catalog.qualify_live_iso',
+                   side_effect=lambda x: {'path':str(x.resolve()),'bytes':x.stat().st_size}):
+            selected=find_local_recovery_iso(preferred=str(self.root/'missing.iso'),search_roots=[self.root])
+            self.assertEqual(selected['path'],str(good.resolve()))
 
     def test_symlink_cannot_be_auto_selected(self):
         good=self.root/'DriveRepair-Live-good.iso'

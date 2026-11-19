@@ -66,8 +66,8 @@ def build(include_wheel: bool = True, *, public_beta: bool = False, repair_beta:
         # The build kit ZIP and .pyz alone are NOT boot media. Still require
         # signed release provenance and independent boot testing before publish.
         sys.path.insert(0, str(DESKTOP))
-        from driverepair_desktop.usb_flash import inspect_hybrid_iso
-        info = inspect_hybrid_iso(recovery_iso)
+        from driverepair_desktop.boot_validation import qualify_live_iso
+        info = qualify_live_iso(recovery_iso)
         source = Path(info['path'])
         sidecar = dist / 'images' / 'DriveRepair-Live-amd64.iso'
         sidecar.parent.mkdir(parents=True, exist_ok=True)

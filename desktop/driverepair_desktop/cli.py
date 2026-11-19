@@ -459,9 +459,9 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument('--power-source', required=True, help='nut:UPSNAME or battery')
     cmd.add_argument('--chunk-mib', type=int, choices=[1, 2, 4, 8, 16, 32, 64], default=8)
     cmd.add_argument('--json', action='store_true')
-    sub.add_parser('gui', help='Launch Qt workstation when installed; otherwise legacy Tk')
+    sub.add_parser('gui', help='Launch the Qt-only recovery workstation (requires PySide6)')
     sub.add_parser('qt-gui', help='Launch new Qt workstation (requires optional PySide6)')
-    sub.add_parser('gui-legacy', help='Launch the full legacy Tk utility interface')
+    sub.add_parser('gui-legacy', help='Deprecated compatibility alias: launches Qt specialist tools (no Tk)')
     return cli
 
 
@@ -1917,20 +1917,14 @@ def run(argv: list[str] | None = None) -> int:
             print(json.dumps(info, indent=2))
             return 0
         if args.command in {'gui', 'qt-gui', 'gui-legacy'}:
+            import importlib.util
+            if importlib.util.find_spec('PySide6') is None:
+                raise RuntimeError('DriveRepair desktop requires PySide6: python -m pip install PySide6. '
+                                   'The deprecated Tk interface has been removed; CLI recovery still works.')
             if args.command == 'gui-legacy':
-                from .gui import launch
-                launch()
-            else:
-                import importlib.util
-                if importlib.util.find_spec('PySide6') is None:
-                    if args.command == 'qt-gui':
-                        raise RuntimeError('PySide6 not installed: python -m pip install PySide6')
-                    print('PySide6 not installed; launching legacy Tk. For the new UI: python -m pip install PySide6', file=sys.stderr)
-                    from .gui import launch
-                    launch()
-                else:
-                    from .qtgui import launch
-                    launch()
+                print('Notice: gui-legacy is deprecated; opening the Qt workstation.',file=sys.stderr)
+            from .qtgui import launch
+            launch()
             return 0
         if args.command == 'probe-region':
             if not args.ack_read_stress:

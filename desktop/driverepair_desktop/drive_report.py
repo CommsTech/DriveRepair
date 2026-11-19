@@ -7,10 +7,7 @@ validated capacity, latencies or full-surface coverage from sparse samples.
 from __future__ import annotations
 
 import html
-import json
-import math
 from pathlib import Path
-import statistics
 from datetime import datetime, timezone
 
 

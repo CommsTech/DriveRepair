@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from driverepair_desktop.gui import prepare_child_arguments
+from driverepair_desktop.gui_process import prepare_child_arguments
 from driverepair_desktop.release_policy import block_public_physical_writes
 from driverepair_desktop.scan_checkpoint import ScanCheckpoint, load
 from driverepair_desktop.health import media_from_smart
