@@ -38,3 +38,38 @@ def ui_repair_readiness(device: dict | None, operation: str,
     return True, ('Rotational HDD and SMART evidence available. The engine must still '
                   'recheck physical identity, exclusive access and a durable journal; '
                   'no repair or improved lifespan is guaranteed.')
+
+
+def readiness_next_action(device: dict | None, operation: str,
+                          snapshot: dict | None = None, *,
+                          smartctl_available: bool = False) -> dict:
+    """One deterministic next step for an otherwise blocked repair workflow.
+
+    This is UI guidance only. Neither this decision nor a manufacturer model
+    database can authorize patient writes. The CLI independently repeats its
+    SMART, identity, mounted-volume, journal, and exclusive-lock checks.
+    """
+    eligible, reason = ui_repair_readiness(device, operation, snapshot)
+    if eligible:
+        return {'ready': True, 'action': 'review',
+                'label': 'Review guarded repair', 'reason': reason}
+    if not device:
+        return {'ready': False, 'action': 'select',
+                'label': 'Select a drive', 'reason': reason}
+    suffix = str(device.get('serial_suffix') or '').strip().lower()
+    if not suffix or suffix in {'unavailable', 'unknown', 'none', 'null', 'n/a'}:
+        return {'ready': False, 'action': 'identity',
+                'label': 'Review missing drive identity', 'reason': reason}
+    if not snapshot or str(snapshot.get('source') or '') == 'windows_storage_healthstatus':
+        if not smartctl_available:
+            return {'ready': False, 'action': 'setup',
+                    'label': 'Enable SMART identification',
+                    'reason': (str((snapshot or {}).get('smart_unavailable_reason') or '') + ' · ' + reason).strip(' ·')}
+        detail = str((snapshot or {}).get('smart_unavailable_reason') or '').strip()
+        return {'ready': False, 'action': 'probe',
+                'label': 'Check drive SMART and identity',
+                'reason': (detail+' · '+reason) if detail else reason}
+    # A completed SMART report with missing physical-media evidence is not
+    # repaired by polling the same unreliable bridge indefinitely.
+    return {'ready': False, 'action': 'rescue',
+            'label': 'Rescue data to an image', 'reason': reason}
