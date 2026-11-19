@@ -19,18 +19,27 @@ def checked_ranges(scan: dict, device: dict, *, maximum: int = 32) -> list[dict]
     if (size <= 0 or sector <= 0 or size % sector or
             scan.get('device_size_bytes') != size or scan.get('logical_sector_bytes') != sector):
         raise ValueError('Geometry changed since scan; cannot reuse suspect offsets')
+    if type(maximum) is not int or not 1 <= maximum <= 32:
+        raise ValueError('Follow-up range limit must be between 1 and 32')
     candidates = scan.get('read_error_ranges')
     if not isinstance(candidates, list) or len(candidates) > 4096 or not candidates:
         raise ValueError('No bounded failed ranges in the prior scan; do not invent repair targets')
     accepted: list[dict] = []
-    for raw in candidates[:maximum]:
+    seen: set[tuple[int, int]] = set()
+    for raw in candidates:
         if not isinstance(raw, dict):
             raise ValueError('Invalid prior scan range')
         off, length = raw.get('offset'), raw.get('length')
         if (type(off) is not int or type(length) is not int or off < 0 or length < sector or
                 off % sector or length % sector or off + length > size):
             raise ValueError('Malformed or unaligned failed range')
+        key = (off, length)
+        if key in seen:
+            continue
+        seen.add(key)
         accepted.append({'offset': off, 'length': length})
+        if len(accepted) >= maximum:
+            break
     return accepted
 
 

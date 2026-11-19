@@ -2,7 +2,7 @@
 
 **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
 
-> **Release status:** `0.3.3b21` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+> **Release status:** `0.3.3b22` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
 
 The Qt workstation now selects an **automatic, bounded HDD investigation level** from available media and error evidence; it never uses a plan to bypass media-write safety. Expert CLI overrides remain for controlled laboratory work. Read [`docs/CAPACITY_AUTHENTICITY.md`](docs/CAPACITY_AUTHENTICITY.md) for the separate USB capacity-integrity test. See also `docs/STATISTICAL_SECTOR_RECOVERY_B18.md` for the level policies.
 
@@ -79,7 +79,7 @@ python -m pip install -e ".[qt]"
 python -m driverepair_desktop qt-gui
 ```
 
-On Windows PowerShell, run these same commands using `py` if Python is installed as `py`. You may also use `python -m driverepair_desktop gui` to select the best available GUI, or `gui-legacy` for older specialist tools.
+On Windows PowerShell, run these same commands using `py` if Python is installed as `py`. You may also use `python -m driverepair_desktop gui` to select the best available GUI, or `gui-legacy` as a deprecated compatibility alias (it opens Qt; Tk is not shipped).
 
 **Quick first test:** Connect a *noncritical* external drive, launch **Diagnose**, verify model/capacity/serial suffix, run **Check disk health**, then choose **Quick surface check (read-only)**. A quick scan samples the disk and must not be described as a full-disk health certificate.
 
@@ -87,22 +87,22 @@ On Windows PowerShell, run these same commands using `py` if Python is installed
 
 ```bash
 python scripts/build_desktop.py --public-beta --no-wheel
-python dist/DriveRepair-0.3.3b21-public-beta.pyz gui
+python dist/DriveRepair-0.3.3b22-public-beta.pyz gui
 ```
 
 Install optional `PySide6` in that Python environment if you want the new Qt workstation. The **public-beta** package blocks physical in-place writes. The separate **repair-beta** package may attempt the guided, HDD-only write workflow on sacrificial hardware with all safeguards enabled:
 
 ```bash
 python scripts/build_desktop.py --repair-beta --no-wheel
-python dist/DriveRepair-0.3.3b21-repair-beta.pyz qt-gui
+python dist/DriveRepair-0.3.3b22-repair-beta.pyz qt-gui
 ```
 
 For a CLI image-only example, use a source **regular file** and an unused output path:
 
 ```bash
-python dist/DriveRepair-0.3.3b21-public-beta.pyz scan-image --image source.img --mode triage --json
-python dist/DriveRepair-0.3.3b21-public-beta.pyz rescue-image --image source.img --output recovered.img --json
-python dist/DriveRepair-0.3.3b21-public-beta.pyz rescue-status --output recovered.img --json
+python dist/DriveRepair-0.3.3b22-public-beta.pyz scan-image --image source.img --mode triage --json
+python dist/DriveRepair-0.3.3b22-public-beta.pyz rescue-image --image source.img --output recovered.img --json
+python dist/DriveRepair-0.3.3b22-public-beta.pyz rescue-status --output recovered.img --json
 ```
 
 A repair-beta build is **not** a recommendation to write to a failing or valuable patient. See [hardware testing requirements](docs/USB_REPAIR_PREFLIGHT_B17.md) and [release gates](docs/RELEASE_STATUS.md).

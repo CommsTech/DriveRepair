@@ -1,0 +1,396 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index de0f1f8..c71c8e2 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -78,6 +78,15 @@ Full disposition, including deliberately deferred work, is in
+ - 12 new tests (7 offscreen Qt, 5 presentation) cover these behaviours; Qt tests
+   skip cleanly on hosts without PySide6.
+ 
++## 0.3.3b22 — 2026-11-19: SMART bridge fallback and actionable scan results
++
++- Correct successful ATA/SAT fallback parsing for USB bridges that reject the initial query and only respond to an alternate supported bridge mode.
++- Use the selected SAT bridge mode for subsequent *read-only* SMART self-test/error log requests; avoid falling back to a failed autodetection path.
++- Treat completed read-only diagnostics with recorded read errors as **scan completed with findings**, even when the CLI's nonzero exit code signals those errors. Keep interrupted jobs distinct.
++- Preserve the post-scan **Address scan errors** recommendation; it uses recorded failed positions and never automatically writes to the source disk.
++- De-duplicate exact failed read ranges and enforce a strict maximum for follow-up work to avoid unnecessary repeated reads.
++- Added synthetic regression tests. This is not a new physical repair engine, a bundled Windows smartctl binary, or a qualified boot ISO.
++
+ ## 0.3.3b21 — 2026-11-19: live evidence, focused follow-up and Windows boot building
+ 
+ - Qt layout: remove numbered sidebar items, provide separate **Assessment** and **Surface map & throughput** tabs to reduce stacked scrolling; hide drive/workflow setup forms during active jobs and restore them at completion.
+diff --git a/README.md b/README.md
+index e8854da..7cbe5bb 100644
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,7 @@
+ 
+ **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
+ 
+-> **Release status:** `0.3.3b21` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
++> **Release status:** `0.3.3b22` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+ 
+ The Qt workstation now selects an **automatic, bounded HDD investigation level** from available media and error evidence; it never uses a plan to bypass media-write safety. Expert CLI overrides remain for controlled laboratory work. Read [`docs/CAPACITY_AUTHENTICITY.md`](docs/CAPACITY_AUTHENTICITY.md) for the separate USB capacity-integrity test. See also `docs/STATISTICAL_SECTOR_RECOVERY_B18.md` for the level policies.
+ 
+@@ -79,7 +79,7 @@ python -m pip install -e ".[qt]"
+ python -m driverepair_desktop qt-gui
+ ```
+ 
+-On Windows PowerShell, run these same commands using `py` if Python is installed as `py`. You may also use `python -m driverepair_desktop gui` to select the best available GUI, or `gui-legacy` for older specialist tools.
++On Windows PowerShell, run these same commands using `py` if Python is installed as `py`. You may also use `python -m driverepair_desktop gui` to select the best available GUI, or `gui-legacy` as a deprecated compatibility alias (it opens Qt; Tk is not shipped).
+ 
+ **Quick first test:** Connect a *noncritical* external drive, launch **Diagnose**, verify model/capacity/serial suffix, run **Check disk health**, then choose **Quick surface check (read-only)**. A quick scan samples the disk and must not be described as a full-disk health certificate.
+ 
+@@ -87,22 +87,22 @@ On Windows PowerShell, run these same commands using `py` if Python is installed
+ 
+ ```bash
+ python scripts/build_desktop.py --public-beta --no-wheel
+-python dist/DriveRepair-0.3.3b21-public-beta.pyz gui
++python dist/DriveRepair-0.3.3b22-public-beta.pyz gui
+ ```
+ 
+ Install optional `PySide6` in that Python environment if you want the new Qt workstation. The **public-beta** package blocks physical in-place writes. The separate **repair-beta** package may attempt the guided, HDD-only write workflow on sacrificial hardware with all safeguards enabled:
+ 
+ ```bash
+ python scripts/build_desktop.py --repair-beta --no-wheel
+-python dist/DriveRepair-0.3.3b21-repair-beta.pyz qt-gui
++python dist/DriveRepair-0.3.3b22-repair-beta.pyz qt-gui
+ ```
+ 
+ For a CLI image-only example, use a source **regular file** and an unused output path:
+ 
+ ```bash
+-python dist/DriveRepair-0.3.3b21-public-beta.pyz scan-image --image source.img --mode triage --json
+-python dist/DriveRepair-0.3.3b21-public-beta.pyz rescue-image --image source.img --output recovered.img --json
+-python dist/DriveRepair-0.3.3b21-public-beta.pyz rescue-status --output recovered.img --json
++python dist/DriveRepair-0.3.3b22-public-beta.pyz scan-image --image source.img --mode triage --json
++python dist/DriveRepair-0.3.3b22-public-beta.pyz rescue-image --image source.img --output recovered.img --json
++python dist/DriveRepair-0.3.3b22-public-beta.pyz rescue-status --output recovered.img --json
+ ```
+ 
+ A repair-beta build is **not** a recommendation to write to a failing or valuable patient. See [hardware testing requirements](docs/USB_REPAIR_PREFLIGHT_B17.md) and [release gates](docs/RELEASE_STATUS.md).
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index e03be24..d93f55e 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b21"
++__version__ = "0.3.3b22"
+diff --git a/desktop/driverepair_desktop/diagnostic_outcome.py b/desktop/driverepair_desktop/diagnostic_outcome.py
+new file mode 100644
+index 0000000..30d61ae
+--- /dev/null
++++ b/desktop/driverepair_desktop/diagnostic_outcome.py
+@@ -0,0 +1,47 @@
++"""Evidence-led classification for completed read-only scans.
++
++A diagnostic can finish its planned sample while returning a nonzero code
++because some reads failed. That result requires attention, but it is not an
++interrupted worker or a completed repair. Keep this decision testable without
++loading PySide6 or accessing real disks.
++"""
++from __future__ import annotations
++from dataclasses import dataclass
++
++SCAN_WORKFLOWS = frozenset({'scanquick', 'scanfull', 'resume'})
++
++@dataclass(frozen=True)
++class ScanOutcome:
++    headline: str
++    summary: str
++    recommendation: str
++    complete: bool
++
++
++def classify_scan_outcome(result: dict, exit_code: int, workflow: str) -> ScanOutcome | None:
++    if workflow not in SCAN_WORKFLOWS or not isinstance(result, dict):
++        return None
++    status = result.get('status')
++    if status == 'completed_with_read_errors' and exit_code in (0, 2):
++        try:
++            count = int(result.get('read_error_chunks') or 0)
++        except (TypeError, ValueError):
++            count = 0
++        if count <= 0:
++            return None
++        return ScanOutcome(
++            headline='Scan completed · read errors detected',
++            summary=f'{count} failed read requests were recorded. The selected scan finished, '
++                    'but some sampled data could not be read. These are not confirmed bad-sector counts.',
++            recommendation='Rescue important data to a separate healthy disk. Use Address scan errors '
++                           'to recheck the saved failing locations without repeating the whole scan.',
++            complete=True,
++        )
++    if exit_code == 0 and status in {'completed', 'scan_completed'}:
++        return ScanOutcome(
++            headline='Diagnostic scan completed',
++            summary='Selected read-only scan finished; this does not certify file integrity or drive life.',
++            recommendation='Review measured coverage, then back up important files before taking action.',
++            complete=True,
++        )
++    return None
+diff --git a/desktop/driverepair_desktop/health.py b/desktop/driverepair_desktop/health.py
+index 95d42d4..18a04f1 100644
+--- a/desktop/driverepair_desktop/health.py
++++ b/desktop/driverepair_desktop/health.py
+@@ -46,7 +46,7 @@ def _usable_ata_view(raw: dict | None) -> bool:
+ 
+ 
+ def _smart_logs(run: Callable[..., subprocess.CompletedProcess], executable: str,
+-                path: str, deadline: float) -> dict:
++                path: str, deadline: float, *, device_type: str | None = None) -> dict:
+     """Read-only self-test and error log summary; never starts a test.
+ 
+     These logs add no device wear: smartctl only reads the controller's
+@@ -59,8 +59,14 @@ def _smart_logs(run: Callable[..., subprocess.CompletedProcess], executable: str
+             out[label] = {'available': False, 'reason': 'probe budget exhausted'}
+             continue
+         try:
+-            proc = run([executable, '--json', '-l', flag, path],
+-                       capture_output=True,
++            # USB bridges that require explicit SAT also require the same mode
++            # for log reads. Dropping -d makes an otherwise successful probe
++            # fall back to the bridge's broken autodetection path.
++            command = [executable, '--json', '-l', flag]
++            if device_type:
++                command.extend(['-d', device_type])
++            command.append(path)
++            proc = run(command, capture_output=True,
+                        timeout=min(SMART_LOG_TIMEOUT_SECONDS, remaining),
+                        check=False)
+             raw = _decode_json(proc)
+@@ -124,6 +130,7 @@ def health_snapshot(device: Device,
+         parsed_ok = False
+         raw = {}
+     source = 'smartctl_auto'
++    accepted_device_type = None
+     device_protocol = str((raw.get('device') or {}).get('protocol') or '').lower()
+     failure_reported = bool(proc.returncode & (0x08 | 0x10)) or (raw.get('smart_status') or {}).get('passed') is False
+     # Do not conceal an existing SMART media failure with a second, potentially
+@@ -159,13 +166,15 @@ def health_snapshot(device: Device,
+                     # The result must positively identify an ATA device and
+                     # report physical rotation. A mere model name is not evidence.
+                     proc, raw = sat, sat_raw
++                    parsed_ok = True  # The selected passthrough response was parsed and validated.
++                    accepted_device_type = device_type
+                     source = ('smartctl_sat_passthrough' if device_type == 'sat'
+                               else f'smartctl_{device_type}_passthrough')
+                     break
+             except (FileNotFoundError, subprocess.TimeoutExpired, ValueError,
+                     UnicodeError, AttributeError, OSError):
+                 continue
+-    if not parsed_ok and source != 'smartctl_sat_passthrough':
++    if not parsed_ok:
+         raise RuntimeError('SMART query returned invalid JSON; '
+                            'USB SAT passthrough was unavailable or inconclusive')
+     # CLI command, open/identity and SMART command failures invalidate the snapshot.
+@@ -220,7 +229,8 @@ def health_snapshot(device: Device,
+         smart_logs = {'available': False,
+                       'reason': 'skipped: NVMe health log already reports error counters'}
+     else:
+-        smart_logs = _smart_logs(run, cmd[0], device.path, deadline)
++        smart_logs = _smart_logs(run, cmd[0], device.path, deadline,
++                                 device_type=accepted_device_type)
+     result = {
+         'status': status,
+         'source': source,
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+index af981c8..7cf7c07 100644
+--- a/desktop/driverepair_desktop/qtgui.py
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -758,7 +758,7 @@ def launch():
+             self._has_job_evidence=False
+             self.metric_headers={}
+             self.metric_tiles={}
+-            for metric_index,(key,title) in enumerate([('done','CURRENT PHASE'),('read','DATA READ'),('rate','RECENT SPEED'),('avg','JOB AVERAGE'),('errors','READ ERRORS'),('eta','TIME LEFT')]):
++            for metric_index,(key,title) in enumerate([('done','CURRENT PHASE'),('read','READ ATTEMPTED'),('rate','RECENT SPEED'),('avg','JOB AVERAGE'),('errors','READ ERRORS'),('eta','TIME LEFT')]):
+                 tile=QFrame()
+                 tile.setObjectName('statTile')
+                 area=QVBoxLayout(tile)
+@@ -3035,10 +3035,6 @@ def launch():
+                 except OSError:
+                     pass
+                 self._recheck_file=None
+-            if exit_code==0 and self._final_stdout.strip():
+-                self.progress.setValue(1000)
+-                self.phase_progress.setValue(1000)
+-                self.overall_label.setText('100% of planned job · review findings')
+             try:
+                 result=json.loads(self._final_stdout)
+             except (ValueError,TypeError):
+@@ -3047,6 +3043,12 @@ def launch():
+                     self.note_log(self._final_stdout[-3000:])
+             if not isinstance(result,dict):
+                 result={}
++            from .diagnostic_outcome import classify_scan_outcome
++            scan_outcome = classify_scan_outcome(result, exit_code, self._last_job_kind)
++            if (scan_outcome and scan_outcome.complete) or (exit_code==0 and self._final_stdout.strip()):
++                self.progress.setValue(1000)
++                self.phase_progress.setValue(1000)
++                self.overall_label.setText('100% of selected job · review findings')
+             self._last_job_result=result if result else None
+             self.detailed_report_button.setEnabled(bool(result))
+             condition_report = result.get('condition_comparison') or {}
+@@ -3083,6 +3085,11 @@ def launch():
+                 self.explain.setText('The requested stop has ended the child process. '
+                     'Previously observed errors are retained in the log; unscanned ranges remain unknown. '
+                     'A forced stop does not prove the pending Windows read completed.')
++            elif scan_outcome and scan_outcome.complete and exit_code!=0:
++                self.status.setText(scan_outcome.headline)
++                self.result.setText(scan_outcome.headline)
++                self.explain.setText(scan_outcome.summary)
++                self.next_action.setText(scan_outcome.recommendation)
+             elif exit_code==0:
+                 coverage=result.get('surface_coverage_pct')
+                 if coverage is None and isinstance(result.get('scan'), dict):
+@@ -3212,7 +3219,9 @@ def launch():
+                     'No patient bytes were written and repeatable data is not certified original.')
+                 self.next_action.setText('Rescue readable data to a new image and inspect any remaining errors. '
+                     'Only verified rotational HDDs may separately request authorized maintenance.')
+-            if self._last_job_kind=='capacity':
++            if scan_outcome and scan_outcome.complete and exit_code!=0:
++                self.next_action.setText(scan_outcome.recommendation)
++            elif self._last_job_kind=='capacity':
+                 pass  # keep capacity-specific advice
+             elif self._pending_resume:
+                 self.next_action.setText('Reconnect the exact same drive for the saved read-only scan. Verify its identity first.')
+diff --git a/desktop/driverepair_desktop/scan_followup.py b/desktop/driverepair_desktop/scan_followup.py
+index 368323b..d057b7a 100644
+--- a/desktop/driverepair_desktop/scan_followup.py
++++ b/desktop/driverepair_desktop/scan_followup.py
+@@ -19,18 +19,27 @@ def checked_ranges(scan: dict, device: dict, *, maximum: int = 32) -> list[dict]
+     if (size <= 0 or sector <= 0 or size % sector or
+             scan.get('device_size_bytes') != size or scan.get('logical_sector_bytes') != sector):
+         raise ValueError('Geometry changed since scan; cannot reuse suspect offsets')
++    if type(maximum) is not int or not 1 <= maximum <= 32:
++        raise ValueError('Follow-up range limit must be between 1 and 32')
+     candidates = scan.get('read_error_ranges')
+     if not isinstance(candidates, list) or len(candidates) > 4096 or not candidates:
+         raise ValueError('No bounded failed ranges in the prior scan; do not invent repair targets')
+     accepted: list[dict] = []
+-    for raw in candidates[:maximum]:
++    seen: set[tuple[int, int]] = set()
++    for raw in candidates:
+         if not isinstance(raw, dict):
+             raise ValueError('Invalid prior scan range')
+         off, length = raw.get('offset'), raw.get('length')
+         if (type(off) is not int or type(length) is not int or off < 0 or length < sector or
+                 off % sector or length % sector or off + length > size):
+             raise ValueError('Malformed or unaligned failed range')
++        key = (off, length)
++        if key in seen:
++            continue
++        seen.add(key)
+         accepted.append({'offset': off, 'length': length})
++        if len(accepted) >= maximum:
++            break
+     return accepted
+ 
+ 
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index b6e5ac4..e6d1ccb 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b21"
++version = "0.3.3b22"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_b22_usb_smart_scan_result.py b/desktop/tests/test_b22_usb_smart_scan_result.py
+new file mode 100644
+index 0000000..8ef09d2
+--- /dev/null
++++ b/desktop/tests/test_b22_usb_smart_scan_result.py
+@@ -0,0 +1,87 @@
++"""b22: no hardware writes, no PySide6 required."""
++import json
++import subprocess
++import unittest
++from unittest.mock import patch
++
++from driverepair_desktop.devices import Device
++from driverepair_desktop.health import health_snapshot
++from driverepair_desktop.diagnostic_outcome import classify_scan_outcome
++from driverepair_desktop.scan_followup import checked_ranges
++
++
++class SmartBridgeFallbackTests(unittest.TestCase):
++    def setUp(self):
++        self.disk = Device('windows:PhysicalDrive4', r'\\.\PhysicalDrive4',
++                           'Test rotational HDD', 4096*100, 512, 'usb', 'ser12345')
++        self.smart = {'device': {'protocol': 'ATA'}, 'rotation_rate': 5400,
++                      'smart_status': {'passed': True},
++                      'ata_smart_attributes': {'table': []}}
++
++    def test_second_sat_mode_accepted_after_invalid_primary(self):
++        commands = []
++        def fake_run(cmd, **kwargs):
++            commands.append(cmd)
++            if '-l' in cmd:
++                return subprocess.CompletedProcess(cmd, 0, stdout=b'{}')
++            if '-d' not in cmd:
++                return subprocess.CompletedProcess(cmd, 2, stdout=b'USB bridge returned text')
++            mode = cmd[cmd.index('-d')+1]
++            if mode == 'sat':
++                return subprocess.CompletedProcess(cmd, 2, stdout=b'Invalid response')
++            if mode == 'sat,12':
++                return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(self.smart).encode())
++            raise AssertionError('Unexpected extra probing')
++        with patch('driverepair_desktop.dependencies.smartctl_path', return_value='smartctl'):
++            result = health_snapshot(self.disk, run=fake_run)
++        self.assertEqual(result['reported_medium'], 'hdd')
++        self.assertEqual(result['source'], 'smartctl_sat,12_passthrough')
++        self.assertEqual(len([c for c in commands if '-l' not in c]), 3)
++        logs = [c for c in commands if '-l' in c]
++        self.assertEqual(len(logs), 2)
++        self.assertTrue(all(c[c.index('-d')+1] == 'sat,12' for c in logs))
++
++    def test_invalid_primary_and_all_sat_modes_stay_unknown(self):
++        def fake_run(cmd, **kwargs):
++            return subprocess.CompletedProcess(cmd, 2, stdout=b'non JSON')
++        with patch('driverepair_desktop.dependencies.smartctl_path', return_value='smartctl'):
++            with self.assertRaisesRegex(RuntimeError, 'invalid JSON'):
++                health_snapshot(self.disk, run=fake_run)
++
++
++class ScanResultClassificationTests(unittest.TestCase):
++    def test_nonzero_scan_exit_is_actionable_not_generic_failed(self):
++        result = {'status': 'completed_with_read_errors', 'read_error_chunks': 14,
++                  'read_error_ranges': [{'offset': 512, 'length': 512}]}
++        view = classify_scan_outcome(result, 2, 'scanquick')
++        self.assertIsNotNone(view)
++        self.assertIn('14 failed read requests', view.summary)
++        self.assertIn('Address scan errors', view.recommendation)
++        self.assertTrue(view.complete)
++        self.assertNotIn('repaired', view.headline)
++
++    def test_failed_worker_does_not_claim_scan_completed(self):
++        self.assertIsNone(classify_scan_outcome({'status': 'aborted_device_or_access_error'}, 2, 'scanfull'))
++        self.assertIsNone(classify_scan_outcome({'status': 'completed_with_read_errors',
++                                                 'read_error_chunks': 0}, 2, 'scanquick'))
++        self.assertIsNone(classify_scan_outcome({'status': 'completed_with_read_errors',
++                                                 'read_error_chunks': 14}, 2, 'carequick'))
++        self.assertIsNone(classify_scan_outcome({'status': 'completed_with_read_errors',
++                                                 'read_error_chunks': 14}, 15, 'scanquick'))
++
++
++class FollowUpBoundsTests(unittest.TestCase):
++    def test_deduplicate_with_strict_limit(self):
++        device = {'identity_hint':'abcd1234', 'size_bytes': 4096*10, 'sector_size': 512}
++        scan = {'device': dict(device), 'device_size_bytes':device['size_bytes'],
++                'logical_sector_bytes':512,
++                'read_error_ranges':[{'offset':0,'length':512}, {'offset':0,'length':512},
++                                     {'offset':512,'length':512}]}
++        self.assertEqual(checked_ranges(scan,device,maximum=2),
++                         [{'offset':0,'length':512}, {'offset':512,'length':512}])
++        for limit in (0,-1,33,1.2,True):
++            with self.assertRaisesRegex(ValueError,'limit'):
++                checked_ranges(scan,device,maximum=limit)
++
++if __name__ == '__main__':
++    unittest.main()
