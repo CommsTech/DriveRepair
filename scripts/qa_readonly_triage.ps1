@@ -18,7 +18,11 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$repoDesktop = Split-Path -Parent $PSScriptRoot
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$repoDesktop = Join-Path $repoRoot 'desktop'
+if (-not (Test-Path (Join-Path $repoDesktop 'driverepair_desktop'))) {
+    $repoDesktop = $repoRoot
+}
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $logPath = Join-Path $OutputDir '_run.log'
@@ -46,7 +50,8 @@ if (-not $interpreter) {
 }
 
 Push-Location $repoDesktop
-$env:PYTHONPATH = '.'
+$env:PYTHONPATH = $repoDesktop
+Write-Host "Working directory: $repoDesktop"
 
 try {
     if (-not $Devices -or $Devices.Count -eq 0) {
