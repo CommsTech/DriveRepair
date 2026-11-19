@@ -154,7 +154,7 @@ def launch():
         from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
             QLabel, QPushButton, QFrame, QProgressBar, QComboBox, QLineEdit, QFileDialog,
             QPlainTextEdit, QMessageBox, QCheckBox, QToolButton, QScrollArea, QGridLayout,
-            QDialog, QListWidget, QSizePolicy, QAbstractItemView)
+            QDialog, QListWidget, QSizePolicy, QAbstractItemView, QInputDialog)
     except ImportError as exc:
         raise RuntimeError('Qt workstation requires the optional PySide6 package: python -m pip install PySide6') from exc
 
@@ -514,6 +514,8 @@ def launch():
             self._devices=[]
             self._job_args=[]
             self._last_job_kind=''
+            self._last_job_result=None
+            self._last_report_file=None
             self._last_good_device=None
             self._scanned=0
             self._pending_resume=None
@@ -821,29 +823,20 @@ def launch():
                 'recover':[('Rescue selected external drive to NEW image','rescue'),
                            ('Recover from existing disk image','rescueimage')],
                 'check':[('Check disk health (read-only)','health'),
+                         ('Verify USB capacity · write / restore spot test','capacity'),
                          ('Quick surface check (read-only)','scanquick'),
                          ('Full surface scan (read-only)','scanfull'),
                          ('Continue interrupted full scan','resume')],
             }
             self.job_box.currentIndexChanged.connect(self.choice_changed)
             workflow.addWidget(self.job_box)
-            self.maintenance_box=QComboBox()
-            self.maintenance_box.setToolTip(
-                'Statistical multi-sample recovery ladder for HDD maintenance. '
-                'Higher levels add settle delays and samples; deep/extreme may use '
-                'high-confidence sector majority. Fail-closed — never invents weak votes. '
-                'Not a SpinRite clone; SSD/USB unknown media gates are unchanged.'
-            )
-            for label, value in (
-                ('Maintenance level 1 · Quick (2 identical reads)', '1'),
-                ('Maintenance level 2 · Normal (3 samples + settle)', '2'),
-                ('Maintenance level 3 · Thorough (5 samples)', '3'),
-                ('Maintenance level 4 · Deep (sector majority ≥75%)', '4'),
-                ('Maintenance level 5 · Extreme (sector majority ≥80%)', '5'),
-            ):
-                self.maintenance_box.addItem(label, value)
-            self.maintenance_box.setCurrentIndex(1)  # Normal default for guided care
-            workflow.addWidget(self.maintenance_box)
+            # Automatic intensity is an evidence-led plan, never a user-set
+            # integer or a substitute for independent raw-write authorization.
+            self.auto_plan_note=QLabel('Automatic maintenance plan · waiting for device evidence')
+            self.auto_plan_note.setObjectName('muted')
+            self.auto_plan_note.setWordWrap(True)
+            self.auto_plan_note.setToolTip('DriveRepair chooses a bounded consistency budget. More reads are not automatically safer; it does not enable destructive writes.')
+            workflow.addWidget(self.auto_plan_note)
             self.batch_button=QPushButton('Queue multiple drives for rescue  +')
             self.batch_button.setToolTip('Serial read-only imaging of multiple selected sources. Each destination is a unique NEW image on separate healthy storage.')
             self.batch_button.clicked.connect(self.queue_rescue)
@@ -975,6 +968,11 @@ def launch():
             self.copy_summary_button.setToolTip('Copies only currently displayed local evidence. No data is sent anywhere.')
             self.copy_summary_button.clicked.connect(self.copy_summary)
             report_row.addStretch()
+            self.detailed_report_button=QPushButton('View detailed report')
+            self.detailed_report_button.setEnabled(False)
+            self.detailed_report_button.setToolTip('Save a modern, completely local HTML evidence report. No data is uploaded.')
+            self.detailed_report_button.clicked.connect(self.export_detailed_report)
+            report_row.addWidget(self.detailed_report_button)
             report_row.addWidget(self.copy_summary_button)
             result_card.addLayout(report_row)
             # Actionable outcome precedes dense telemetry. The evidence map
@@ -1055,6 +1053,12 @@ def launch():
                     title+=' · NVR / surveillance workload (NOT a recording type)'
                 self.profile_note.setText(title + '\n' + profile.recovery_method)
                 self.media_pipeline.set_policy(profile.kind,decision.can_attempt_hdd_refresh)
+                if self.job_box.currentData() in {'carequick','carefull','careresume'}:
+                    from .automatic_maintenance import choose_maintenance
+                    plan=choose_maintenance(model=str(d.get('model') or ''),
+                        bus=str(d.get('bus') or ''), snapshot=snap,
+                        mode='full' if self.job_box.currentData()=='carefull' else 'quick')
+                    self.auto_plan_note.setText(f'Automatic plan · {plan.title}. {plan.explanation}')
                 self.profile_note.setToolTip('Classification: '+profile.confidence+'. '+
                     'USB is a transport, not a physical medium. '+profile.maintenance_note+
                     '\nRecommendation: '+decision.label+'; '+'; '.join(decision.reasons))
@@ -1214,6 +1218,7 @@ def launch():
                 self.offline_devices.blockSignals(False)
                 QTimer.singleShot(0,self.refresh_devices)
             hints={'health':'Reads SMART attributes where available; no physical writes.',
+                   'capacity':'Authenticity spot check: temporary writes to selected USB regions, readback, and restoration. Requires full backup and durable separate-drive journal. Not a normal health scan.',
                    'scanquick':'Samples at least 10% of the entire drive with distributed random locations; no writes.',
                    'scanfull':'Reads the full address space, saving a resumable local checkpoint.',
                    'carequick':'Investigates slow regions; may rewrite only consistently readable targets after consent.',
@@ -1232,9 +1237,18 @@ def launch():
             self.operation_impact.setToolTip(impact_detail)
             self.operation_impact.style().unpolish(self.operation_impact)
             self.operation_impact.style().polish(self.operation_impact)
-            self.start.setText('Start '+('read-only rescue' if kind in {'rescue','rescueimage'} else
+            self.start.setText('Start '+('capacity spot test' if kind=='capacity' else
+                                         'read-only rescue' if kind in {'rescue','rescueimage'} else
                                          'diagnostics' if kind in {'health','scanquick','scanfull','resume'} else
                                          'authorized repair'))
+            if guided:
+                from .automatic_maintenance import choose_maintenance
+                d=self.selected() or {}
+                auto=choose_maintenance(model=str(d.get('model') or ''),
+                    bus=str(d.get('bus') or ''),
+                    snapshot=self._health_by_device.get(d.get('identity_hint')),
+                    mode='full' if kind=='carefull' else 'quick')
+                self.auto_plan_note.setText(f'Automatic plan · {auto.title}. {auto.explanation}')
             self.update_action_state()
         def quick_switch(self):
             """Keyboard-searchable local workflow switcher, no remote indexes."""
@@ -1247,6 +1261,7 @@ def launch():
                      ('Rescue · existing disk image','rescueimage')]
             if not PUBLIC_BETA_IMAGE_ONLY:
                 choices.append(('Repair · experimental targeted rewrite','carequick'))
+                choices.append(('Validate · USB authenticity spot test (writes+restores)','capacity'))
             dialog=QDialog(self)
             dialog.setWindowTitle('Quick switch · Ctrl+K')
             dialog.resize(425,320)
@@ -1294,6 +1309,15 @@ def launch():
             if self._pending_resume:
                 enabled=False
                 advice='Waiting for verified USB reconnect. Cancel reconnect to choose another operation.'
+            if kind=='capacity':
+                if PUBLIC_BETA_IMAGE_ONLY:
+                    enabled=False
+                    advice='Capacity testing writes temporarily to patient USB regions and is unavailable in the read-only public beta.'
+                elif enabled and (self.selected() or {}).get('bus','').lower()!='usb':
+                    enabled=False
+                    advice='Capacity spot testing requires a selected external USB disk.'
+                elif enabled:
+                    advice='High-risk write/restore test. Use only a backed-up, disposable USB; an unreliable controller can overwrite unrelated data.'
             self.start.setEnabled(enabled)
             # When a repair is ineligible, expose the non-destructive next step
             # without a cryptic failed worker run. No source write is performed.
@@ -1304,7 +1328,7 @@ def launch():
             self.device_box.setEnabled(not running)
             self.offline_devices.setEnabled(not running)
             self.job_box.setEnabled(not running)
-            self.maintenance_box.setEnabled(not running and kind in {'carequick','carefull','careresume'})
+            self.auto_plan_note.setVisible(kind in {'carequick','carefull','careresume'})
             self.browse.setEnabled(not running)
             self.batch_button.setEnabled(not running)
             self.boot_button.setEnabled(not running)
@@ -1320,6 +1344,43 @@ def launch():
             self.inspect_button.setEnabled(not running)
             self.smart_check_button.setEnabled(not running and bool(self.selected()) and
                 not (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning))
+
+        def export_detailed_report(self):
+            result=self._last_job_result
+            if not isinstance(result,dict) or not result:
+                QMessageBox.information(self,'No report yet','Run a diagnostic, rescue or capacity test first.')
+                return
+            preferred=self._last_report_file if self._last_job_kind=='capacity' else None
+            if preferred and Path(preferred).is_file():
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(preferred).resolve())))
+                return
+            suggested='DriveRepair-evidence-'+time.strftime('%Y%m%d-%H%M%S')+'.html'
+            path,_=QFileDialog.getSaveFileName(self,'Export local visual evidence report',
+                 suggested,'HTML reports (*.html)')
+            if not path:
+                return
+            if not path.lower().endswith('.html'):
+                path+='.html'
+            try:
+                from .drive_report import save_report
+                regions=None
+                # Surface cells are only coarse evidence aggregates, not
+                # equivalent to 576 individually validated capacity spots.
+                if self._last_job_kind not in {'capacity','rescue','rescueimage'}:
+                    coverage=self.map.coverage
+                    if coverage.size>0:
+                        regions=[]
+                        for cell in coverage.cells:
+                            status=('read_error' if cell.read_errors else
+                                    'slow' if cell.slow_reads else
+                                    'readable' if cell.fraction>=0.999 else
+                                    'sampled' if cell.fraction>0 else 'untested')
+                            regions.append({'offset':cell.start,'length':cell.end-cell.start,
+                                            'status':status,'read_fraction':round(cell.fraction,4)})
+                save_report(path,result,device=self._last_good_device or {},scan_regions=regions)
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).resolve())))
+            except (OSError,ValueError) as exc:
+                QMessageBox.warning(self,'Could not export report',str(exc)[:300])
 
         def copy_summary(self):
             device=(None if self._last_job_kind == 'rescueimage' else
@@ -2008,7 +2069,48 @@ def launch():
                 if not ready:
                     QMessageBox.warning(self,'Drive is not eligible for physical writes',reason)
                     return
-            if kind in {'rescue','rescueimage'}:
+            if kind == 'capacity':
+                if not d or str(d.get('bus','')).lower()!='usb' or PUBLIC_BETA_IMAGE_ONLY:
+                    QMessageBox.warning(self,'External USB required',
+                        'This write/restore test is restricted to backed-up external USB disks in guarded/engineering builds.')
+                    return
+                warning=QMessageBox.warning(self,'Capacity spot test — potential data loss',
+                    'This is NOT a read-only test. DriveRepair temporarily overwrites small locations '
+                    'and attempts to restore original bytes. An untrustworthy USB controller can alias '
+                    'writes into OTHER locations which cannot be restored. Never test a recovery patient '
+                    'or irreplaceable files; use only a disposable device with a verified backup.\n\n'
+                    f'Selected: {d.get("model", "Unknown")} · {d.get("serial_suffix", "unknown")}\n'
+                    'Continue only if all data has been backed up and you accept possible permanent loss.',
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if warning!=QMessageBox.Yes:
+                    return
+                token='TEST '+str(d.get('identity_hint',''))
+                typed,accepted=QInputDialog.getText(self,'Confirm exact USB target',
+                    f'Type exactly {token} to authorize the selected USB test:')
+                if not accepted or typed!=token:
+                    QMessageBox.warning(self,'Not authorized','Target confirmation did not match. No test was started.')
+                    return
+                parent=QFileDialog.getExistingDirectory(self,'Choose journal parent on a DIFFERENT healthy disk')
+                if not parent:
+                    return
+                import secrets
+                journal=os.path.join(parent,'DriveRepair-Capacity-'+secrets.token_hex(5))
+                suggested='DriveRepair-capacity-'+time.strftime('%Y%m%d-%H%M%S')+'.html'
+                report,_=QFileDialog.getSaveFileName(self,'Save detailed evidence report to healthy storage',
+                    suggested,'HTML report (*.html)')
+                if not report:
+                    return
+                if not report.lower().endswith('.html'):
+                    report+='.html'
+                if os.path.lexists(report):
+                    QMessageBox.warning(self,'Existing report','Choose a NEW report path. Existing files are not overwritten.')
+                    return
+                args=['validate-usb-capacity','--device',d['id'],
+                    '--confirm-identity',d['identity_hint'], '--confirm-test',token,
+                    '--ack-data-loss','--ack-backed-up','--journal',journal,
+                    '--samples','144','--report-html',report,'--cooperative-stop-stdin','--progress-jsonl','--json']
+                self._last_report_file=report
+            elif kind in {'rescue','rescueimage'}:
                 if kind == 'rescue' and not d:
                     QMessageBox.warning(self,'Choose an external drive','Select the SOURCE drive to rescue first.')
                     return
@@ -2187,7 +2289,7 @@ def launch():
                             'Save a small, private read-only scan checkpoint locally? '
                             'This stores offsets and observations, not recovered sector bytes.',
                             QMessageBox.Yes | QMessageBox.No)==QMessageBox.Yes
-                    maint=str(self.maintenance_box.currentData() or '2')
+                    maint='auto'  # Freshly evaluated in the engine after live SMART identification
                     args=['care-external','--cooperative-stop-stdin','--device',dev,'--mode','full' if kind=='carefull' else 'quick',
                           '--maintenance-level',maint,
                           *journal_args,'--auto-lock-volumes','--confirm-identity',d['identity_hint'],
@@ -2231,6 +2333,8 @@ def launch():
                 'No media repair is claimed until readback verification completes.')
             self._buf={'stdout':'','stderr':''}
             self._final_stdout=''
+            self._last_job_result=None
+            self.detailed_report_button.setEnabled(False)
             self._scanned=0
             self._last_progress_at=time.monotonic()
             self._rescue_started_at=self._last_progress_at
@@ -2297,8 +2401,8 @@ def launch():
                 self._last_phase=phase
                 self.metric_labels['rate'].setText('Measuring…')
                 self.metric_labels['avg'].setText('Measuring…')
-            self.metric_headers['read'].setText('DATA REWRITTEN' if phase=='REFRESH' else 'DATA READ')
-            self.metric_headers['errors'].setText('READ ERRORS')
+            self.metric_headers['read'].setText('SAMPLED LOCATIONS' if phase=='CAPACITY_TEST' else 'DATA REWRITTEN' if phase=='REFRESH' else 'DATA READ')
+            self.metric_headers['errors'].setText('FAILED SPOTS' if phase=='CAPACITY_TEST' else 'READ ERRORS')
             phase_number={'SCANNING':1, 'INVESTIGATING':2, 'REFRESH':3}.get(phase)
             self.phase_caption.setText(
                 f'Phase {phase_number} of up to 3 · {phase.title()}' if phase_number and
@@ -2420,6 +2524,8 @@ def launch():
                     self.note_log(self._final_stdout[-3000:])
             if not isinstance(result,dict):
                 result={}
+            self._last_job_result=result if result else None
+            self.detailed_report_button.setEnabled(bool(result))
             condition_report = result.get('condition_comparison') or {}
             key=(self._last_good_device or {}).get('identity_hint')
             if key and isinstance(result,dict):
@@ -2555,8 +2661,23 @@ def launch():
                     self._reconnect_timer.start()
             if 'read_error_chunks' in result:
                 self.metric_labels['errors'].setText(str(result['read_error_chunks']))
+            if self._last_job_kind=='capacity':
+                counters=result.get('counters') if isinstance(result.get('counters'),dict) else {}
+                verified=int(counters.get('validated') or 0)
+                requested=int(result.get('samples_planned') or 0)
+                self.result.setText(('Spot test completed · sampled locations verified' if exit_code==0 else
+                                     'Capacity integrity warnings · review test evidence'))
+                self.explain.setText(f'{verified}/{requested} random-pattern sampled regions matched and were restored. '
+                    'A passing spot test does NOT certify full USB capacity or exclude aliasing into other data. '
+                    'Review the detailed report. Do not use a device with any mismatch for important files.')
+                self.next_action.setText('Review the per-location report; on disposable storage consider a full-capacity '
+                    'write-and-verify test before relying on the USB. Do not repeat on a recovery patient.')
+                self.metric_labels['done'].setText(f'{verified} / {requested} sample passes')
+                self.metric_labels['errors'].setText(str(max(0,requested-verified)))
             self.copy_summary_button.setEnabled(True)
-            if self._pending_resume:
+            if self._last_job_kind=='capacity':
+                pass  # keep capacity-specific advice
+            elif self._pending_resume:
                 self.next_action.setText('Reconnect the exact same drive for the saved read-only scan. Verify its identity first.')
             elif self._last_job_kind in ('rescue','rescueimage'):
                 self.next_action.setText('Keep the source unchanged. Inspect the image journal for missing ranges and validate important recovered files.')
@@ -2596,7 +2717,7 @@ def launch():
                 event.ignore()
                 return
             if self.proc and self.proc.state()!=QProcess.NotRunning:
-                if self._last_job_kind in ('carefull','carequick','careresume'):
+                if self._last_job_kind in ('carefull','carequick','careresume','capacity'):
                     answer=QMessageBox.question(self,'Physical write may be in progress',
                         'The active transaction cannot be forcibly interrupted safely. '
                         'Request a cooperative stop and keep DriveRepair open until the engine finishes?',
@@ -2635,7 +2756,7 @@ def launch():
             if self._stop_requested:
                 return
             self._stop_requested=True
-            if self._last_job_kind in ('carefull','carequick','careresume'):
+            if self._last_job_kind in ('carefull','carequick','careresume','capacity'):
                 self.proc.write(b'STOP\n')
                 self.result.setText('Stop requested — waiting for safe transaction boundary')
                 self.explain.setText('No write is interrupted mid-transaction. A blocked Windows read '

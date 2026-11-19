@@ -1,0 +1,2 @@
+617f272fb38f227077d09cb3865487548a3189fb021d059c22dbe78037ed4554  DriveRepair_0.3.3b19_ValiDrive_Reporting_and_AutoPolicy.patch
+9a18ca0e0e5b71afee10c79de33022dbe92f57e930f1024d5f52cbaa1dc65a28  DriveRepair_0.3.3b19_Complete_Source.zip

@@ -15,7 +15,10 @@ def binary_open_flags(flags: int) -> int:
 
 def pwrite(fd: int, data: bytes, offset: int) -> int:
     """Positional write with a portable fallback when os.pwrite is absent."""
-    if hasattr(os, "pwrite"):
-        return os.pwrite(fd, data, offset)
+    # Use callable(), not hasattr(): tests (and some hosts) may set os.pwrite
+    # to None while leaving the attribute present.
+    writer = getattr(os, "pwrite", None)
+    if callable(writer):
+        return writer(fd, data, offset)
     os.lseek(fd, offset, os.SEEK_SET)
     return os.write(fd, data)

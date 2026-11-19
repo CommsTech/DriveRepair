@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — 2026-11-19 USB capacity-integrity spot test and visual reports (0.3.3b19)
+
+- Introduced opt-in **temporary write/restore** capacity-authenticity spot checks for externally selected USB storage in engineering/guarded builds, and regular-image fixtures for safe automated tests. A 4 KiB preimage is durably journaled before each write; two matching restore reads are required; an unverified restore stops all further writes and preserves the recovery journal. **Spoofed-capacity controllers can still overwrite untested locations.**
+- Added an original offline HTML evidence report: declared capacity, observed coverage, sampled-address heatmap, read/write latency distributions, per-position results and plain-language next steps. Sparse samples never masquerade as continuous verified capacity.
+- Replaced visible manual HDD maintenance levels in the Qt workstation with an evidence-aware automatic consistency budget. Write eligibility and human consent remain independent.
+- The prior Tk interface remains available until its deleted-file, filesystem and other specialized workflows are feature-parity tested in Qt; this release does not remove it.
+- Added fault-injection tests for corrupt reads, interrupted restores, result classification, HTML escaping and refusal to overwrite existing reports. Physical-device validation is still pending.
+- Windows fix: open capacity image fixtures with ``O_BINARY`` and use the shared positional ``pwrite`` helper so probe patterns are not text-mode mangled and mocked ``os.pwrite=None`` still falls back correctly.
+
+
 ## Unreleased — finish landing workbench-20261118 unique commits (2026-11-19)
 
 - Port remaining unique `workbench-20261118` commits onto `main`: read-only surface consensus recovery, `choose_speed` finished-job average fallback (fixes stale Measuring…), and Windows GUI telemetry test diagnostics (GATE-012).
