@@ -68,6 +68,23 @@ unconditional read-back verification after each write ("Always read back: even
 --no-verify must detect obvious errors"), which is the SpinRite refresh guarantee.
 No write-policy change was needed or made.
 
+## Follow-on defect found by the Windows suite (same session)
+
+Running the full suite on the Windows node exposed a real bug that Linux cannot
+see (Tk tests skip there): `test_image_scan_updates_actual_bytes_read_speed_and_eta`
+timed out with `['2.00 MiB', '0 observed', 'Measuring…', 'Complete']` — bytes and
+ETA settled while RECENT SPEED never left the placeholder. A scan that finishes
+inside one `RateWindow` sample never emits `speed_bps`.
+
+Fixed with `rates.choose_speed()` (fall back to the measured average only after
+completion, labelled `(avg)`), used by both `gui.py` and `qtgui.py`, plus six
+Linux-runnable tests in `tests/test_rates.py`. The first attribution ("harness
+race") was wrong; widening the wait kept the diagnostics and the real fix
+followed.
+
+Windows result after the fix: full desktop suite `358 tests, OK (skipped=11)`,
+with the GUI workflow module passing twice consecutively.
+
 ## Evidence
 
 - `python3 -m unittest discover -s tests -p 'test_surface_recovery.py'` → 11 OK
