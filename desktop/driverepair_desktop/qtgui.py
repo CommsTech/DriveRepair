@@ -600,7 +600,7 @@ def launch():
             for family, label, key in (
                 ('check','Diagnose','scanquick'),
                 ('recover','Rescue data','rescue'),
-                ('fix','HDD maintenance','carequick')):
+                ('fix','Repair & restore','carequick')):
                 b=QPushButton(label)
                 b.setObjectName('nav')
                 b.setCheckable(True)
@@ -853,12 +853,22 @@ def launch():
             self.repair_help.hide()
             # One next action replaces a row of competing SMART/setup/help controls.
             # This does not bypass the CLI's independent physical-write checks.
-            self.repair_next=QPushButton('Check drive readiness')
+            self.repair_next=QPushButton('Why this plan?')
             self.repair_next.setAccessibleName('Next step for HDD repair eligibility')
             self.repair_next.setToolTip('Check SMART, Windows-native disk evidence, or rescue; identity is not a write permit.')
-            self.repair_next.clicked.connect(self.resolve_repair_next)
+            self.repair_next.clicked.connect(self.explain_repair_eligibility)
             self.repair_next.hide()
             drive_panel.addWidget(self.repair_next)
+            # Recovering bytes and repairing a filesystem COPY are meaningful
+            # maintenance paths for SSD/flash too. Never offer an in-place
+            # 'HDD refresh' substitute for those devices.
+            self.repair_copy=QPushButton('Repair a recovered filesystem copy…')
+            self.repair_copy.setAccessibleName('Repair a recovered filesystem image copy')
+            self.repair_copy.setToolTip('Opens specialist image tools. ext2/3/4 copy repair requires e2fsck; '
+                'all operations preserve the original image and physical patient.')
+            self.repair_copy.clicked.connect(lambda:self.open_specialist_tools('repair-ext-image'))
+            self.repair_copy.hide()
+            drive_panel.addWidget(self.repair_copy)
             self.profile_note=QLabel('Identifying media…')
             self.profile_note.setWordWrap(True)
             self.profile_note.setObjectName('muted')
@@ -1278,12 +1288,16 @@ def launch():
             info=QMessageBox(self)
             info.setWindowTitle('HDD repair readiness')
             info.setIcon(QMessageBox.Information if allowed else QMessageBox.Warning)
-            info.setText('HDD eligibility confirmed for UI preflight' if allowed
-                         else 'DriveRepair cannot currently authorize a physical rewrite')
-            info.setInformativeText(reason+'\n\nFor USB bridges, SMART passthrough depends on the adapter. '
-                'Install smartmontools, try a known-compatible SAT bridge or direct SATA for a verified HDD. '
-                'Windows HealthStatus and model labels do not independently authorize raw writes. '
-                'You can always image readable data without changing the patient.')
+            from .repair_routes import choose_repair_route
+            route=choose_repair_route(d,snap)
+            info.setText('Guarded HDD maintenance may be reviewed' if allowed
+                         else 'Drive-aware repair recommendation')
+            info.setInformativeText(route.explanation+'\n\n'+reason+'\n\n'
+                'An SSD/flash device cannot be made more reliable by an HDD rewrite. '
+                'If the filesystem is damaged, preserve a recovery image and repair a '
+                'supported filesystem on a separate COPY. USB bridges may hide SMART; '
+                'the engine never treats an unverified model or healthy-looking '
+                'Windows status as permission to rewrite a patient.')
             info.addButton('Understood',QMessageBox.AcceptRole)
             rescue=info.addButton('Rescue data',QMessageBox.ActionRole)
             info.exec()
@@ -1455,6 +1469,7 @@ def launch():
             self.smart_check_note.setVisible(family=='fix')
             self.repair_help.hide()  # explanation is available through contextual next action
             self.repair_next.setVisible(family=='fix')
+            self.repair_copy.setVisible(family=='fix')
             self.choice_changed()
             if not (self.proc and self.proc.state()!=QProcess.NotRunning):
                 self.set_live_focus(False)
@@ -1558,7 +1573,7 @@ def launch():
             self._job_args=args
             self.run_command(args)
 
-        def open_specialist_tools(self):
+        def open_specialist_tools(self, preferred_action=None):
             """Qt-native specialist image/forensics toolbox; no Tk subprocess."""
             from .advanced_workflows import ACTIONS, build_specialist_command
             if self.proc and self.proc.state()!=QProcess.NotRunning:
@@ -1581,6 +1596,11 @@ def launch():
             picker=QComboBox()
             for item in ACTIONS:
                 picker.addItem(item.label)
+            if isinstance(preferred_action, str):
+                for index, item in enumerate(ACTIONS):
+                    if item.command == preferred_action:
+                        picker.setCurrentIndex(index)
+                        break
             layout.addWidget(picker)
             description=QLabel()
             description.setWordWrap(True)
@@ -1803,13 +1823,36 @@ def launch():
                 state=readiness_next_action(d,kind,
                     self._health_by_device.get(d.get('identity_hint')),
                     smartctl_available=bool(smartctl_path()))
-                self.repair_next.setText(state['label'])
+                self.repair_next.setText('Why this plan?')
                 self.repair_next.setToolTip(state['reason'])
                 self.repair_next.setEnabled(not running and
                     not (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning))
+                self.repair_copy.setEnabled(not running)
                 if self._smart_probe_failures.get(d.get('identity_hint')) and not enabled:
                     advice=('SMART check: '+self._smart_probe_failures[d['identity_hint']]
                             +' | '+advice)
+            # Never present a permanently disabled 'authorized repair' CTA for
+            # a drive requiring a different recovery method. This changes the
+            # GUI route only; CLI media-write authorizations stay fail-closed.
+            if kind in {'carequick', 'carefull', 'careresume'}:
+                from .repair_routes import choose_repair_route
+                from .dependencies import smartctl_path
+                device=self.selected()
+                route=choose_repair_route(device,
+                    self._health_by_device.get((device or {}).get('identity_hint')),
+                    smartctl_available=bool(smartctl_path()))
+                self.start.setText(route.button)
+                if (not running and not PUBLIC_BETA_IMAGE_ONLY and
+                    route.action in {'rescue','probe'} and
+                    not (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning)):
+                    enabled=True
+                    self.start.setEnabled(True)
+                    advice=route.explanation
+                elif route.action == 'select':
+                    enabled=False
+                    self.start.setEnabled(False)
+                self.start.setToolTip(route.explanation)
+            # Keyboard start obeys exactly the same readiness decision.
             # Keyboard start obeys exactly the same readiness decision.
             self.start_shortcut.setEnabled(enabled)
             # When a repair is ineligible, expose the non-destructive next step
@@ -2637,6 +2680,25 @@ def launch():
             QMessageBox.information(self,'Drive details (read-only)',
                 drive_inspection_text(identified,report,error=err.strip()[:220])[:4000])
         def start_job(self):
+            # The visible primary action in Repair & Restore is contextual.
+            # When physical repair is ineligible, route to actual read-only
+            # recovery/identification rather than launching a doomed writer.
+            if self.job_box.currentData() in {'carequick', 'carefull', 'careresume'}:
+                from .repair_routes import choose_repair_route
+                from .dependencies import smartctl_path
+                selected = self.selected()
+                route = choose_repair_route(selected,
+                    self._health_by_device.get((selected or {}).get('identity_hint')),
+                    smartctl_available=bool(smartctl_path()))
+                if route.action == 'rescue':
+                    self.select_goal('rescue')
+                    return
+                if route.action == 'probe':
+                    self.probe_selected_media(force=True)
+                    return
+                if route.action == 'select':
+                    self.device_box.setFocus()
+                    return
             self._auto_probe_timer.stop()
             if self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning:
                 self._auto_probe_proc.kill()  # bounded read-only SMART probe; do not compete with recovery

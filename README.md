@@ -10,6 +10,24 @@ The Qt workstation now selects an **automatic, bounded HDD investigation level**
 
 [Get started](#get-started) · [Choose a workflow](#choose-a-workflow) · [Recovery USB](#create-a-recovery-usb) · [Command line](#command-line-examples) · [Troubleshooting](#troubleshooting) · [Changelog](CHANGELOG.md) · [Support](https://github.com/sponsors/CommsTech)
 
+## Why the Repair button chooses a different action on some devices
+
+The Qt **Repair & restore** workspace uses the chosen disk's actual evidence to
+pick the next step. A detected SSD, NVMe, or flash drive is **not** offered
+magnetic HDD sector rewrites; its primary action goes to creating a recovery
+image on another healthy disk. After imaging, choose **Repair a recovered
+filesystem copy…** for supported ext2/3/4 *volume* images (requires `e2fsck`
+on a supported host). NTFS, exFAT, and other filesystems are not claimed as
+supported by that particular repair tool. Data rescue and filesystem repair
+are different from repairing failing storage hardware.
+
+For a verified rotating HDD, DriveRepair can offer a separate consent-based
+journaled region rewrite after the independent identity, health, mount/lock,
+and journal checks. When SMART is hidden by the USB adapter, the initial action
+collects available Windows media evidence or offers imaging. Merely recognizing
+a model number is not permission to write to a drive. This is still a hardware
+qualification gap on some USB adapters, not a software repair success.
+
 ## What DriveRepair does
 
 | Workspace | You can do | What it **does not** mean |
