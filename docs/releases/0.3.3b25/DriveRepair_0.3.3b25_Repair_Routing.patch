@@ -1,0 +1,382 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 32e7bdc..f30f9f0 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,13 @@
+ # Changelog
+ 
++## 0.3.3b25 — 2026-11-19: Media-aware Repair & Restore actions
++
++- Replaced the misleading disabled "Start authorized repair" control with a **context-aware** primary action. When the selected device is an SSD or removable flash drive, it switches to read-only image rescue instead of attempting HDD sector refresh. Unknown HDDs trigger read-only identification; corroborated HDDs retain their independent guarded rewrite checks. Switching workspaces never starts a physical write.
++- Renamed the Qt repair workspace **Repair & restore**, and provided a direct specialist action for copy-only ext2/3/4 filesystem repair. The source image and original physical disk are never modified by that operation; `e2fsck` is required for ext filesystems.
++- Added six regression tests validating that no SSD or unverified USB device gets write authorization from the new UI routing. All previous CLI/engine checks remain in effect.
++- **Limit:** This release does not claim to resolve Windows USB raw-write access, restore SSD endurance, or qualify a specific HDD for repair. Native PySide6 and physical drive hardware still require external qualification.
++
++
+ ## 0.3.3b24 — 2026-11-19: Windows-native identification when SMART fails
+ 
+ - Added a versioned, offline, source-attributed drive model catalog (`data/drive_models.json`) with four manufacturer-supported entries. Media-profile matching reads the catalog; drive-model specifications guide read policy only, never physical-write authorization. Added non-matching-model and source-provenance tests.
+diff --git a/README.md b/README.md
+index 838bf2d..23468be 100644
+--- a/README.md
++++ b/README.md
+@@ -10,6 +10,24 @@ The Qt workstation now selects an **automatic, bounded HDD investigation level**
+ 
+ [Get started](#get-started) · [Choose a workflow](#choose-a-workflow) · [Recovery USB](#create-a-recovery-usb) · [Command line](#command-line-examples) · [Troubleshooting](#troubleshooting) · [Changelog](CHANGELOG.md) · [Support](https://github.com/sponsors/CommsTech)
+ 
++## Why the Repair button chooses a different action on some devices
++
++The Qt **Repair & restore** workspace uses the chosen disk's actual evidence to
++pick the next step. A detected SSD, NVMe, or flash drive is **not** offered
++magnetic HDD sector rewrites; its primary action goes to creating a recovery
++image on another healthy disk. After imaging, choose **Repair a recovered
++filesystem copy…** for supported ext2/3/4 *volume* images (requires `e2fsck`
++on a supported host). NTFS, exFAT, and other filesystems are not claimed as
++supported by that particular repair tool. Data rescue and filesystem repair
++are different from repairing failing storage hardware.
++
++For a verified rotating HDD, DriveRepair can offer a separate consent-based
++journaled region rewrite after the independent identity, health, mount/lock,
++and journal checks. When SMART is hidden by the USB adapter, the initial action
++collects available Windows media evidence or offers imaging. Merely recognizing
++a model number is not permission to write to a drive. This is still a hardware
++qualification gap on some USB adapters, not a software repair success.
++
+ ## What DriveRepair does
+ 
+ | Workspace | You can do | What it **does not** mean |
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index b218949..d498a8f 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b24"
++__version__ = "0.3.3b25"
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+index c4a3eb9..cad6c25 100644
+--- a/desktop/driverepair_desktop/qtgui.py
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -600,7 +600,7 @@ def launch():
+             for family, label, key in (
+                 ('check','Diagnose','scanquick'),
+                 ('recover','Rescue data','rescue'),
+-                ('fix','HDD maintenance','carequick')):
++                ('fix','Repair & restore','carequick')):
+                 b=QPushButton(label)
+                 b.setObjectName('nav')
+                 b.setCheckable(True)
+@@ -853,12 +853,22 @@ def launch():
+             self.repair_help.hide()
+             # One next action replaces a row of competing SMART/setup/help controls.
+             # This does not bypass the CLI's independent physical-write checks.
+-            self.repair_next=QPushButton('Check drive readiness')
++            self.repair_next=QPushButton('Why this plan?')
+             self.repair_next.setAccessibleName('Next step for HDD repair eligibility')
+             self.repair_next.setToolTip('Check SMART, Windows-native disk evidence, or rescue; identity is not a write permit.')
+-            self.repair_next.clicked.connect(self.resolve_repair_next)
++            self.repair_next.clicked.connect(self.explain_repair_eligibility)
+             self.repair_next.hide()
+             drive_panel.addWidget(self.repair_next)
++            # Recovering bytes and repairing a filesystem COPY are meaningful
++            # maintenance paths for SSD/flash too. Never offer an in-place
++            # 'HDD refresh' substitute for those devices.
++            self.repair_copy=QPushButton('Repair a recovered filesystem copy…')
++            self.repair_copy.setAccessibleName('Repair a recovered filesystem image copy')
++            self.repair_copy.setToolTip('Opens specialist image tools. ext2/3/4 copy repair requires e2fsck; '
++                'all operations preserve the original image and physical patient.')
++            self.repair_copy.clicked.connect(lambda:self.open_specialist_tools('repair-ext-image'))
++            self.repair_copy.hide()
++            drive_panel.addWidget(self.repair_copy)
+             self.profile_note=QLabel('Identifying media…')
+             self.profile_note.setWordWrap(True)
+             self.profile_note.setObjectName('muted')
+@@ -1278,12 +1288,16 @@ def launch():
+             info=QMessageBox(self)
+             info.setWindowTitle('HDD repair readiness')
+             info.setIcon(QMessageBox.Information if allowed else QMessageBox.Warning)
+-            info.setText('HDD eligibility confirmed for UI preflight' if allowed
+-                         else 'DriveRepair cannot currently authorize a physical rewrite')
+-            info.setInformativeText(reason+'\n\nFor USB bridges, SMART passthrough depends on the adapter. '
+-                'Install smartmontools, try a known-compatible SAT bridge or direct SATA for a verified HDD. '
+-                'Windows HealthStatus and model labels do not independently authorize raw writes. '
+-                'You can always image readable data without changing the patient.')
++            from .repair_routes import choose_repair_route
++            route=choose_repair_route(d,snap)
++            info.setText('Guarded HDD maintenance may be reviewed' if allowed
++                         else 'Drive-aware repair recommendation')
++            info.setInformativeText(route.explanation+'\n\n'+reason+'\n\n'
++                'An SSD/flash device cannot be made more reliable by an HDD rewrite. '
++                'If the filesystem is damaged, preserve a recovery image and repair a '
++                'supported filesystem on a separate COPY. USB bridges may hide SMART; '
++                'the engine never treats an unverified model or healthy-looking '
++                'Windows status as permission to rewrite a patient.')
+             info.addButton('Understood',QMessageBox.AcceptRole)
+             rescue=info.addButton('Rescue data',QMessageBox.ActionRole)
+             info.exec()
+@@ -1455,6 +1469,7 @@ def launch():
+             self.smart_check_note.setVisible(family=='fix')
+             self.repair_help.hide()  # explanation is available through contextual next action
+             self.repair_next.setVisible(family=='fix')
++            self.repair_copy.setVisible(family=='fix')
+             self.choice_changed()
+             if not (self.proc and self.proc.state()!=QProcess.NotRunning):
+                 self.set_live_focus(False)
+@@ -1558,7 +1573,7 @@ def launch():
+             self._job_args=args
+             self.run_command(args)
+ 
+-        def open_specialist_tools(self):
++        def open_specialist_tools(self, preferred_action=None):
+             """Qt-native specialist image/forensics toolbox; no Tk subprocess."""
+             from .advanced_workflows import ACTIONS, build_specialist_command
+             if self.proc and self.proc.state()!=QProcess.NotRunning:
+@@ -1581,6 +1596,11 @@ def launch():
+             picker=QComboBox()
+             for item in ACTIONS:
+                 picker.addItem(item.label)
++            if isinstance(preferred_action, str):
++                for index, item in enumerate(ACTIONS):
++                    if item.command == preferred_action:
++                        picker.setCurrentIndex(index)
++                        break
+             layout.addWidget(picker)
+             description=QLabel()
+             description.setWordWrap(True)
+@@ -1803,13 +1823,36 @@ def launch():
+                 state=readiness_next_action(d,kind,
+                     self._health_by_device.get(d.get('identity_hint')),
+                     smartctl_available=bool(smartctl_path()))
+-                self.repair_next.setText(state['label'])
++                self.repair_next.setText('Why this plan?')
+                 self.repair_next.setToolTip(state['reason'])
+                 self.repair_next.setEnabled(not running and
+                     not (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning))
++                self.repair_copy.setEnabled(not running)
+                 if self._smart_probe_failures.get(d.get('identity_hint')) and not enabled:
+                     advice=('SMART check: '+self._smart_probe_failures[d['identity_hint']]
+                             +' | '+advice)
++            # Never present a permanently disabled 'authorized repair' CTA for
++            # a drive requiring a different recovery method. This changes the
++            # GUI route only; CLI media-write authorizations stay fail-closed.
++            if kind in {'carequick', 'carefull', 'careresume'}:
++                from .repair_routes import choose_repair_route
++                from .dependencies import smartctl_path
++                device=self.selected()
++                route=choose_repair_route(device,
++                    self._health_by_device.get((device or {}).get('identity_hint')),
++                    smartctl_available=bool(smartctl_path()))
++                self.start.setText(route.button)
++                if (not running and not PUBLIC_BETA_IMAGE_ONLY and
++                    route.action in {'rescue','probe'} and
++                    not (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning)):
++                    enabled=True
++                    self.start.setEnabled(True)
++                    advice=route.explanation
++                elif route.action == 'select':
++                    enabled=False
++                    self.start.setEnabled(False)
++                self.start.setToolTip(route.explanation)
++            # Keyboard start obeys exactly the same readiness decision.
+             # Keyboard start obeys exactly the same readiness decision.
+             self.start_shortcut.setEnabled(enabled)
+             # When a repair is ineligible, expose the non-destructive next step
+@@ -2637,6 +2680,25 @@ def launch():
+             QMessageBox.information(self,'Drive details (read-only)',
+                 drive_inspection_text(identified,report,error=err.strip()[:220])[:4000])
+         def start_job(self):
++            # The visible primary action in Repair & Restore is contextual.
++            # When physical repair is ineligible, route to actual read-only
++            # recovery/identification rather than launching a doomed writer.
++            if self.job_box.currentData() in {'carequick', 'carefull', 'careresume'}:
++                from .repair_routes import choose_repair_route
++                from .dependencies import smartctl_path
++                selected = self.selected()
++                route = choose_repair_route(selected,
++                    self._health_by_device.get((selected or {}).get('identity_hint')),
++                    smartctl_available=bool(smartctl_path()))
++                if route.action == 'rescue':
++                    self.select_goal('rescue')
++                    return
++                if route.action == 'probe':
++                    self.probe_selected_media(force=True)
++                    return
++                if route.action == 'select':
++                    self.device_box.setFocus()
++                    return
+             self._auto_probe_timer.stop()
+             if self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning:
+                 self._auto_probe_proc.kill()  # bounded read-only SMART probe; do not compete with recovery
+diff --git a/desktop/driverepair_desktop/repair_routes.py b/desktop/driverepair_desktop/repair_routes.py
+new file mode 100644
+index 0000000..bfb0da4
+--- /dev/null
++++ b/desktop/driverepair_desktop/repair_routes.py
+@@ -0,0 +1,55 @@
++"""Media-specific primary action for the Qt Repair & Restore workspace.
++
++An active primary action does not imply permission to write to patient media.
++The guard in ``start_job`` and the CLI remain independent.  SSD and removable
++flash can undergo data recovery and copy-only filesystem repair, not magnetic
++HDD refresh.  This module contains no I/O so its decisions are testable.
++"""
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from .repair_readiness import readiness_next_action, _flash_profile
++
++
++@dataclass(frozen=True)
++class RepairRoute:
++    action: str
++    button: str
++    explanation: str
++    patient_write_possible: bool = False
++
++
++def choose_repair_route(device: dict | None, snapshot: dict | None = None,
++                        *, smartctl_available: bool = False) -> RepairRoute:
++    """Select an *operator action*, never grant write permission.
++
++    Physical HDD repair remains separately gated by eligibility, journal,
++    identity and locks, while non-HDD drives get an actual recovery entry point.
++    """
++    decision = readiness_next_action(device, 'carequick', snapshot,
++                                     smartctl_available=smartctl_available)
++    if decision['ready']:
++        return RepairRoute('review', 'Review guarded HDD repair',
++                           'A rotational HDD has been identified. Next: approve risk, '
++                           'select separate-disk journal, recheck identity and exclusive access.', True)
++    if not device:
++        return RepairRoute('select', 'Select a drive', 'Connect and select the source drive first.')
++    flash = _flash_profile(device, snapshot)
++    if flash:
++        kind = flash.kind.upper()
++        return RepairRoute('rescue', f'Prepare {kind} recovery',
++                           f'{kind} does not support HDD-style sector rewrites. '
++                           'Set up a recovery image on different healthy storage, then '
++                           'recover files or repair a supported filesystem on a NEW copy.')
++    if decision['action'] == 'probe':
++        return RepairRoute('probe', 'Identify disk (read-only)',
++                           'Check SMART/SAT and Windows storage properties automatically. '
++                           'This reads only drive identity and health metadata.')
++    if decision['action'] in {'identity', 'setup', 'rescue'}:
++        return RepairRoute('rescue', 'Set up recovery image',
++                           'The external disk cannot currently satisfy the physical-write '
++                           'identity/health checks. Save readable bytes to a separate image; '
++                           'try another known-compatible SATA/USB bridge for optional HDD maintenance.')
++    return RepairRoute('rescue', 'Set up recovery image',
++                       'Preserve readable bytes on separate storage before other maintenance.')
+diff --git a/desktop/driverepair_desktop/workstation_ui.py b/desktop/driverepair_desktop/workstation_ui.py
+index 7a02303..b1554a4 100644
+--- a/desktop/driverepair_desktop/workstation_ui.py
++++ b/desktop/driverepair_desktop/workstation_ui.py
+@@ -30,10 +30,10 @@ WORKSPACES = {
+         'Read-only source', 'Writes only to a new destination image',
+         'Select your external source drive. A destination image is chosen when you start.'),
+     'fix': Workspace(
+-        'Repair weak regions',
+-        'Experimental media rewrites never reconstruct data that cannot be read consistently.',
++        'Repair & restore',
++        'Drive-aware recovery, copy-only filesystem repair, and guarded HDD maintenance.',
+         'Experimental writes', 'May permanently worsen a failing drive',
+-        'Use recovery first. Review the write risks and durable-journal options.'),
++        'Start with a recovery copy. Verified HDDs may qualify for journaled maintenance.'),
+ }
+ 
+ IMAGE_OPERATIONS = frozenset({'rescueimage'})
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index ab3a684..2e640e7 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b24"
++version = "0.3.3b25"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_b25_repair_routes.py b/desktop/tests/test_b25_repair_routes.py
+new file mode 100644
+index 0000000..45b3e17
+--- /dev/null
++++ b/desktop/tests/test_b25_repair_routes.py
+@@ -0,0 +1,48 @@
++"""Regression tests for always-useful repair workflow with no new write permits."""
++import unittest
++from driverepair_desktop.repair_routes import choose_repair_route
++from driverepair_desktop.repair_readiness import ui_repair_readiness
++
++
++class RepairRoutesTests(unittest.TestCase):
++    ssd = {'identity_hint': 'aaaaaaaaaaaa', 'model': 'SanDisk SDSSDH3 500G USB Device',
++           'serial_suffix': '***0000', 'bus': 'usb', 'sector_size': 512}
++    hdd = {'identity_hint': 'bbbbbbbbbbbb', 'model': 'ST1000LM048',
++           'serial_suffix': '***0001', 'bus': 'usb', 'sector_size': 512}
++
++    def test_ssd_has_usable_safe_next_step_not_hdd_rewrite(self):
++        route = choose_repair_route(self.ssd)
++        self.assertEqual(route.action, 'rescue')
++        self.assertIn('SSD', route.button)
++        self.assertFalse(route.patient_write_possible)
++        self.assertFalse(ui_repair_readiness(self.ssd, 'carequick')[0])
++
++    def test_unidentified_hdd_starts_with_readonly_probe(self):
++        route = choose_repair_route(self.hdd)
++        self.assertEqual(route.action, 'probe')
++        self.assertFalse(route.patient_write_possible)
++
++    def test_smart_failed_hdd_has_recovery_route(self):
++        snapshot = {'source': 'windows_native_unverified', 'status': 'unknown',
++                    'smart_unavailable_reason': 'bridge rejected command'}
++        route = choose_repair_route(self.hdd, snapshot)
++        self.assertEqual(route.action, 'rescue')
++        self.assertFalse(route.patient_write_possible)
++
++    def test_confirmed_hdd_can_request_guarded_review_only(self):
++        snapshot = {'status':'smart_passed_limited', 'reported_medium':'hdd',
++                    'rotation_rate_rpm':5400}
++        route = choose_repair_route(self.hdd, snapshot)
++        self.assertEqual(route.action, 'review')
++        self.assertTrue(route.patient_write_possible)
++        self.assertIn('journal', route.explanation)
++
++    def test_no_device_cannot_start(self):
++        self.assertEqual(choose_repair_route(None).action, 'select')
++
++    def test_no_health_never_becomes_smart_pass(self):
++        snap = {'source': 'windows_storage_healthstatus',
++                'status': 'windows_health_limited', 'reported_medium': 'unknown'}
++        self.assertFalse(choose_repair_route(self.hdd, snap).patient_write_possible)
++
++if __name__=='__main__': unittest.main()
+diff --git a/docs/REPAIR_WORKFLOW_B25.md b/docs/REPAIR_WORKFLOW_B25.md
+new file mode 100644
+index 0000000..8942f95
+--- /dev/null
++++ b/docs/REPAIR_WORKFLOW_B25.md
+@@ -0,0 +1,20 @@
++# DriveRepair b25 — Repair & Restore qualification
++
++## Changed UX
++
++- Choose the selected drive before entering Repair & restore.
++- On SanDisk SDSSDH3, the primary action must say **Recover SSD data** and switch to read-only image rescue, never launch `care-external`.
++- On a Seagate ST1000LM048 with no usable SMART/native evidence, the primary action must be **Identify disk (read-only)** or **Create a recovery image**, never falsely enable the writer.
++- On a synthetic/full SMART-qualified rotational HDD, **Review guarded HDD repair** is allowed by UI but engine must still independently revalidate device, journal, health, locks and explicit acknowledgements.
++- **Repair a recovered filesystem copy…** opens the specialist dialog with `repair-ext-image` preselected. The operation only supports ext2/3/4 *volume* images and writes to a new copy. It does not provide an NTFS or exFAT repair.
++
++## Hardware tests still required
++
++1. Native Windows PySide6 clickthrough at 100%, 125% and 150% DPI, including keyboard navigation and narrow windows.
++2. Identify a known-good sacrificial Seagate SATA HDD both directly and behind each candidate USB bridge. Capture SMART/SAT response and Windows-native flags; do not infer drive health from the model name.
++3. After data backup, on a **disposable HDD** test journal location, unique serial, volume lock, interrupted I/O, bounded rewrite and independent post-write readback; preserve all failure evidence.
++4. Test read-only imaging from SanDisk SSD and generic USB flash to separate healthy storage. Confirm no patient writes and inspect journal/recovered-byte map.
++5. Verify no SSD, flash, unknown, or model/serial-mismatch device can start magnetic HDD rewrite even via CLI.
++6. Exercise copy-only ext filesystem repair on a deliberately damaged synthetic ext filesystem image and assert original digest is unchanged. NTFS and exFAT need dedicated verified workflows.
++
++A synthetic test pass does **not** demonstrate repaired media health or native Windows device support.

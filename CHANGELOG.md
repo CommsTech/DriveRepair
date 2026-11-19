@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3b25 — 2026-11-19: Media-aware Repair & Restore actions
+
+- Replaced the misleading disabled "Start authorized repair" control with a **context-aware** primary action. When the selected device is an SSD or removable flash drive, it switches to read-only image rescue instead of attempting HDD sector refresh. Unknown HDDs trigger read-only identification; corroborated HDDs retain their independent guarded rewrite checks. Switching workspaces never starts a physical write.
+- Renamed the Qt repair workspace **Repair & restore**, and provided a direct specialist action for copy-only ext2/3/4 filesystem repair. The source image and original physical disk are never modified by that operation; `e2fsck` is required for ext filesystems.
+- Added six regression tests validating that no SSD or unverified USB device gets write authorization from the new UI routing. All previous CLI/engine checks remain in effect.
+- **Limit:** This release does not claim to resolve Windows USB raw-write access, restore SSD endurance, or qualify a specific HDD for repair. Native PySide6 and physical drive hardware still require external qualification.
+
+
 ## 0.3.3b24 — 2026-11-19: Windows-native identification when SMART fails
 
 - Added a versioned, offline, source-attributed drive model catalog (`data/drive_models.json`) with four manufacturer-supported entries. Media-profile matching reads the catalog; drive-model specifications guide read policy only, never physical-write authorization. Added non-matching-model and source-provenance tests.

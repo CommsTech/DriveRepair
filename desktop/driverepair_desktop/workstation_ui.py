@@ -30,10 +30,10 @@ WORKSPACES = {
         'Read-only source', 'Writes only to a new destination image',
         'Select your external source drive. A destination image is chosen when you start.'),
     'fix': Workspace(
-        'Repair weak regions',
-        'Experimental media rewrites never reconstruct data that cannot be read consistently.',
+        'Repair & restore',
+        'Drive-aware recovery, copy-only filesystem repair, and guarded HDD maintenance.',
         'Experimental writes', 'May permanently worsen a failing drive',
-        'Use recovery first. Review the write risks and durable-journal options.'),
+        'Start with a recovery copy. Verified HDDs may qualify for journaled maintenance.'),
 }
 
 IMAGE_OPERATIONS = frozenset({'rescueimage'})
