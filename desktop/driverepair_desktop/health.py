@@ -19,7 +19,14 @@ from .devices import Device
 def health_snapshot(device: Device,
                     run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> dict:
     from .dependencies import smartctl_path
-    cmd = [smartctl_path() or 'smartctl', '--json', '--all', device.path]
+    # Execute only the path that was actually resolved and (on Windows) checked
+    # against the staged manifest. Falling back to a bare 'smartctl' name would
+    # let a planted executable supply the SMART evidence that feeds repair
+    # authorization, and would re-resolve PATH after the check.
+    executable = smartctl_path()
+    if not executable:
+        raise RuntimeError('SMART support requires smartctl (smartmontools), not installed')
+    cmd = [executable, '--json', '--all', device.path]
     try:
         proc = run(cmd, capture_output=True, timeout=12, check=False)
     except FileNotFoundError as exc:

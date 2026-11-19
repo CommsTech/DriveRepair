@@ -221,6 +221,22 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
     if resume_state is not None:
         raise ValueError('Resume checkpoint supported only for adaptive full scans')
     blocks = (size + chunk - 1) // chunk
+    # Bind the callback's arity once. A try/except around the call would also
+    # swallow a TypeError raised *inside* the callback and silently retry with a
+    # different signature, destroying the real traceback.
+    progress_takes_info = True
+    if progress is not None:
+        try:
+            import inspect
+            params = inspect.signature(progress).parameters
+            if any(p.kind is p.VAR_POSITIONAL for p in params.values()):
+                progress_takes_info = True
+            else:
+                positional = [p for p in params.values()
+                              if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+                progress_takes_info = len(positional) >= 3
+        except (TypeError, ValueError):
+            progress_takes_info = True
     baseline = list(scan_offsets(size, chunk, mode, samples, sample_seed)) if mode != 'full' else None
     if mode == 'triage' and history_hints:
         # Anomaly history is only a HINT. Every bookmarked location is re-read;
@@ -325,9 +341,9 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
             'read_error_chunks': failures,
         }
         if progress:
-            try:
+            if progress_takes_info:
                 progress(min(completed, planned), planned, info)
-            except TypeError:
+            else:
                 progress(min(completed, planned), planned)
         if failures >= max_errors and status == 'completed':
             status = 'aborted_error_limit'

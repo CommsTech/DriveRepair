@@ -10,6 +10,11 @@ from driverepair_desktop.usb_flash import flash_confirmation_state
 
 class UsbHealthRegression(unittest.TestCase):
     def setUp(self):
+        from unittest import mock as _mock
+        from driverepair_desktop import dependencies
+        patcher = _mock.patch.object(dependencies, 'smartctl_path', return_value='smartctl')
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.drive = Device('windows:PhysicalDrive3', r'\\.\PhysicalDrive3',
                             'ST1000LM048 USB bridge', 1000000000000, 512,
                             'usb', 'bridge-serial-0001')

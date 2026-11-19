@@ -331,7 +331,9 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
                   resume: bool = False, retry_missing: bool = False,
                   progress: Callable[[dict], None] | None = None,
                   max_chunks: int | None = None,
-                  retry_sector_attempts: int = 1) -> dict:
+                  retry_sector_attempts: int = 1,
+                  consensus_attempts: int = 3,
+                  consensus_sector_budget: int = 4096) -> dict:
     """Rescue readable data to image; no writes to reader/source.
 
     Recovered means OS returned all requested bytes, not that bytes match
@@ -340,7 +342,9 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
     if (size <= 0 or sector <= 0 or size % sector or chunk < sector or
             chunk % sector or chunk > 64 * 1024 * 1024 or
             not 1 <= max_failed_reads <= 100000 or not source_token or
-            type(retry_sector_attempts) is not int or not 0 <= retry_sector_attempts <= 2):
+            type(retry_sector_attempts) is not int or not 0 <= retry_sector_attempts <= 2 or
+            type(consensus_attempts) is not int or not 0 <= consensus_attempts <= 8 or
+            type(consensus_sector_budget) is not int or not 0 <= consensus_sector_budget <= 200000):
         raise ValueError('Invalid size, alignment, chunk, source token or failure budget')
     output = _safe_path(output)
     journal = output + '.rescue.json'
@@ -388,6 +392,37 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
                 raise RuntimeError('Interrupted retry pass; resume with --retry-missing')
             work = ((p, min(chunk, size - p)) for p in range(state['cursor'], size, chunk))
         processed = 0
+        consensus_budget = int(consensus_sector_budget)
+
+        def consensus_salvage(start: int, n: int) -> bytes | None:
+            """Last-resort majority reread of one lost sector.
+
+            Shifted rereads can succeed where the aligned read failed. The
+            result is a CANDIDATE: it is recorded as consensus-recovered, never
+            as verified data, and it is bounded in both count and attempts.
+            """
+            nonlocal consensus_budget, attempts
+            if consensus_attempts < 1 or consensus_budget <= 0 or n != sector:
+                return None
+            from .surface_recovery import consensus_read
+            consensus_budget -= 1
+            try:
+                outcome = consensus_read(reader, start, n, sector=sector,
+                                         attempts=consensus_attempts,
+                                         shifts=(-1, 0, 1))
+            except (OSError, ValueError):
+                return None
+            attempts += max(0, int(outcome.get('attempts', 0)) -
+                            int(outcome.get('successful_reads', 0)))
+            data = outcome.get('data')
+            if outcome.get('status') != 'consensus' or not data or len(data) != n:
+                return None
+            state['consensus_recovered_bytes'] = int(state.get('consensus_recovered_bytes', 0)) + n
+            recorded = state.setdefault('consensus_recovered_ranges', [])
+            if len(recorded) < 1000:
+                recorded.append([start, n])
+            return data
+
         for offset, length in work:
             new_missing: list[list[int]] = []
             segments: list[tuple[int, bytes]] = []
@@ -423,6 +458,10 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
                             # NEVER spin on a stalled USB or failing controller.
                             time.sleep(min(0.025, 0.005 * (attempt + 1)))
                 if not retry_missing or n <= sector:
+                    salvaged = consensus_salvage(start, n)
+                    if salvaged is not None:
+                        segments.append((start, salvaged))
+                        return
                     new_missing.append([start, n])
                     return
                 half = ((n // sector) // 2) * sector
@@ -449,7 +488,6 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
             state['failed_read_attempts'] += attempts
             attempts = 0
             state['status'] = 'in_progress'
-            _validate_state(state)
             processed += 1
             # Checkpoint cadence: fsync image FIRST, then durable journal.
             # Forced on stop (max_chunks), completion, or every N chunks.
@@ -460,6 +498,10 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
                 or (processed % _RESCUE_JOURNAL_CHECKPOINT_CHUNKS == 0)
             )
             if force_checkpoint:
+                # Validate at the durability boundary, not per chunk: this is
+                # the only place the map can be observed after a crash. A full
+                # re-sort per chunk was O(chunks x ranges) on multi-TB rescues.
+                _validate_state(state)
                 os.fsync(fd)
                 _state_save(journal, state)
             if progress:
@@ -487,7 +529,9 @@ def rescue_reader(reader: Reader, *, size: int, sector: int, output: str,
                   resume: bool = False, retry_missing: bool = False,
                   progress: Callable[[dict], None] | None = None,
                   max_chunks: int | None = None,
-                  retry_sector_attempts: int = 1) -> dict:
+                  retry_sector_attempts: int = 1,
+                  consensus_attempts: int = 3,
+                  consensus_sector_budget: int = 4096) -> dict:
     """Rescue with exclusive OS lock to prevent concurrent output/map writers."""
     with _rescue_writer_lock(output):
         return _rescue_reader_locked(
@@ -496,4 +540,6 @@ def rescue_reader(reader: Reader, *, size: int, sector: int, output: str,
             max_failed_reads=max_failed_reads, resume=resume,
             retry_missing=retry_missing, progress=progress,
             max_chunks=max_chunks, retry_sector_attempts=retry_sector_attempts,
+            consensus_attempts=consensus_attempts,
+            consensus_sector_budget=consensus_sector_budget,
         )

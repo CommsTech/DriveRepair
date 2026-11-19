@@ -85,14 +85,26 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
     error_count_over_limit = False
     retries_limited = False
     latency_window = deque(maxlen=256)
+    checkpoint_min_interval = 2.0
+    last_checkpoint_at = 0.0
 
     def write_checkpoint(*, force=False):
-        if checkpoint is not None:
-            checkpoint({'position': position, 'checked': checked,
-                        'readable': readable, 'read_count': read_count,
-                        'failures': failures, 'deferred': deferred[:256],
-                        'slow': slow[:1024], 'slow_count': slow_count,
-                        'skipped': skipped[:256], 'size_now': size_now}, force=force)
+        nonlocal last_checkpoint_at
+        if checkpoint is None:
+            return
+        now = time.monotonic()
+        # A durable checkpoint costs a temp file, two fsyncs and a rename.
+        # Writing one after every chunk added minutes of pure overhead on slow
+        # media for a position that a crash can only lose by seconds. Forced
+        # saves (abort, status change, completion) still happen immediately.
+        if not force and now - last_checkpoint_at < checkpoint_min_interval:
+            return
+        checkpoint({'position': position, 'checked': checked,
+                    'readable': readable, 'read_count': read_count,
+                    'failures': failures, 'deferred': deferred[:256],
+                    'slow': slow[:1024], 'slow_count': slow_count,
+                    'skipped': skipped[:256], 'size_now': size_now}, force=force)
+        last_checkpoint_at = now
 
     def report(off, length, elapsed_ms, error=None, category=None):
         if progress is None:

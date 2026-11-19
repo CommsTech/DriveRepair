@@ -872,6 +872,11 @@ class JournalStore:
         # An empty directory is fine (operators often mkdir the path first).
         # Refuse only when a prior journal artifact is present.
         if os.path.lexists(self.journal_dir):
+            # A symlink can point at an empty directory elsewhere and quietly
+            # relocate journal data onto media the operator did not choose.
+            if stat.S_ISLNK(os.lstat(self.journal_dir).st_mode):
+                raise FileExistsError(
+                    "Refresh journal path is a symbolic link; refusing to adopt it")
             if not os.path.isdir(self.journal_dir):
                 raise FileExistsError("Refresh journal path exists and is not a directory")
             leftover = [
@@ -880,6 +885,10 @@ class JournalStore:
             ]
             if leftover:
                 raise FileExistsError("Refresh journal already exists; use --resume")
+            # Adopting an existing empty directory must not inherit a
+            # world-readable mode chosen by someone else.
+            if os.name == 'posix':
+                os.chmod(self.journal_dir, 0o700)
         else:
             os.makedirs(self.journal_dir, mode=0o700)
 

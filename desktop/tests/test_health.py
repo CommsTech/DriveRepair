@@ -7,6 +7,13 @@ from driverepair_desktop.health import health_snapshot
 
 class HealthTests(unittest.TestCase):
     def setUp(self):
+        # Resolution is tested separately; these cases exercise parsing with a
+        # mocked runner, so pin a resolved path instead of relying on a real
+        # smartctl installation.
+        from driverepair_desktop import dependencies
+        patcher = mock.patch.object(dependencies, 'smartctl_path', return_value='smartctl')
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.device = Device('linux:/dev/sdx', '/dev/sdx', 'USB', 4096, 512, 'usb', 'secrets')
 
     def test_smart_no_data_not_healthy(self):

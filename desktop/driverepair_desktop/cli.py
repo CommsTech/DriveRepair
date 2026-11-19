@@ -1068,7 +1068,9 @@ def _run_extras(args) -> int:
                     snap = health_snapshot(selected)
                     from .monitor import _numbers
                     sensors.ingest_smart_counters(_numbers({'health': snap}))
-                except Exception:
+                except (OSError, RuntimeError, ValueError, KeyError):
+                    # Telemetry only: a missing or unusable SMART snapshot must
+                    # never abort a read-only scan, and must stay UNKNOWN.
                     pass
 
             def identity_check() -> None:
@@ -1283,7 +1285,18 @@ def _run_extras(args) -> int:
     if args.json:
         print(json.dumps(result, indent=2))
     else:
-        print(json.dumps(result, indent=2))
+        # Human path: a compact outcome line instead of raw JSON. Machine
+        # consumers use --json, which stays byte-identical.
+        missing = 0
+        for item in (result.get('missing_ranges') or []):
+            try:
+                missing += int(item[1])
+            except (TypeError, IndexError, ValueError):
+                continue
+        print(f"Status: {result.get('status')}; "
+              f"recovered {int(result.get('recovered_bytes') or 0):,} bytes; "
+              f"missing {missing:,} bytes; "
+              f"read failures {int(result.get('failed_read_attempts') or 0)}")
     if args.command == 'rescue-status':
         return 0 if result['clean_rescue_complete'] else 2
     if args.command in {'integrity-baseline', 'integrity-audit', 'integrity-restore-copy'}:

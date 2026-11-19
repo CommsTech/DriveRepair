@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased — specialist review pass: consensus rescue, durability cadence, security hardening (2026-11-19)
+
+Four specialists (competitive research, performance, code quality, security)
+reviewed `main` and every implemented finding below has a regression test.
+Full disposition, including deliberately deferred work, is in
+`docs/SPECIALIST_REVIEW_20261119.md`.
+
+- **Rescue now uses the consensus engine it already shipped.** When the retry
+  pass is about to declare a sector lost, it attempts a bounded majority vote
+  across shifted rereads. Recovered sectors are recorded as
+  `consensus_recovered_bytes` / `consensus_recovered_ranges` — provenance that
+  never claims verified data. Disable with `consensus_attempts=0`.
+- **Durability cadence:** the rescue loop validates its map at checkpoint
+  boundaries instead of re-sorting it on every chunk (32 ms/call at 50k ranges),
+  and adaptive scans no longer write a durable checkpoint after every chunk:
+  measured **256 → 2** saves for a 256 MiB scan. Forced saves on abort and
+  completion are unchanged, so resume semantics are preserved.
+- **Security (both LOW, from the security review):** SMART evidence is now read
+  only from the resolved `smartctl` path — never a bare PATH lookup that a
+  planted binary could satisfy; and a repair journal refuses to be adopted
+  through a symlink and is chmod 0700 when an existing empty directory is used.
+- **Correctness:** the rescue CLI's non-JSON path printed raw JSON (no human
+  output at all) and now prints a compact status line; the scanner no longer
+  masks a `TypeError` raised inside a progress callback.
+- **QA tooling:** `scripts/qa_readonly_triage.ps1` runs bounded read-only scans
+  on Windows and `scripts/qa_summarize_results.py` summarises the results
+  (handles PowerShell's UTF-16 + bracketed capture). Verified against three
+  external drives: 0 read errors, spot-check coverage only, SMART UNKNOWN where
+  smartmontools is absent.
+
 ## Unreleased — workstation responsiveness and first-run clarity (2026-11-19)
 
 - **Responsiveness:** progress repaints are coalesced to a 10 Hz cadence. Phase
