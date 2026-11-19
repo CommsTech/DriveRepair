@@ -28,7 +28,8 @@ def command(args: list[str], cwd: Path = DESKTOP) -> None:
     subprocess.run(args, cwd=cwd, check=True)
 
 
-def build(include_wheel: bool = True, *, public_beta: bool = False, repair_beta: bool = False) -> list[Path]:
+def build(include_wheel: bool = True, *, public_beta: bool = False, repair_beta: bool = False,
+          recovery_iso: str | None = None) -> list[Path]:
     if public_beta and repair_beta:
         raise ValueError('Choose one release channel')
     dist = REPO / 'dist'
@@ -60,6 +61,29 @@ def build(include_wheel: bool = True, *, public_beta: bool = False, repair_beta:
                               main='driverepair_desktop.cli:main', compressed=True)
         outputs.append(outfile)
     command([sys.executable, str(outputs[0]), '--help'], cwd=REPO)
+    if recovery_iso:
+        # A distributable Windows USB creator must have an actual image sidecar.
+        # The build kit ZIP and .pyz alone are NOT boot media. Still require
+        # signed release provenance and independent boot testing before publish.
+        sys.path.insert(0, str(DESKTOP))
+        from driverepair_desktop.usb_flash import inspect_hybrid_iso
+        info = inspect_hybrid_iso(recovery_iso)
+        source = Path(info['path'])
+        sidecar = dist / 'images' / 'DriveRepair-Live-amd64.iso'
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        if sidecar.resolve() != source.resolve():
+            if sidecar.exists():
+                raise FileExistsError('Recovery ISO distribution path already exists; refusing silent replacement')
+            shutil.copyfile(source,sidecar)
+        sha = hashlib.sha256()
+        with sidecar.open('rb') as handle:
+            for chunk in iter(lambda: handle.read(4*1024*1024),b''):
+                sha.update(chunk)
+        checksum = sidecar.with_suffix('.iso.sha256')
+        checksum.write_text(f'{sha.hexdigest()}  {sidecar.name}\n',encoding='ascii')
+        outputs.extend([sidecar, checksum])
+        print('Recovery ISO sidecar staged: '+str(sidecar),flush=True)
+        print('UNVERIFIED: ISO markers do not prove BIOS/UEFI bootability.',flush=True)
     if include_wheel and not public_beta:
         command([sys.executable, '-m', 'pip', 'wheel', '.', '--no-deps',
                  '--no-build-isolation', '-w', str(dist)])
@@ -76,7 +100,10 @@ if __name__ == '__main__':
                         help='Build image-first zipapp with all in-place patient writes disabled')
     parser.add_argument('--repair-beta', action='store_true',
                         help='Build hardware-repair beta: HDD-only guided journaled writes with strict gates')
+    parser.add_argument('--recovery-iso', metavar='HYBRID_ISO',
+                        help='Stage an existing validated DriveRepair hybrid ISO beside the zipapp for auto-selection; never builds the ISO')
     parser.add_argument('--no-wheel', action='store_true',
                         help='Build zipapp only when Python wheel build tooling is unavailable')
     opts = parser.parse_args()
-    build(not opts.no_wheel, public_beta=opts.public_beta, repair_beta=opts.repair_beta)
+    build(not opts.no_wheel, public_beta=opts.public_beta, repair_beta=opts.repair_beta,
+          recovery_iso=opts.recovery_iso)

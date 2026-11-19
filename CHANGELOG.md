@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — 2026-11-18 recovery USB first-run UX, sponsor link and repair preflight
+
+- Consolidate the primary Qt sidebar to **Create recovery USB**. Select an existing local DriveRepair hybrid ISO automatically (previously selected first, then application `images/`, local `dist-live/` and other DriveRepair-named images); keep a manual override. No automatic internet fetch and no fallback to an unrelated image.
+- When no ISO exists, show a clear distinction between **Use existing ISO**, **Build ISO (Linux)** and **Export build kit**. A ZIP or unbuilt recipe is never advertised as a bootable ISO. An optional `scripts/build_desktop.py --recovery-iso ...` release flag stages a real ISO next to the application and writes a SHA-256 sidecar; markers/checksums do not prove bootability.
+- Add a **Support DriveRepair** link to the verified CommsTech GitHub Sponsors page and a `.github/FUNDING.yml` repository sponsor button. No automatic network communication.
+- Prevent beginning an experimental physical repair in Qt when external-disk discovery reports no serial; provide a route to read-only diagnosis/rescue instead of scanning for hours and failing the identity gate afterward. Keep all CLI identity/SMART/lock/journal protections unchanged.
+- Add local ISO discovery and preflight regression tests, plus an O(1) sequential extent-aggregation fast path in the evidence map (same byte-exact union semantics). Does not claim that Windows kernel-blocked I/O is fixed or that physical media was repaired. Real bootable ISO and Windows USB hardware tests still required.
+
 ## Unreleased — 2026-11-18 USB recovery-media flashing (hardware QA pending)
 
 - Add **Flash bootable USB** to the primary Qt workstation. Selecting an ISO, a specific USB whole disk, typing `ERASE <device-id>` and acknowledging permanent data loss are separate required steps. A final destructive confirmation is also required before launch.

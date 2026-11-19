@@ -38,9 +38,27 @@ class CoverageCell:
             return
         if slow:
             self.slow_reads += 1
-        # Intervals remain sorted and disjoint. A binary insertion search plus
-        # localized merging avoids re-sorting the entire history at every read.
+        # Fast path for the common sequential full-surface scan. Appending or
+        # extending the final observed range is O(1), avoiding bisect/splice
+        # overhead for millions of adjacent 512 KiB–1 MiB USB reads.
         intervals = self.intervals
+        if intervals:
+            last_start, last_stop = intervals[-1]
+            if last_start <= start and stop <= last_stop:
+                return  # already counted: retries must not inflate coverage
+            if start >= last_stop:
+                if start == last_stop:
+                    intervals[-1] = (last_start, stop)
+                else:
+                    intervals.append((start, stop))
+                self.covered_bytes += stop - start
+                return
+        elif start >= self.start:
+            intervals.append((start, stop))
+            self.covered_bytes += stop - start
+            return
+        # Sparse/out-of-order retries still use the exact disjoint-interval
+        # union algorithm below; never count the same observed byte twice.
         index = bisect_left(intervals, (start, -1))
         if index and intervals[index - 1][1] >= start:
             index -= 1

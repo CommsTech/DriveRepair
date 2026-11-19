@@ -4,6 +4,14 @@
 
 > **Current source baseline: 0.3.3b13, with post-b13 beta hardening (unreleased). Not approved for unrestricted physical-drive repair.** The supplied source archive is an engineering build. Only the separately built `-public-beta.pyz` package has in-place image/physical-drive writes disabled by distribution policy. Do not distribute the engineering zipapp/wheel as a public safety-qualified release.
 
+## Create recovery USB — simplified workflow (unreleased)
+
+The Qt sidebar now exposes **Create recovery USB** as the main action. If a local valid ISO-hybrid image is present in `images/` beside the application, in a known build output folder, or was selected previously, DriveRepair **preselects it**. You only select the sacrificial USB target and authorize its total erasure; written bytes are independently read back. A chosen ISO can be changed in the wizard. There is no online download or fabricated image.
+
+**This source archive does not contain a built live ISO.** Without one, DriveRepair presents **Use existing ISO**, **Build ISO (Linux)**, and **Export build kit** instead of pretending a ZIP is flashable. To package a separately built, tested hybrid ISO into a Windows-ready distribution, use `python scripts/build_desktop.py --repair-beta --no-wheel --recovery-iso /path/to/DriveRepair-Live.iso`. The command stages `dist/images/DriveRepair-Live-amd64.iso` and its SHA-256 receipt beside the zipapp. The ISO still requires BIOS/UEFI and read-only hardware validation before calling it release-ready.
+
+The sidebar also links to [GitHub Sponsors](https://github.com/sponsors/CommsTech) for optional support; sponsorship grants no special support guarantee. If a USB bridge hides its hardware serial, the GUI blocks *in-place repairs up front* rather than spending time scanning a disk that cannot safely pass the required physical-write identity gate. **Read-only diagnosis and rescue remain available.** See [USB creator and repair qualification](docs/ISO_FIRST_USB_UX_20261118.md).
+
 ## Workstation updates — November 18 (unreleased, requires native validation)
 
 The updated Qt workstation offers a 64×12 full-device evidence map with **aggregated successful-read spans** (no more systematically undercounting throttled scan results), clearer current-phase vs. whole-job progress, visual condition indicators, multi-drive read-only rescue queueing, and three distinct boot-media actions: export a Debian live-ISO build kit, run the experimental ISO builder on a qualified Linux build host, or **Flash bootable USB** from an existing ISO-hybrid image. The USB action performs explicitly authorized full-disk destructive writing with byte-for-byte verification; it does **not** build the ISO, repair patient disks or prove hardware bootability. On trusted Linux live recovery, users can opt into read-only imaging of offline internal disks.
