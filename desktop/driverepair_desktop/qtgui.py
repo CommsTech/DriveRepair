@@ -16,6 +16,7 @@ from .surface_map import SurfaceCoverage
 from .release_policy import PUBLIC_BETA_IMAGE_ONLY, REPAIR_BETA_GUARDED
 from .workstation_ui import (
     WORKSPACES, can_start, operation_impact, operation_family, operator_summary,
+    repair_presentation, drive_inspection_text,
 )
 import sys
 import time
@@ -94,7 +95,9 @@ def estimated_job_percent(event: dict, *, guided: bool) -> float:
         total = max(1, int(event.get('investigation_total') or 1))
         return 60.0 + min(1, reads / total) * 15.0
     if phase == 'REFRESH':
-        return 75.0 + pct * 0.25
+        # All selected writes may be finished, but independent postverification
+        # and health comparison have not yet returned. Never show 100% here.
+        return min(99.0, 75.0 + pct * 0.25)
     return 0.0
 
 def _restrict_qt_debug_log_access(path: Path) -> None:
@@ -696,7 +699,9 @@ def launch():
             self.phase_progress=QProgressBar()
             self.phase_progress.setRange(0,1000)
             self.phase_progress.setValue(0)
-            hero.addWidget(self.phase_progress)
+            # One progress bar is enough. The current-phase percentage lives in
+            # the first metric tile; duplicate bars implied false precision.
+            self.phase_progress.hide()
             total_row=QHBoxLayout()
             hero.addLayout(total_row)
             self.total_caption=QLabel('Estimated guided-workflow progress · not media coverage')
@@ -935,6 +940,9 @@ def launch():
             report_row.addStretch()
             report_row.addWidget(self.copy_summary_button)
             result_card.addLayout(report_row)
+            # Actionable outcome precedes dense telemetry. The evidence map
+            # remains available immediately below for operator drilldown.
+            right.insertWidget(0, result_card.parentWidget())
             self.log=QPlainTextEdit()
             self.log.setReadOnly(True)
             self.log.setMaximumBlockCount(4000)
@@ -1263,7 +1271,14 @@ def launch():
             device=(None if self._last_job_kind == 'rescueimage' else
                     (self._last_good_device or self.selected()))
             copied=operator_summary(
-                operation=str(self._last_job_kind or self.job_box.currentText()),
+                operation={'carefull':'Full scan + targeted HDD maintenance',
+                           'carequick':'Targeted HDD maintenance',
+                           'careresume':'Resume journaled HDD maintenance',
+                           'scanquick':'Quick read-only scan',
+                           'scanfull':'Full read-only scan',
+                           'rescue':'Rescue physical drive to image',
+                           'rescueimage':'Rescue an existing image'}.get(
+                               self._last_job_kind, self.job_box.currentText()),
                 device=device, result=self.result.text(), explanation=self.explain.text(),
                 progress=self.metric_labels['done'].text(),
                 errors=self.metric_labels['errors'].text(),
@@ -1855,6 +1870,14 @@ def launch():
             if not d:
                 QMessageBox.information(self,'Drive details','Select a drive first.')
                 return
+            if (self.proc and self.proc.state()!=QProcess.NotRunning):
+                QMessageBox.information(self,'Drive details',
+                    'Finish the active operation before querying this USB device again. '
+                    'Device details from inventory remain available in the selector.')
+                return
+            if getattr(self,'inspect_proc',None) and self.inspect_proc.state()!=QProcess.NotRunning:
+                return
+            self._inspect_device=dict(d)
             self.inspect_proc=QProcess(self)
             self.inspect_proc.setProgram(cli_prefix()[0])
             self.inspect_proc.setArguments(cli_prefix()[1:]+['inspect-storage','--device',d['id'],'--json'])
@@ -1871,20 +1894,21 @@ def launch():
                 return
             raw=bytes(self.inspect_proc.readAllStandardOutput()).decode('utf-8','replace')
             err=bytes(self.inspect_proc.readAllStandardError()).decode('utf-8','replace')
-            if exit_code:
-                self.note_log('Host drive inspection unavailable: '+err[:1000])
-                QMessageBox.warning(self,'Drive details unavailable',
-                    'The operating system could not supply drive information right now. '
-                    'No disk writes were attempted.')
+            report={}
+            if exit_code == 0:
+                try:
+                    report=json.loads(raw)
+                except (ValueError,TypeError):
+                    err='Storage driver returned invalid metadata'
+            else:
+                self.note_log('Optional host drive inspection failed: '+err[:1000])
+            # Do not attribute a delayed USB response to another selected disk.
+            identified=getattr(self,'_inspect_device',{})
+            if self.selected() and identified.get('identity_hint') != self.selected().get('identity_hint'):
+                self.note_log('Discarded stale inspection for a previously selected device.')
                 return
-            try:
-                info=json.loads(raw)
-            except (ValueError,TypeError):
-                info={}
-            lines=[f'{key.replace("_"," ").title()}: {value}'
-                   for key,value in info.items() if value is not None and key!='notes']
-            lines.append(str(info.get('notes') or 'Unverified host metadata'))
-            QMessageBox.information(self,'Drive details (read-only)','\n'.join(lines)[:4000])
+            QMessageBox.information(self,'Drive details (read-only)',
+                drive_inspection_text(identified,report,error=err.strip()[:220])[:4000])
         def start_job(self):
             self._auto_probe_timer.stop()
             if self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning:
@@ -2400,6 +2424,16 @@ def launch():
                                          'No forceful dismount was attempted.')
                 else:
                     self.explain.setText(error or 'Open Expert details for the specific error. No health claim is made.')
+            presentation=repair_presentation(result, exit_code=exit_code)
+            if presentation and not user_stop_requested:
+                self.result.setText(presentation.heading)
+                self.explain.setText(presentation.explanation)
+                self.status.setText(presentation.status_label)
+                self.metric_headers['errors'].setText('FAILED READ ATTEMPTS')
+                self.overall_label.setText('Planned steps ended · inspect findings')
+                self.metric_labels['done'].setText('Steps finished · findings remain'
+                    if presentation.complete_with_unresolved else 'Planned steps finished')
+            
             scan_report=result.get('scan') if isinstance(result.get('scan'),dict) else {}
             scan_checkpoint=result.get('scan_checkpoint') or scan_report.get('scan_checkpoint')
             if scan_checkpoint:
@@ -2436,6 +2470,8 @@ def launch():
                 self.next_action.setText('Review measured coverage and error evidence. For important data, make a separate recovery image before any further intervention.')
             else:
                 self.next_action.setText('Review the reported failure and Expert log before retrying. Do not bypass volume locks or identity verification.')
+            if presentation and not user_stop_requested:
+                self.next_action.setText(presentation.next_action)
             if self._batch_running and self._batch_current:
                 finished=dict(self._batch_current)
                 finished['status']='COMPLETE' if exit_code == 0 else ('STALLED_OR_INTERRUPTED' if self._stall_terminated else 'FAILED')

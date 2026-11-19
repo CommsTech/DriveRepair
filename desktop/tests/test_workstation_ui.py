@@ -41,6 +41,7 @@ class WorkstationPresentationTests(unittest.TestCase):
             result='Scan completed', explanation='Read-only.', progress='100%',
             errors='2', observed_coverage='10.0%')
         self.assertIn('Measured successful read coverage: 10.0%', text)
+        self.assertIn('Failed read requests (not confirmed bad sectors): 2', text)
         self.assertIn('do not certify', text)
         self.assertNotIn('100% healthy', text)
 

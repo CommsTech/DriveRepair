@@ -1,0 +1,2 @@
+f5ffe62ea39226c6adce1e6948de0a50971f2be68987755a900c7b49d1accfb4  DriveRepair_0.3.3b16_PartialRepair_and_SSD_Gate.patch
+8d7b85c04c1300856c360abe52a9baee299197cfda0196274a0ef8510a257ab7  DriveRepair_0.3.3b16_Improved_Source.zip

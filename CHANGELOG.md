@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — 2026-11-19 truthful partial-repair outcomes and strict SSD/USB gate (0.3.3b16)
+
+- Fix Qt result translation: `partial_repair_unresolved_data` (nonzero exit) now shows rewritten/independently postverified bytes and unresolved scan evidence, rather than collapsing to generic `Stopped (2)`; failed read requests are NOT defective-sector counts; copied operator summaries use readable workflow names and that explicit distinction. Verification failure remains distinct from verified maintenance.
+- Prevent the guarded GUI from showing 100% guided-workflow completion while final readback and SMART comparisons are pending. Keep current-phase progress separate; remove one redundant progress bar and place the action/result panel before the evidence map.
+- Show the known read-only drive-inventory metadata even if optional Windows IOCTL storage inspection fails or times out. Never attribute a delayed probe result to a newly selected disk; display unavailable fields explicitly instead of a generic dialog.
+- Recognize SanDisk Ultra 3D `SDSSDH3` model-family as an **advisory SSD rescue profile**, based on manufacturer documentation. This does not assert that an untrusted USB bridge identifies the actual attached hardware. Conflicting SMART and model evidence remains UNKNOWN.
+- Enforce the HDD-only physical-write eligibility **in the core engine and planner for every source build**: a hardware repair requires independently confirmed rotational HDD media; unknown/flash/SSD/NVMe are not eligible for HDD-style rewrites even when unknown-health risk was acknowledged. Read-only rescue and image operations remain available.
+- Add synthetic policy, model-conflict, GUI-output and Windows-metadata-fallback tests. These do not prove native Windows repair, BIOS booting, or post-repair drive reliability. See `docs/PARTIAL_REPAIR_TRUTH_AND_USB_IDENTITY_20261119.md`.
+
 ## Unreleased — 2026-11-18 evidence-driven media strategies and compact workbench (0.3.3b14)
 
 - Tighten media classification using SMART/USB-NVMe protocol, confirmed rotation, exact-model SMR entries and explicit removable-flash evidence; NVR denotes surveillance workload, not a recording technology. Contradictory evidence stays unknown.

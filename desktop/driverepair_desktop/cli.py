@@ -1307,6 +1307,15 @@ def _run_care(args) -> int:
         # Check actual SMART evidence and bus/media type BEFORE scanning or RW.
         from .release_policy import check_guarded_repair_preflight
         guarded_advice = check_guarded_repair_preflight(args, snapshot, selected)
+        # Enforce medium suitability in the *engine*, including unrestricted
+        # source/engineering builds. Missing USB SMART passthrough never makes
+        # magnetic-sector refresh an acceptable experiment on unknown flash.
+        from .repair_strategy import advise
+        media_decision = advise(model=selected.model, bus=selected.bus,
+                                sector=selected.sector_size, snapshot=snapshot)
+        if not media_decision.can_attempt_hdd_refresh:
+            raise PermissionError('HDD repair is ineligible: ' + '; '.join(media_decision.reasons) +
+                                  ' Read-only rescue is still available.')
     else:
         token, size = _refresh_image_token(args.image)
         sector = 512 if size % 512 == 0 else 1

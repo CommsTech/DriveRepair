@@ -1,5 +1,9 @@
 # DriveRepair
 
+### 2026-11-19 partial-repair reporting and USB media safety
+
+Recent Windows traces showed 248 failed **read requests** during a SanDisk SDSSDH3 USB session. A subsequent journaled refresh reported rewritten and readback bytes, but the final operation remained **partial with unresolved data**. The Qt workstation now displays that status and the actual independent postverification result; 100% of planned *steps* is not a healthy-drive certificate. The engine now refuses HDD-style physical writes unless the underlying rotational HDD medium is independently established. A SanDisk SDSSDH3 model label is an advisory SSD classification even when SMART is hidden behind a USB adapter, not a write permit. The read-only device-details UI preserves inventory facts when the optional Windows query fails. See `docs/PARTIAL_REPAIR_TRUTH_AND_USB_IDENTITY_20261119.md`.
+
 **Save drives. Save the planet.** Drive diagnostics, image-first rescue, selective file extraction, clone-only filesystem repair and experimental original-media maintenance. Privacy-first and local by default.
 
 > 🌍 **Our mission: Reduce e-waste by extending hardware life.** When a drive "dies," there's usually still data to rescue and life to restore. DriveRepair gives you the surgical tools to breathe new life into storage that's been written off.

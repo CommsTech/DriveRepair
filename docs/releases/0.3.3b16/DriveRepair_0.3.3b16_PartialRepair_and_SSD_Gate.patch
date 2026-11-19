@@ -1,0 +1,593 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,4 +1,13 @@
+ # Changelog
++
++## Unreleased — 2026-11-19 truthful partial-repair outcomes and strict SSD/USB gate (0.3.3b16)
++
++- Fix Qt result translation: `partial_repair_unresolved_data` (nonzero exit) now shows rewritten/independently postverified bytes and unresolved scan evidence, rather than collapsing to generic `Stopped (2)`; failed read requests are NOT defective-sector counts; copied operator summaries use readable workflow names and that explicit distinction. Verification failure remains distinct from verified maintenance.
++- Prevent the guarded GUI from showing 100% guided-workflow completion while final readback and SMART comparisons are pending. Keep current-phase progress separate; remove one redundant progress bar and place the action/result panel before the evidence map.
++- Show the known read-only drive-inventory metadata even if optional Windows IOCTL storage inspection fails or times out. Never attribute a delayed probe result to a newly selected disk; display unavailable fields explicitly instead of a generic dialog.
++- Recognize SanDisk Ultra 3D `SDSSDH3` model-family as an **advisory SSD rescue profile**, based on manufacturer documentation. This does not assert that an untrusted USB bridge identifies the actual attached hardware. Conflicting SMART and model evidence remains UNKNOWN.
++- Enforce the HDD-only physical-write eligibility **in the core engine and planner for every source build**: a hardware repair requires independently confirmed rotational HDD media; unknown/flash/SSD/NVMe are not eligible for HDD-style rewrites even when unknown-health risk was acknowledged. Read-only rescue and image operations remain available.
++- Add synthetic policy, model-conflict, GUI-output and Windows-metadata-fallback tests. These do not prove native Windows repair, BIOS booting, or post-repair drive reliability. See `docs/PARTIAL_REPAIR_TRUTH_AND_USB_IDENTITY_20261119.md`.
+ 
+ ## Unreleased — 2026-11-18 evidence-driven media strategies and compact workbench (0.3.3b14)
+ 
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1,4 +1,8 @@
+ # DriveRepair
++
++### 2026-11-19 partial-repair reporting and USB media safety
++
++Recent Windows traces showed 248 failed **read requests** during a SanDisk SDSSDH3 USB session. A subsequent journaled refresh reported rewritten and readback bytes, but the final operation remained **partial with unresolved data**. The Qt workstation now displays that status and the actual independent postverification result; 100% of planned *steps* is not a healthy-drive certificate. The engine now refuses HDD-style physical writes unless the underlying rotational HDD medium is independently established. A SanDisk SDSSDH3 model label is an advisory SSD classification even when SMART is hidden behind a USB adapter, not a write permit. The read-only device-details UI preserves inventory facts when the optional Windows query fails. See `docs/PARTIAL_REPAIR_TRUTH_AND_USB_IDENTITY_20261119.md`.
+ 
+ **Save drives. Save the planet.** Drive diagnostics, image-first rescue, selective file extraction, clone-only filesystem repair and experimental original-media maintenance. Privacy-first and local by default.
+ 
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b13"
++__version__ = "0.3.3b16"
+diff --git a/desktop/driverepair_desktop/cli.py b/desktop/driverepair_desktop/cli.py
+--- a/desktop/driverepair_desktop/cli.py
++++ b/desktop/driverepair_desktop/cli.py
+@@ -1307,6 +1307,15 @@
+         # Check actual SMART evidence and bus/media type BEFORE scanning or RW.
+         from .release_policy import check_guarded_repair_preflight
+         guarded_advice = check_guarded_repair_preflight(args, snapshot, selected)
++        # Enforce medium suitability in the *engine*, including unrestricted
++        # source/engineering builds. Missing USB SMART passthrough never makes
++        # magnetic-sector refresh an acceptable experiment on unknown flash.
++        from .repair_strategy import advise
++        media_decision = advise(model=selected.model, bus=selected.bus,
++                                sector=selected.sector_size, snapshot=snapshot)
++        if not media_decision.can_attempt_hdd_refresh:
++            raise PermissionError('HDD repair is ineligible: ' + '; '.join(media_decision.reasons) +
++                                  ' Read-only rescue is still available.')
+     else:
+         token, size = _refresh_image_token(args.image)
+         sector = 512 if size % 512 == 0 else 1
+diff --git a/desktop/driverepair_desktop/guided_repair.py b/desktop/driverepair_desktop/guided_repair.py
+--- a/desktop/driverepair_desktop/guided_repair.py
++++ b/desktop/driverepair_desktop/guided_repair.py
+@@ -266,6 +266,12 @@
+     if not 1 <= max_regions <= 256:
+         raise ValueError("Region budget must be 1–256")
+     if hardware:
++        # A consent flag can acknowledge UNKNOWN *health*, never UNKNOWN *medium*.
++        # Generic HDD-style rewrites must not be attempted on an SSD or USB
++        # enclosure whose underlying recording medium was not established.
++        physical_medium = str((smart or {}).get('reported_medium') or '').strip().lower()
++        if physical_medium not in {'hdd', 'hard disk', 'rotational'}:
++            reasons.append('Rotational HDD medium not independently confirmed; no HDD-style physical rewrites. Use read-only rescue.')
+         # The journaled hardware writer is for rotational HDD regions only.
+         # Even engineering builds must not reinterpret flash translation-layer
+         # behavior as magnetic weak-sector refresh. Never turn NVMe/SSD/flash
+diff --git a/desktop/driverepair_desktop/media_profiles.py b/desktop/driverepair_desktop/media_profiles.py
+--- a/desktop/driverepair_desktop/media_profiles.py
++++ b/desktop/driverepair_desktop/media_profiles.py
+@@ -13,6 +13,10 @@
+ # Manufacturer datasheet, BarraCuda 2.5 DS1907: ST1000LM048 = SMR.
+ # Never extrapolate model families to all Seagate drives.
+ KNOWN_SMR_MODELS = frozenset({'ST1000LM048', 'ST500LM030', 'ST500LM034'})
++# SanDisk published Ultra 3D SATA SSD SKU SDSSDH3-500G (sandisk.com).
++# Model-family recognition is ADVISORY for rescue profiles, not an attestation
++# that the USB bridge exposes the actual patient or a write authorization.
++KNOWN_SSD_MODEL_FAMILIES = frozenset({'SDSSDH3'})
+ 
+ 
+ @dataclass(frozen=True)
+@@ -46,6 +50,8 @@
+     model_id = re.sub(r'(?<=[A-Z0-9])\s+(?=[0-9])', '', model.upper().strip())
+     known_smr = any(re.search(rf'(?<![A-Z0-9]){part}(?![A-Z0-9])', model_id)
+                     for part in KNOWN_SMR_MODELS)
++    known_ssd_model = any(re.search(rf'(?<![A-Z0-9]){part}(?![A-Z0-9])', model.upper())
++                          for part in KNOWN_SSD_MODEL_FAMILIES)
+     bus_id = bus.strip().lower()
+     recording_id = recording.strip().lower()
+     medium = media_type.strip().lower()
+@@ -67,7 +73,7 @@
+         raise ValueError('Unknown reported medium')
+     # A contradictory set of physical claims must NEVER be resolved by
+     # guessing that one source is more trustworthy. Prefer read-only unknown.
+-    if ((nvme_protocol or solid_state or bus_id in {'nvme', 'nvm express'}) and
++    if ((nvme_protocol or solid_state or known_ssd_model or bus_id in {'nvme', 'nvm express'}) and
+             (known_smr or recording_id or rotational)) or (known_smr and recording_id == 'cmr'):
+         kind, evidence, confidence = 'unknown', 'conflicting solid-state and magnetic evidence', 'conflict'
+     elif (recording_id == 'smr' or (not recording_id and known_smr)):
+@@ -80,6 +86,8 @@
+         kind, evidence, confidence = 'flash', 'reported removable flash medium', 'reported'
+     elif medium in {'ssd', 'solid state', 'solid-state'}:
+         kind, evidence, confidence = 'ssd', 'reported solid-state medium', 'reported'
++    elif known_ssd_model:
++        kind, evidence, confidence = 'ssd', 'manufacturer SSD model-family specification; USB identity unverified', 'model'
+     elif rotational:
+         kind, evidence, confidence = 'hdd_unknown_recording', 'reported rotational medium; CMR/SMR unspecified', 'reported'
+     else:
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+--- a/desktop/driverepair_desktop/qtgui.py
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -16,6 +16,7 @@
+ from .release_policy import PUBLIC_BETA_IMAGE_ONLY, REPAIR_BETA_GUARDED
+ from .workstation_ui import (
+     WORKSPACES, can_start, operation_impact, operation_family, operator_summary,
++    repair_presentation, drive_inspection_text,
+ )
+ import sys
+ import time
+@@ -94,7 +95,9 @@
+         total = max(1, int(event.get('investigation_total') or 1))
+         return 60.0 + min(1, reads / total) * 15.0
+     if phase == 'REFRESH':
+-        return 75.0 + pct * 0.25
++        # All selected writes may be finished, but independent postverification
++        # and health comparison have not yet returned. Never show 100% here.
++        return min(99.0, 75.0 + pct * 0.25)
+     return 0.0
+ 
+ def _restrict_qt_debug_log_access(path: Path) -> None:
+@@ -696,7 +699,9 @@
+             self.phase_progress=QProgressBar()
+             self.phase_progress.setRange(0,1000)
+             self.phase_progress.setValue(0)
+-            hero.addWidget(self.phase_progress)
++            # One progress bar is enough. The current-phase percentage lives in
++            # the first metric tile; duplicate bars implied false precision.
++            self.phase_progress.hide()
+             total_row=QHBoxLayout()
+             hero.addLayout(total_row)
+             self.total_caption=QLabel('Estimated guided-workflow progress · not media coverage')
+@@ -935,6 +940,9 @@
+             report_row.addStretch()
+             report_row.addWidget(self.copy_summary_button)
+             result_card.addLayout(report_row)
++            # Actionable outcome precedes dense telemetry. The evidence map
++            # remains available immediately below for operator drilldown.
++            right.insertWidget(0, result_card.parentWidget())
+             self.log=QPlainTextEdit()
+             self.log.setReadOnly(True)
+             self.log.setMaximumBlockCount(4000)
+@@ -1263,7 +1271,14 @@
+             device=(None if self._last_job_kind == 'rescueimage' else
+                     (self._last_good_device or self.selected()))
+             copied=operator_summary(
+-                operation=str(self._last_job_kind or self.job_box.currentText()),
++                operation={'carefull':'Full scan + targeted HDD maintenance',
++                           'carequick':'Targeted HDD maintenance',
++                           'careresume':'Resume journaled HDD maintenance',
++                           'scanquick':'Quick read-only scan',
++                           'scanfull':'Full read-only scan',
++                           'rescue':'Rescue physical drive to image',
++                           'rescueimage':'Rescue an existing image'}.get(
++                               self._last_job_kind, self.job_box.currentText()),
+                 device=device, result=self.result.text(), explanation=self.explain.text(),
+                 progress=self.metric_labels['done'].text(),
+                 errors=self.metric_labels['errors'].text(),
+@@ -1855,6 +1870,14 @@
+             if not d:
+                 QMessageBox.information(self,'Drive details','Select a drive first.')
+                 return
++            if (self.proc and self.proc.state()!=QProcess.NotRunning):
++                QMessageBox.information(self,'Drive details',
++                    'Finish the active operation before querying this USB device again. '
++                    'Device details from inventory remain available in the selector.')
++                return
++            if getattr(self,'inspect_proc',None) and self.inspect_proc.state()!=QProcess.NotRunning:
++                return
++            self._inspect_device=dict(d)
+             self.inspect_proc=QProcess(self)
+             self.inspect_proc.setProgram(cli_prefix()[0])
+             self.inspect_proc.setArguments(cli_prefix()[1:]+['inspect-storage','--device',d['id'],'--json'])
+@@ -1871,20 +1894,21 @@
+                 return
+             raw=bytes(self.inspect_proc.readAllStandardOutput()).decode('utf-8','replace')
+             err=bytes(self.inspect_proc.readAllStandardError()).decode('utf-8','replace')
+-            if exit_code:
+-                self.note_log('Host drive inspection unavailable: '+err[:1000])
+-                QMessageBox.warning(self,'Drive details unavailable',
+-                    'The operating system could not supply drive information right now. '
+-                    'No disk writes were attempted.')
+-                return
+-            try:
+-                info=json.loads(raw)
+-            except (ValueError,TypeError):
+-                info={}
+-            lines=[f'{key.replace("_"," ").title()}: {value}'
+-                   for key,value in info.items() if value is not None and key!='notes']
+-            lines.append(str(info.get('notes') or 'Unverified host metadata'))
+-            QMessageBox.information(self,'Drive details (read-only)','\n'.join(lines)[:4000])
++            report={}
++            if exit_code == 0:
++                try:
++                    report=json.loads(raw)
++                except (ValueError,TypeError):
++                    err='Storage driver returned invalid metadata'
++            else:
++                self.note_log('Optional host drive inspection failed: '+err[:1000])
++            # Do not attribute a delayed USB response to another selected disk.
++            identified=getattr(self,'_inspect_device',{})
++            if self.selected() and identified.get('identity_hint') != self.selected().get('identity_hint'):
++                self.note_log('Discarded stale inspection for a previously selected device.')
++                return
++            QMessageBox.information(self,'Drive details (read-only)',
++                drive_inspection_text(identified,report,error=err.strip()[:220])[:4000])
+         def start_job(self):
+             self._auto_probe_timer.stop()
+             if self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning:
+@@ -2400,6 +2424,16 @@
+                                          'No forceful dismount was attempted.')
+                 else:
+                     self.explain.setText(error or 'Open Expert details for the specific error. No health claim is made.')
++            presentation=repair_presentation(result, exit_code=exit_code)
++            if presentation and not user_stop_requested:
++                self.result.setText(presentation.heading)
++                self.explain.setText(presentation.explanation)
++                self.status.setText(presentation.status_label)
++                self.metric_headers['errors'].setText('FAILED READ ATTEMPTS')
++                self.overall_label.setText('Planned steps ended · inspect findings')
++                self.metric_labels['done'].setText('Steps finished · findings remain'
++                    if presentation.complete_with_unresolved else 'Planned steps finished')
++            
+             scan_report=result.get('scan') if isinstance(result.get('scan'),dict) else {}
+             scan_checkpoint=result.get('scan_checkpoint') or scan_report.get('scan_checkpoint')
+             if scan_checkpoint:
+@@ -2436,6 +2470,8 @@
+                 self.next_action.setText('Review measured coverage and error evidence. For important data, make a separate recovery image before any further intervention.')
+             else:
+                 self.next_action.setText('Review the reported failure and Expert log before retrying. Do not bypass volume locks or identity verification.')
++            if presentation and not user_stop_requested:
++                self.next_action.setText(presentation.next_action)
+             if self._batch_running and self._batch_current:
+                 finished=dict(self._batch_current)
+                 finished['status']='COMPLETE' if exit_code == 0 else ('STALLED_OR_INTERRUPTED' if self._stall_terminated else 'FAILED')
+diff --git a/desktop/driverepair_desktop/workstation_ui.py b/desktop/driverepair_desktop/workstation_ui.py
+--- a/desktop/driverepair_desktop/workstation_ui.py
++++ b/desktop/driverepair_desktop/workstation_ui.py
+@@ -97,7 +97,121 @@
+         f'Outcome: {result}',
+         f'Details: {explanation}',
+         f'Planned work progress: {progress}',
+-        f'Read errors / unresolved data: {errors}',
++        f'Failed read requests (not confirmed bad sectors): {errors}',
+         f'Measured successful read coverage: {observed_coverage}',
+         'Interpretation: completed operations and readable regions do not certify file integrity or media lifespan.',
+     ))
++
++@dataclass(frozen=True)
++class RepairPresentation:
++    heading: str
++    explanation: str
++    next_action: str
++    status_label: str
++    complete_with_unresolved: bool
++
++
++def repair_presentation(result: dict, *, exit_code: int) -> RepairPresentation | None:
++    """Interpret the machine result without using process exit code as a health score.
++
++    A successful *transaction* is not successful data restoration. In
++    particular partial_repair_unresolved_data exits nonzero by design and must
++    not collapse to a generic 'failed (2)' user message.
++    """
++    if not isinstance(result, dict):
++        return None
++    state = str(result.get('status') or '')
++    if state not in {
++        'partial_repair_unresolved_data', 'completed_targeted_refresh',
++        'repair_postverify_failed', 'repair_postverify_unavailable',
++        'repair_health_deteriorated', 'repair_incomplete',
++        'repair_stopped_safely', 'completed_no_refresh_needed',
++    }:
++        return None
++    scan = result.get('scan') if isinstance(result.get('scan'),dict) else {}
++    repair = result.get('repair') if isinstance(result.get('repair'),dict) else {}
++    verification = result.get('postverification') if isinstance(result.get('postverification'),dict) else {}
++    attempted = scan.get('read_error_chunks')
++    attempts = (f'{attempted} failed read attempts in the scan' if type(attempted) is int
++                else 'read-failure count unavailable')
++    written = max(0,int(repair.get('rewritten_bytes') or 0))
++    independently_verified = (max(0,int(verification.get('verified_bytes') or 0))
++                              if verification.get('status') == 'postverify_passed' else 0)
++    def size(n: int) -> str:
++        for unit in ('B','KiB','MiB','GiB','TiB'):
++            if n < 1024 or unit == 'TiB':
++                return f'{n:,.0f} {unit}' if unit == 'B' else f'{n:,.2f} {unit}'
++            n /= 1024
++        return 'unknown'
++    evidence = (f'{size(written)} rewritten; {size(independently_verified)} independently reread '
++                f'and digest-matched' if verification.get('status') == 'postverify_passed'
++                else f'{size(written)} reported rewritten; independent verification is NOT confirmed '
++                     f'({verification.get("status", "not reported")})')
++    rescue = ('Save a recovery image to separate healthy storage. Investigate unresolved '
++              'ranges on the image, inspect SMART/USB connection evidence, and replace '
++              'the drive if errors recur. Do not repeat writes automatically.')
++    if state == 'partial_repair_unresolved_data':
++        return RepairPresentation('Partial maintenance · unreadable data remains',
++            f'{evidence}. {attempts}. Some regions remain unresolved or untested; '
++            'rewriting readable bytes did not reconstruct unreadable data.', rescue,
++            'PARTIAL · NOT REPAIRED',True)
++    if state == 'completed_targeted_refresh':
++        return RepairPresentation('Targeted rewrite verified · drive health NOT certified',
++            f'{evidence}. {attempts}. A readback match does not demonstrate '
++            'that marginal media is reliable or recover missing files.',
++            'Back up immediately, run a manufacturer-supported long test when safe, '
++            'and compare SMART trends before considering reuse.',
++            'REWRITE VERIFIED · MONITOR',False)
++    if state in {'repair_postverify_failed','repair_postverify_unavailable','repair_health_deteriorated'}:
++        return RepairPresentation('Repair result not independently verified',
++            f'{evidence}. {attempts}. Media condition or required readback evidence '
++            'does not support a successful repair claim.',rescue,
++            'UNVERIFIED · ATTENTION',True)
++    if state == 'completed_no_refresh_needed':
++        return RepairPresentation('No eligible regions rewritten',
++            f'{attempts}. This operation made no media-repair claim.',
++            'Review the scan and recover important data before further drive testing.',
++            'NO PHYSICAL REPAIR',bool(attempted))
++    return RepairPresentation('Repair interrupted · outcome incomplete',
++        f'{evidence}. {attempts}. Do not assume the last transaction or any '
++        'unvisited regions were verified.',rescue,'INCOMPLETE',True)
++
++
++def drive_inspection_text(device: dict, report: dict | None = None,
++                          *, error: str = '') -> str:
++    """Show inventory facts even if a Windows USB IOCTL is unavailable.
++
++    Inventory fields are advisory; suffixes (not raw serial numbers) are
++    displayed. This never infers write access, recording type or disk health.
++    """
++    device = device or {}
++    report = report if isinstance(report,dict) else {}
++    def field(value):
++        return str(value if value is not None else 'unknown').replace('\n',' ').replace('\r',' ')[:180]
++    details = [
++        'IDENTIFIED DURING DRIVE DISCOVERY (read-only)',
++        f'Model: {field(device.get("model"))}',
++        f'Capacity (bytes): {field(device.get("size_bytes"))}',
++        f'Transport: {field(device.get("bus"))}',
++        f'Serial suffix: {field(device.get("serial_suffix"))}',
++        f'Logical sector size (inventory): {field(device.get("sector_size"))}',
++        '',
++        'OPTIONAL STORAGE-DRIVER PROBE',
++    ]
++    if not report:
++        details += ['Unavailable. Drive discovery may still be valid, but device '
++                    'capabilities and write eligibility remain unverified.']
++    else:
++        allowed = ('source','vendor','model','firmware_revision','bus','number',
++                   'physical_sector_bytes','logical_sector_bytes','optimal_io_bytes',
++                   'max_request_kib','rotational','zoned','size_bytes',
++                   'reported_solid_state','protocol','smart_status','geometry_note')
++        details += [f'{k.replace("_"," ").title()}: {field(report[k])}'
++                    for k in allowed if report.get(k) is not None]
++    if error:
++        details += ['',f'Probe message: {field(error)}']
++    details += ['', 'A USB bridge can hide SMART and the underlying SSD/HDD type.',
++                'This window never authorizes physical writes.',
++                'Read-only rescue remains an option; do not assume a failed '
++                'metadata probe means the drive is healthy or damaged.']
++    return '\n'.join(details)
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b15"
++version = "0.3.3b16"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_guided_repair.py b/desktop/tests/test_guided_repair.py
+--- a/desktop/tests/test_guided_repair.py
++++ b/desktop/tests/test_guided_repair.py
+@@ -67,8 +67,14 @@
+     def test_smart_unknown_requires_separate_ack(self):
+         self.assertEqual(plan_targeted_refresh(scan(), sector=512, chunk=1024,
+                          hardware=True)['status'], 'blocked')
++        # Consent to unknown HEALTH cannot establish the underlying medium.
+         self.assertEqual(plan_targeted_refresh(scan(), sector=512, chunk=1024,
+-                         hardware=True, allow_unknown_health=True)['status'], 'candidates_found')
++                         hardware=True, allow_unknown_health=True)['status'], 'blocked')
++        # Only a separately established HDD type may reach the candidate stage.
++        snapshot = {'reported_medium': 'hdd', 'status': 'unknown'}
++        self.assertEqual(plan_targeted_refresh(scan(), sector=512, chunk=1024,
++                         hardware=True, smart=snapshot,
++                         allow_unknown_health=True)['status'], 'candidates_found')
+ 
+     def test_smart_warning_still_blocks_with_unknown_override(self):
+         snap = {'status':'failure_reported'}
+diff --git a/desktop/tests/test_ram_only_repair.py b/desktop/tests/test_ram_only_repair.py
+--- a/desktop/tests/test_ram_only_repair.py
++++ b/desktop/tests/test_ram_only_repair.py
+@@ -166,7 +166,7 @@
+               mock.patch.object(cli, '_validate_live_refresh_preflight') as preflight,
+               mock.patch.object(cli, 'open_device_readonly', return_value=fixture),
+               mock.patch.object(cli, 'open_device_readwrite', return_value=fixture),
+-              mock.patch.object(cli, 'try_health_snapshot', return_value=None),
++              mock.patch.object(cli, 'try_health_snapshot', return_value={'reported_medium':'hdd', 'status':'smart_passed_limited', 'source':'smartctl'}),
+               mock.patch.object(cli, 'scan_reader', return_value=report),
+               contextlib.redirect_stdout(output)):
+             args = ['care-external', '--device', disk.id,
+diff --git a/desktop/tests/test_result_truth_20261119.py b/desktop/tests/test_result_truth_20261119.py
+new file mode 100644
+--- /dev/null
++++ b/desktop/tests/test_result_truth_20261119.py
+@@ -0,0 +1,115 @@
++"""User-visible results are not success claims when data is still unreadable."""
++import unittest
++from unittest import mock
++from driverepair_desktop.workstation_ui import repair_presentation, drive_inspection_text
++from driverepair_desktop.guided_repair import plan_targeted_refresh
++from driverepair_desktop.qtgui import estimated_job_percent
++from driverepair_desktop.media_profiles import identify_profile
++from driverepair_desktop.repair_strategy import advise
++
++class ResultTruthTests(unittest.TestCase):
++    def sample(self):
++        return {'status':'partial_repair_unresolved_data',
++                'scan':{'read_error_chunks':248,'status':'completed_with_read_errors'},
++                'repair':{'status':'completed','rewritten_bytes':6848512},
++                'postverification':{'status':'postverify_passed','verified_bytes':6848512}}
++
++    def test_partial_nonzero_is_not_generic_failure_and_not_success(self):
++        outcome=repair_presentation(self.sample(),exit_code=2)
++        self.assertIn('Partial',outcome.heading)
++        self.assertIn('248 failed read attempts',outcome.explanation)
++        self.assertIn('independently reread',outcome.explanation)
++        self.assertIn('unreadable data remains',outcome.heading)
++        self.assertNotIn('recovered data',outcome.explanation)
++        self.assertIn('separate healthy storage',outcome.next_action)
++
++    def test_verification_unknown_never_claims_independent_match(self):
++        result=self.sample()
++        result['postverification']={'status':'postverify_failed','verified_bytes':0}
++        result['status']='repair_postverify_failed'
++        outcome=repair_presentation(result,exit_code=2)
++        self.assertIn('NOT confirmed',outcome.explanation)
++        self.assertNotIn('independently reread and digest-matched',outcome.explanation)
++        self.assertTrue(outcome.complete_with_unresolved)
++
++    def test_successful_rewrite_still_not_healthy(self):
++        result=self.sample()
++        result['status']='completed_targeted_refresh'
++        outcome=repair_presentation(result,exit_code=0)
++        self.assertIn('NOT certified',outcome.heading)
++        self.assertIn('Back up immediately',outcome.next_action)
++
++    def test_missing_optional_metadata_preserves_known_inventory(self):
++        record={'model':'SanDisk SDSSDH3 500G USB Device','size_bytes':500000000000,
++                'bus':'usb','serial_suffix':'***0000','sector_size':512}
++        body=drive_inspection_text(record,error='USB device did not answer')
++        self.assertIn('SanDisk SDSSDH3',body)
++        self.assertIn('500000000000',body)
++        self.assertIn('Unavailable',body)
++        self.assertIn('never authorizes physical writes',body)
++        self.assertIn('USB device did not answer',body)
++        self.assertNotIn('certified',body.lower())
++
++    def test_inspection_whitelists_fields_and_does_not_show_serial(self):
++        body=drive_inspection_text({'model':'Disk','bus':'usb'},
++            {'firmware_revision':'1.2','serial':'CONFIDENTIAL','size_bytes':1024})
++        self.assertIn('Firmware Revision: 1.2',body)
++        self.assertNotIn('CONFIDENTIAL',body)
++
++    def test_preverification_refresh_progress_never_claims_finished(self):
++        event={'phase':'REFRESH','refresh_index':16,'refresh_total':16}
++        self.assertLess(estimated_job_percent(event,guided=True),100)
++        self.assertEqual(estimated_job_percent(event,guided=False),100)
++
++    def test_sandisk_ultra_3d_model_is_ssd_advisory_not_write_permission(self):
++        label='SanDisk SDSSDH3 500G USB Device'
++        profile=identify_profile(model=label,bus='usb')
++        self.assertEqual(profile.kind,'ssd')
++        self.assertEqual(profile.confidence,'model')
++        self.assertIn('unverified',profile.evidence)
++        self.assertFalse(advise(model=label,bus='usb').can_attempt_hdd_refresh)
++        # SMART claiming a magnetic drive conflicts with the model; fail closed.
++        self.assertEqual(identify_profile(model=label,media_type='hdd').kind,'unknown')
++
++    def test_cli_rejects_unknown_usb_medium_before_scanning(self):
++        from types import SimpleNamespace
++        import contextlib, io
++        from driverepair_desktop.cli import run
++        from driverepair_desktop import cli
++        disk=SimpleNamespace(id='linux:/dev/fake',path='/dev/fake',model='Unidentified USB',
++            size_bytes=1048576,sector_size=512,serial='fake1',bus='usb',
++            fingerprint='11223344556677889900')
++        with (mock.patch.object(cli,'select_external_device',return_value=disk),
++              mock.patch.object(cli,'list_external_devices',return_value=[disk]),
++              mock.patch.object(cli,'assert_windows_external_write_gate'),
++              mock.patch.object(cli,'assert_patient_idle_windows'),
++              mock.patch.object(cli,'_verify_linux_patient_not_in_use'),
++              mock.patch.object(cli,'try_health_snapshot',return_value={
++                'status':'smart_passed_limited','reported_medium':'unknown'}),
++              mock.patch.object(cli,'scan_reader') as scan,
++              mock.patch.object(cli,'open_device_readwrite') as writer,
++              contextlib.redirect_stderr(io.StringIO())):
++            args=['care-external','--device',disk.id,'--mode','quick',
++                  '--journal-backend','memory','--ack-volatile-journal',
++                  '--ack-dock-power-backed','--ack-risk','--ack-destructive',
++                  '--ack-no-backup','--ack-data-loss-risk','--ack-usb-bridge-risk',
++                  '--ack-unvalidated-hardware','--ack-unknown-health',
++                  '--confirm-identity',disk.fingerprint[:12], '--json']
++            self.assertNotEqual(run(args),0)
++            scan.assert_not_called()
++            writer.assert_not_called()
++
++    def test_unknown_usb_medium_no_rewrite_even_when_acknowledged(self):
++        scan={'status':'completed_with_slow_regions','mode':'full',
++              'device_size_bytes':8192,'read_error_chunks':0,
++              'slow_regions':[{'offset':0,'length':512,'latency_ms':100}]}
++        policy=plan_targeted_refresh(scan,sector=512,chunk=512,
++                hardware=True,smart={'status':'smart_passed_limited',
++                                     'reported_medium':'unknown'},
++                allow_unknown_health=True,allow_media_warning=True)
++        self.assertEqual(policy['status'],'blocked')
++        self.assertEqual(policy['targets'],[])
++        self.assertIn('Rotational HDD', ' '.join(policy['reasons']))
++
++if __name__=='__main__':
++    unittest.main()
+diff --git a/desktop/tests/test_workstation_ui.py b/desktop/tests/test_workstation_ui.py
+--- a/desktop/tests/test_workstation_ui.py
++++ b/desktop/tests/test_workstation_ui.py
+@@ -41,6 +41,7 @@
+             result='Scan completed', explanation='Read-only.', progress='100%',
+             errors='2', observed_coverage='10.0%')
+         self.assertIn('Measured successful read coverage: 10.0%', text)
++        self.assertIn('Failed read requests (not confirmed bad sectors): 2', text)
+         self.assertIn('do not certify', text)
+         self.assertNotIn('100% healthy', text)
+ 
+diff --git a/docs/PARTIAL_REPAIR_TRUTH_AND_USB_IDENTITY_20261119.md b/docs/PARTIAL_REPAIR_TRUTH_AND_USB_IDENTITY_20261119.md
+new file mode 100644
+--- /dev/null
++++ b/docs/PARTIAL_REPAIR_TRUTH_AND_USB_IDENTITY_20261119.md
+@@ -0,0 +1,39 @@
++# DriveRepair 0.3.3b16 — Windows evidence, corrections and hardware QA
++
++Date: 2026-11-19. Input: `gui_debug_20261118T193859.log`, screenshots of the SanDisk SDSSDH3 USB device, and `DriveRepair-main(20261119-124527).zip`.
++
++## What the supplied evidence does and does not show
++
++- The current device inventory identifies a **SanDisk SDSSDH3 500G USB Device**. Sandisk's published `SDSSDH3-500G` Ultra 3D line is a 3D-NAND **SATA SSD**, not a magnetic HDD. This is a model-family match, not confirmation that a USB adapter is passing the original manufacturer's identity faithfully.
++- The debug log reports **248 failed scan-read requests** (not necessarily 248 bad sectors) and transitions from SCANNING to REFRESH.
++- Progress messages in REFRESH report **5,799,936 rewritten and verified bytes** (5.53 MiB) at the final logged checkpoint. The log does **not** include the complete final structured JSON or independently attest the device's condition.
++- The operator's application summary says `Stopped / attention needed (2)` with 248 errors and ~99.96% measured successful reads. In this path exit code 2 may mean `partial_repair_unresolved_data`; raw `exit_code != 0` must not erase the richer backend status.
++- At ~100% scanned bytes and ~99.96% covered read regions, neither count indicates file correctness, restored unreadable blocks, nor drive lifespan.
++- The read-only native Windows storage property probe may fail when its USB driver denies an IOCTL or stops responding. Drive inventory remains useful; missing device-property details stay **unknown**.
++
++## Changes
++
++1. A Qt-free `repair_presentation` classifier now summarizes the exact backend result. It distinguishes verified rewritten bytes from merely attempted writes, separates independent postwrite verification from in-transaction verification, and reports read-error requests as requests, never sector counts.
++2. The status card appears before the evidence map. One progress bar shows planned job stages; an auxiliary phase progress bar is hidden. Guided operations cap interim displayed progress below 100% until postverification and health result processing return.
++3. `drive_inspection_text` preserves model, transport, capacity, masked serial suffix and reported sector size even when optional OS inspection fails. It excludes raw serial fields and rejects a stale result for another selected device.
++4. The exact SanDisk Ultra 3D `SDSSDH3` model family gets an advisory SSD scan/rescue profile. Contradictory rotational/solid-state evidence becomes unknown. The raw patient-writer path **requires confirmed rotational media** in source and guarded builds. Unknown-health consent no longer establishes media type.
++
++## Acceptance / hardware handoff (not performed here)
++
++- On Windows with PySide6, launch `qt-gui`, select the SSD via USB, inspect the model-family warning and confirm **Targeted HDD repair** is disallowed before a scan. Make an image on separate healthy storage first.
++- Select **Details** with a USB adapter that blocks `IOCTL_STORAGE_QUERY_PROPERTY`: the dialog must show known inventory facts and explicitly mark the optional capability probe as unavailable. Test timeout, reconnect, selection switch, and no concurrent inspection during an active repair.
++- Using an intentionally damaged *file fixture*, simulate a successful journaled rewrite with unresolved errors and verify the status card is **Partial maintenance — unreadable data remains**, not `Stopped (2)` and not a healthy-drive score.
++- With **sacrificial confirmed HDD only**, run short bounded recovery and test independent postwrite digest checks and before/after SMART counters. Do not attempt on the SanDisk SSD. Unexpected repeated read errors or drive resets warrant stopping and rescoring the recovery priority.
++- Verify resizing at 100%, 125%, and 150% scaling; keyboard navigation, sidebar shortcut keys and result-first order. Native Qt was not available in the development environment.
++- In a guarded repair-beta artifact, confirm that an unknown-USB-medium test cannot be overridden by unknown-health acknowledgements. Confirm legitimate HDD SMART and journal/identity checks still work. Test separate-drive imaging and blocked Windows access behavior.
++- Qualify BIOS and UEFI boot on sacrificial USB media separately; an ISO accepted by the writer has not thereby been boot tested.
++
++## Unresolved limits
++
++Physical NAND recovery, dead-sector reconstruction, OS USB driver cancellation and post-repair lifetime cannot be guaranteed by software. Win32 cancellation is best effort when drivers cannot cancel in-flight requests. No native Rust raw I/O implementation was added in this patch. No native PySide6 interaction, Windows raw drive repair, or BIOS/UEFI boots were performed in this environment.
++
++## Primary documentation
++
++- [SanDisk Ultra 3D SSD official product specification](https://www.sandisk.com/products/ssd/internal-ssd/sandisk-ultra-3d-sata-iii-ssd?sku=SDSSDH3-500G-G26)
++- [SanDisk SSD endurance reference](https://support-en.sandisk.com/app/answers/detailweb/a_id/49386/~/sandisk-internal-ssd-endurance-and-warranty-periods)
++- [Microsoft: cancellation of pending I/O is not guaranteed](https://learn.microsoft.com/en-us/windows/win32/fileio/canceling-pending-i-o-operations)
