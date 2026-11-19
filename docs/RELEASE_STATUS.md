@@ -1,32 +1,26 @@
-# DriveRepair release status — post-b13 hardening (unreleased)
+# DriveRepair release status — v0.3.3b18 (2026-11-19)
 
-**Repository source baseline:** 0.3.3b13 plus the changes in the `CHANGELOG.md` Unreleased section. The version in `desktop/pyproject.toml` remains 0.3.3b13; no public version number or tag is declared by this patch.
+**Status: development / guarded testing, not a hardware-qualified public physical-repair release.** The source is an engineering tree; public image-only and guarded physical-repair distributions must be built separately. The latest Python tests do not demonstrate real physical HDD repair, Windows USB flashing, correct native Qt layout, or BIOS/UEFI bootability.
 
-**Guarded experimental repair candidate (separate channel):** `python scripts/build_desktop.py --repair-beta --no-wheel` produces `DriveRepair-0.3.3b13-repair-beta.pyz`. This deliberately enables guided, restricted HDD-targeted physical repair with native OS lock/identity validation, separate durable journal, SMART evidence and independently verified preimage digests. It is *not* a broad public release or proof that defective drives regain reliability. Testing on sacrificial hardware is required. See `docs/REPAIR_BETA_ENGINEERING_20261118.md`.
+## Available channels
 
-**Release recommendation:** image-first public beta *candidate only*. Publish solely a `DriveRepair-0.3.3b13-public-beta.pyz` built with `python scripts/build_desktop.py --public-beta --no-wheel`, after review and manual platform smoke tests. The source checkout and normal wheel/zipapp retain raw-write engineering capabilities and must NOT be presented as the public beta binary. The package policy is a safety default for unmodified builds, **not a tamper-resistant sandbox or OS permission boundary**.
+- `python scripts/build_desktop.py --public-beta --no-wheel`: public image-first zipapp; in-place physical writes disabled by embedded distribution policy.
+- `python scripts/build_desktop.py --repair-beta --no-wheel`: guarded beta with guided, journaled HDD-targeted writes. Only for sacrificial hardware. Requires independent evidence of rotational HDD, SMART health, stable identity/serial, explicit consent, exclusive OS access, separate journal and postverification.
+- Source/engineering CLI: includes advanced experimental commands; do not distribute as a qualified public repair product.
 
-## Confirmed from this source-review environment
+## Engineering and test evidence
 
-- Synthetic Python desktop test suite runs without touching real devices; actual result and skips are documented in the handoff report alongside this patch.
-- Python compilation and a public zipapp smoke/negative command test can be run here.
-- Regular-file image diagnostic, rescue and journal behaviors have synthetic tests, not independent full-scale hardware correctness certification.
-- The GUI surface map reports actual observed readable fractions rather than interpreting sampled blocks as whole-drive health.
-- Native Rust compiler/Cargo was **not available in this review environment**; Rust correctness and parity remain to be demonstrated in normal CI.
+- README and boot-media usability updates: `docs/B18_USB_REPAIR_AND_README_QA.md`.
+- Existing guarded preflight and model classification: `docs/USB_REPAIR_PREFLIGHT_B17.md`.
+- Windows raw-I/O constraints and stop behavior: `docs/WINDOWS_VOLUME_ACCESS_AND_STOP_0.3.3b13.md`.
+- Historical release status snapshot: `docs/RELEASE_STATUS_B13_HISTORY.md`.
 
-## Supported paths vs unproven paths
+## Remaining release gates
 
-| Area | Source state | Remaining gate |
-|---|---|---|
-| Regular image scanning / rescue / resume and progress reporting | Implemented; synthetic coverage | Multi-OS tests, corrupt journal/large sparse images, destination-full faults |
-| Windows external diagnostic scans | Implemented read-only | Native Windows 10/11 USB, 512e/4Kn, RAW/inaccessible partitions, stalled I/O and STOP |
-| Linux external and offline internal disk rescue | Source paths present; read-only | Privileged sacrificial-hardware tests, all holder/mount and destination races |
-| macOS read-only disk workflows | Source paths present | Real macOS inventory, privacy/permission and disk access tests |
-| In-place refresh of patient disk | Engineering-only | Independent write-handle/device-binding review, full crash/USB/power fault matrix; **never in public image-first build** |
-| Deleted-file and filesystem recovery | FAT32, Sleuth Kit, archive/file carving and clone-based work | Known-ground-truth test corpus, malformed/adversarial input audits |
-| Rust regular-image core | Optional standalone implementation | Cargo fmt/clippy/build/test, Linux/Windows/macOS parity, fault and speed benchmarking |
-| Boot recovery, firmware, sanitization | Experimental/unverified or not implemented | Separate designs and qualification before marketing |
+- Native Windows 10/11 PySide6 clickthrough and usability testing.
+- Native Windows physical-access/locking/SAT bridge tests, USB disconnect/power interruption, failing HDD tests with ground truth.
+- Bootable ISO reproducibility, BIOS and UEFI boot tests, supported storage controller matrix.
+- Trusted original-data-reference checks, recovery journal replay tests, actual postwrite retention tests and SMART trend comparisons.
+- Rust code compilation and behavioral parity, plus full independent raw-I/O security review before migrating the physical writer.
 
-**Recovery semantics:** successful sector read ≠ known-original bytes. Failed/untested areas stay UNKNOWN. An image file's apparent size ≠ recovered bytes. A rolling sector journal ≠ full patient backup. No benchmark supports 'better/faster' claims over commercial recovery products yet.
-
-Historical `docs/PROJECT_STATUS.md`, `status.md`, and previous docs refer to earlier snapshots or operator reports. They are preserved for traceability; do not substitute them for this release status. In particular, `status.md` reports an operator-performed short SMR rewrite test, but that report alone is not independent crash/power-loss qualification.
+**No guarantee:** SMART health passes, clean sample scans, successful sector readbacks and a high diagnostic score do not certify restored file integrity or future media lifespan. SSD/NVMe/flash never enter generic HDD rewrite repair.

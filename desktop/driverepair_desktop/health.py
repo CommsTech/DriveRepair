@@ -25,42 +25,47 @@ def health_snapshot(device: Device,
     except FileNotFoundError as exc:
         raise RuntimeError('SMART support requires smartctl (smartmontools), not installed') from exc
     except subprocess.TimeoutExpired as exc:
+        # NEVER retry a hung USB device with another passthrough command.
         raise RuntimeError('SMART query timed out; device health unknown') from exc
+    # A USB bridge can return an error or non-JSON text on auto probing even
+    # when ATA SAT pass-through works. Parse opportunistically, then try ONE
+    # bounded, read-only SAT query if it is safe to do so.
     try:
-        raw = json.loads(proc.stdout.decode('utf-8-sig'))
-    except (ValueError, UnicodeError, AttributeError) as exc:
-        raise RuntimeError('smartctl did not provide valid JSON; device health unknown') from exc
-    if not isinstance(raw, dict):
-        raise RuntimeError('Unexpected smartctl JSON structure')
-    # Many SATA drives are invisible to smartctl's automatic device detection
-    # behind a USB bridge. One OPTIONAL SAT pass-through probe can recover the
-    # actual ATA IDENTIFY rotation-rate and SMART attributes. It never writes,
-    # never guesses medium from USB/model, and has a separate short timeout.
-    # Do not try it for identified NVMe (SAT is ATA-specific) or when the first
-    # probe already reported rotation rate. A hung first probe is NOT retried.
+        parsed = json.loads(proc.stdout.decode('utf-8-sig'))
+        parsed_ok = isinstance(parsed, dict)
+        raw = parsed if parsed_ok else {}
+    except (ValueError, UnicodeError, AttributeError):
+        parsed_ok = False
+        raw = {}
     source = 'smartctl_auto'
     device_protocol = str((raw.get('device') or {}).get('protocol') or '').lower()
+    failure_reported = bool(proc.returncode & (0x08 | 0x10)) or (raw.get('smart_status') or {}).get('passed') is False
+    # Do not conceal an existing SMART media failure with a second, potentially
+    # optimistic response. Do not send ATA commands to positively NVMe devices.
+    needs_rotation = type(raw.get('rotation_rate')) is not int
     if (device.bus.lower() in {'usb', 'thunderbolt', 'firewire'}
-            and type(raw.get('rotation_rate')) is not int
+            and needs_rotation and not failure_reported
             and 'nvme' not in device_protocol
             and not raw.get('nvme_smart_health_information_log')
-            # Never replace an existing device-failure or media-warning result
-            # with a more optimistic second view through the USB bridge.
-            and not (proc.returncode & (0x08 | 0x10))
-            and (raw.get('smart_status') or {}).get('passed') is not False
+            # Do not replace a detailed ATA SMART table, including pending
+            # or reallocated sector warnings, with a second less complete view.
             and not (raw.get('ata_smart_attributes') or {}).get('table')):
         try:
             sat = run([cmd[0], '--json', '--all', '-d', 'sat', device.path],
                       capture_output=True, timeout=6, check=False)
             sat_raw = json.loads(sat.stdout.decode('utf-8-sig'))
             if (isinstance(sat_raw, dict) and not (sat.returncode & 0x07)
-                    and type(sat_raw.get('rotation_rate')) is int):
-                # SAT must supply a real ATA rotation declaration. Otherwise
-                # the auto probe remains authoritative and media stays unknown.
+                    and type(sat_raw.get('rotation_rate')) is int
+                    and 'ata' in str((sat_raw.get('device') or {}).get('protocol') or '').lower()):
+                # The SAT result must positively identify an ATA device and
+                # report physical rotation. A mere model name is not evidence.
                 proc, raw, source = sat, sat_raw, 'smartctl_sat_passthrough'
         except (FileNotFoundError, subprocess.TimeoutExpired, ValueError,
                 UnicodeError, AttributeError, OSError):
             pass
+    if not parsed_ok and source != 'smartctl_sat_passthrough':
+        raise RuntimeError('SMART query returned invalid JSON; '
+                           'USB SAT passthrough was unavailable or inconclusive')
     # CLI command, open/identity and SMART command failures invalidate the snapshot.
     # Other smartctl bits describe actual health concerns and must be retained.
     if proc.returncode & 0x07:

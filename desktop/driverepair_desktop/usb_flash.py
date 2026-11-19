@@ -43,6 +43,27 @@ def inspect_hybrid_iso(source: str | os.PathLike[str]) -> dict:
             'status': 'HYBRID_MARKERS_PRESENT_BOOT_UNVERIFIED'}
 
 
+
+def flash_confirmation_state(*, device_selected: bool, typed_confirmation: str,
+                             expected_confirmation: str,
+                             acknowledge_data_loss: bool,
+                             worker_running: bool = False) -> tuple[bool, str]:
+    """Human-readable GUI readiness; never substitutes for CLI write gates.
+
+    The operator must still explicitly accept data loss and successfully pass
+    the second native confirmation prompt. This helper performs NO I/O.
+    """
+    if worker_running:
+        return False, 'A flash operation is already running. Leave the USB connected.'
+    if not device_selected:
+        return False, 'Step 1/3: Select a disposable USB drive (not your recovery patient).'
+    if typed_confirmation != expected_confirmation:
+        return False, 'Step 2/3: Type the exact ERASE confirmation displayed above.'
+    if not acknowledge_data_loss:
+        return False, 'Step 3/3: Check the permanent-data-loss acknowledgement to enable flashing.'
+    return True, 'Ready: all three confirmations complete. Flashing will ERASE the selected USB.'
+
+
 def validate_target(device: Device, image_size: int, *, expect_fingerprint: str,
                     typed_confirmation: str) -> None:
     if not (device.bus.strip().lower() == 'usb' and device.id and device.serial.strip()):

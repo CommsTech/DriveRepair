@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — 2026-11-19 product README, USB flash acknowledgement and SMART discovery (0.3.3b18)
+
+- Rewrite the top-level README as a product guide with setup, workspaces, file rescue, hardware requirements, boot USB, safety boundaries and troubleshooting; move previous verbose README notes to `docs/README_ENGINEERING_HISTORY.md`.
+- Add an explicit three-step destructive-flash readiness explanation. The USB flash button remains disabled until a target, exact typed confirmation and the previously required irreversible-data-loss checkbox are all present. Clearly distinguish boot-media flashing from imaging a patient disk. No confirmation is auto-checked.
+- Improve SMART over USB detection when the default smartctl probe emits invalid JSON or an open-device error, by trying one bounded read-only SAT probe. Preserve critical warnings and only accept a valid ATA protocol + rotational declaration from SAT. An unresponsive first request is not retried.
+- Add an explicit `Check HDD eligibility` button in the repair workspace, with results explaining whether SMART/rotation evidence was obtained. A Seagate model name alone is still not authorization for raw writes.
+- Add offline regression tests for the updated SMART fallback and USB-flash state logic. GUI and real disk-flash/write success still require Windows hardware tests. See `docs/B18_USB_REPAIR_AND_README_QA.md`.
+
 ## Unreleased — 2026-11-19 statistical sector recovery ladder (0.3.3b18)
 
 - Add fail-closed **statistical multi-sample recovery** with settle delays and a maintenance ladder (levels 1–5 / quick→extreme). Whole-buffer unanimous agreement remains preferred; **sector-granular majority** is allowed only at deep/extreme with high agreement thresholds. Weak votes never invent rewrite bytes.
