@@ -13,6 +13,10 @@ import sys
 
 IOCTL_STORAGE_QUERY_PROPERTY = 0x002D1400
 IOCTL_DISK_GET_LENGTH_INFO = 0x0007405C
+# STORAGE_PROPERTY_ID: seek penalty (7), TRIM (8). Both are read-only
+# STORAGE_PROPERTY_QUERY requests; a USB bridge may mask or synthesize either.
+STORAGE_DEVICE_SEEK_PENALTY_PROPERTY = 7
+STORAGE_DEVICE_TRIM_PROPERTY = 8
 # STORAGE_BUS_TYPE subset; keep labels aligned with devices.canonicalize_windows_external_bus.
 BUS_NAMES = {
     1: 'SCSI', 3: 'ATA', 4: '1394', 7: 'USB', 8: 'RAID', 10: 'SAS', 11: 'SATA',
@@ -54,6 +58,22 @@ def decode_alignment(data: bytes) -> dict:
     return {'logical_sector_bytes': logical, 'physical_sector_bytes': physical}
 
 
+
+def decode_boolean_property(data: bytes, *, property_name: str) -> bool:
+    """Parse DEVICE_SEEK_PENALTY_DESCRIPTOR or DEVICE_TRIM_DESCRIPTOR.
+
+    Header: ULONG Version, ULONG Size, BOOLEAN flag (offset 8). Never infer
+    a value from a truncated, mismatched or unsupported driver response.
+    """
+    if len(data) < 9:
+        raise ValueError(f'Truncated {property_name} descriptor')
+    version, size = struct.unpack_from('<II', data, 0)
+    if version < 9 or size < 9 or size > len(data):
+        raise ValueError(f'Invalid {property_name} descriptor header')
+    if data[8] not in (0, 1):
+        raise ValueError(f'Invalid {property_name} descriptor flag')
+    return bool(data[8])
+
 def probe_physicaldrive(number: int) -> dict:
     """Read device/adapter capabilities only; never open with write access."""
     if sys.platform != 'win32':
@@ -88,6 +108,18 @@ def probe_physicaldrive(number: int) -> dict:
             info.update(decode_alignment(query(IOCTL_STORAGE_QUERY_PROPERTY,struct.pack('<II',6,0))))
         except (OSError, ValueError):
             info['geometry_note']='Driver did not expose storage alignment property'
+        # Both flags are hints from the Windows storage stack, not ATA IDENTIFY.
+        # On some USB adapters these queries fail, or describe the bridge.
+        for field, property_id in (
+            ('incurs_seek_penalty', STORAGE_DEVICE_SEEK_PENALTY_PROPERTY),
+            ('trim_enabled', STORAGE_DEVICE_TRIM_PROPERTY),
+        ):
+            try:
+                raw = query(IOCTL_STORAGE_QUERY_PROPERTY,
+                            struct.pack('<II', property_id, 0), limit=32)
+                info[field] = decode_boolean_property(raw, property_name=field)
+            except (OSError, ValueError):
+                info[field] = None
         length=query(IOCTL_DISK_GET_LENGTH_INFO,limit=8)
         if len(length)!=8:
             raise ValueError('Invalid disk length response')
@@ -96,7 +128,7 @@ def probe_physicaldrive(number: int) -> dict:
         serial=info.pop('serial',None)
         info['serial_suffix']='***'+serial[-4:] if serial else None
         info['write_authorized']=False
-        info['notes']='Read-only metadata. Does NOT prove IsBoot/IsSystem, identify platter type, or authorize raw writes.'
+        info['notes']='Read-only driver metadata. Seek penalty and TRIM can be USB-bridge claims; cannot alone prove media health, exclude system disks, or authorize raw writes.'
         return info
     finally:
         kernel.CloseHandle(handle)

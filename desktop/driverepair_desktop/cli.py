@@ -745,28 +745,31 @@ def _run_extras(args) -> int:
         latest = select_external_device(args.device)
         if latest.fingerprint != selected.fingerprint:
             raise RuntimeError('Patient device changed before SMART query')
+        # Preserve the health command's original fallback hooks for CLI/API
+        # compatibility. Use an independent native Windows media query before
+        # falling back to coarse Storage HealthStatus when SMART has failed.
         try:
-            result = health_snapshot(selected)
+            from .health import supplement_inconclusive_smart
+            result = supplement_inconclusive_smart(selected, health_snapshot(selected))
         except RuntimeError as exc:
-            # Missing smartctl / unknown SMART must stay UNKNOWN — never invent a pass.
-            # On Windows the OS may still offer a coarse HealthStatus, which is
-            # explicitly weaker than SMART and never satisfies repair gating.
-            fallback = windows_storage_health(selected)
-            if fallback is not None:
-                fallback['smart_unavailable_reason'] = str(exc)
-                fallback['notes'] = (
-                    'SMART query unavailable (' + str(exc) + '). Showing Windows '
-                    'HealthStatus only, which is not SMART attributes and does not '
-                    'authorize repair. No self-test or write was performed.')
-                result = fallback
+            from .native_media import windows_native_snapshot
+            native = windows_native_snapshot(selected)
+            coarse = windows_storage_health(selected)
+            if native is not None:
+                native['smart_unavailable_reason'] = str(exc)
+                if coarse and coarse.get('status') in {'failure_reported', 'windows_health_warning'}:
+                    native['status'] = coarse['status']
+                    native['windows_storage'] = coarse.get('windows_storage')
+                result = native
+            elif coarse is not None:
+                coarse['smart_unavailable_reason'] = str(exc)
+                coarse.setdefault('notes', 'Windows HealthStatus only; not SMART attributes or a write permit.')
+                result = coarse
             else:
-                result = {
-                    'status': 'unknown',
-                    'device': selected.public(),
-                    'reason': str(exc),
-                    'notes': 'SMART unavailable. Install smartmontools (smartctl) for hardware counters. '
-                             'Unknown is not a clean bill of health.',
-                }
+                result = {'status': 'unknown', 'device': selected.public(),
+                          'reason': str(exc),
+                          'notes': 'SMART and native storage-property queries unavailable; '
+                                   'no media health claim or physical writes authorized.'}
     elif args.command == 'rescue-image' and args.engine == 'rust':
         # The native engine is opt-in until independent OS builds and crash
         # recovery tests are complete. Never quietly switch journal formats.

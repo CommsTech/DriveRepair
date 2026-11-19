@@ -8,16 +8,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
+from .drive_model_catalog import catalog_entries, match_catalog_models
+
 MIB = 1024 * 1024
 
-# Manufacturer datasheet, BarraCuda 2.5 DS1907: ST1000LM048 = SMR.
-# Never extrapolate model families to all Seagate drives.
-KNOWN_SMR_MODELS = frozenset({'ST1000LM048', 'ST500LM030', 'ST500LM034'})
-# SanDisk published Ultra 3D SATA SSD SKU SDSSDH3-500G (sandisk.com).
-# Model-family recognition is ADVISORY for rescue profiles, not an attestation
-# that the USB bridge exposes the actual patient or a write authorization.
-KNOWN_SSD_MODEL_FAMILIES = frozenset({'SDSSDH3'})
-
+# Retain these published constants for existing callers; all model records and
+# provenance now live in the versioned offline model catalog.
+KNOWN_SMR_MODELS = frozenset(row['model'] for row in catalog_entries()
+                             if row['recording'] == 'smr' and row['match'] == 'exact')
+KNOWN_SSD_MODEL_FAMILIES = frozenset(row['model'] for row in catalog_entries()
+                                    if row['medium'] == 'ssd' and row['match'] == 'family_prefix')
 
 @dataclass(frozen=True)
 class MediaProfile:
@@ -44,14 +44,10 @@ def identify_profile(*, model: str = '', bus: str = '', media_type: str = '',
     """
     if sector <= 0 or sector & (sector - 1):
         raise ValueError('Invalid logical sector size')
-    # Match only a complete OEM part number (possibly after a vendor prefix),
-    # never a model family or an arbitrary longer suffix. Whitespace within a
-    # printed part number is tolerated, but firmware suffixes need boundaries.
-    model_id = re.sub(r'(?<=[A-Z0-9])\s+(?=[0-9])', '', model.upper().strip())
-    known_smr = any(re.search(rf'(?<![A-Z0-9]){part}(?![A-Z0-9])', model_id)
-                    for part in KNOWN_SMR_MODELS)
-    known_ssd_model = any(re.search(rf'(?<![A-Z0-9]){part}(?![A-Z0-9])', model.upper())
-                          for part in KNOWN_SSD_MODEL_FAMILIES)
+    # Match against documented OEM models only; do not infer adjacent SKUs.
+    catalog_matches = match_catalog_models(model)
+    known_smr = any(row['recording'] == 'smr' for row in catalog_matches)
+    known_ssd_model = any(row['medium'] == 'ssd' for row in catalog_matches)
     bus_id = bus.strip().lower()
     recording_id = recording.strip().lower()
     medium = media_type.strip().lower()

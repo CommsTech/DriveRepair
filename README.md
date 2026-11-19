@@ -2,7 +2,9 @@
 
 **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
 
-> **Release status:** `0.3.3b23` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+> **Release status:** `0.3.3b24` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+
+**Drive models:** The bundled [offline model catalog](docs/DRIVE_MODEL_CATALOG.md) currently documents four vendor-backed model entries (three Seagate SMR models and one SanDisk SSD family). It guides scanning; it is not a comprehensive database or authorization to rewrite a disk.
 
 The Qt workstation now selects an **automatic, bounded HDD investigation level** from available media and error evidence; it never uses a plan to bypass media-write safety. Expert CLI overrides remain for controlled laboratory work. Read [`docs/CAPACITY_AUTHENTICITY.md`](docs/CAPACITY_AUTHENTICITY.md) for the separate USB capacity-integrity test. See also `docs/STATISTICAL_SECTOR_RECOVERY_B18.md` for the level policies.
 
@@ -19,6 +21,32 @@ The Qt workstation now selects an **automatic, bounded HDD investigation level**
 | **Create recovery USB** | Flash a separately built DriveRepair hybrid ISO to a **disposable USB drive** with full-image readback | This **erases the USB**. It does not image/repair a patient disk or establish that BIOS/UEFI boot has been tested |
 
 **Designed for:** experienced technicians who need evidence, drive owners who want a guided recovery route, and developers testing recovery against synthetic or sacrificial disks. Raw-media repair is currently **engineering/beta only**.
+
+### When USB SMART information is unavailable (Windows)
+
+DriveRepair now automatically tries **two independent read-only identification paths**:
+SMART/ATA SAT pass-through, followed by **Windows-native storage properties** if SMART
+fails or is not installed. The native query asks Windows for the disk descriptor, reported
+seek penalty, TRIM capability, size, and serial suffix. This can sometimes identify an
+external mechanical HDD behind a bridge that blocks SMART, but **USB adapters can hide or
+misreport these fields**. Generic flash drives, SSDs, missing serials, conflicting sizes,
+and unknown model families are not treated as safe candidates for magnetic-sector rewriting.
+
+An HDD that passes this second identification path is **not declared healthy**. The guarded
+beta can offer a separate, explicitly acknowledged **unknown-health lab repair** using a
+small durable journal and verified rewrites on a disposable or already-backed-up drive.
+The choice must still pass disk identity, exclusive lock, write-safety and batch checks;
+no writes start automatically. Critical Windows health warnings still stop the candidate
+path. If identification remains incomplete, select **Rescue data** and save a copy to a
+separate healthy drive instead. A full SMART pass still supplies stronger health evidence.
+
+Use **Hardware diagnostics → Inspect storage** for read-only low-level information. Seek
+penalty alone is not evidence of HDD health and does not authorize patient writes.
+
+**Windows recovery USB preparation:** the first-time Debian WSL prerequisite is now offered
+as an explicitly approved setup action. It may need Administrator access, Internet, a
+restart and first-run Debian setup. After building a genuine live ISO, independently test
+its BIOS and UEFI boot; a successful USB byte-verify alone does not establish bootability.
 
 ### New: USB capacity authenticity and detailed reports
 
@@ -87,22 +115,22 @@ On Windows PowerShell, run these same commands using `py` if Python is installed
 
 ```bash
 python scripts/build_desktop.py --public-beta --no-wheel
-python dist/DriveRepair-0.3.3b23-public-beta.pyz gui
+python dist/DriveRepair-0.3.3b24-public-beta.pyz gui
 ```
 
 Install optional `PySide6` in that Python environment if you want the new Qt workstation. The **public-beta** package blocks physical in-place writes. The separate **repair-beta** package may attempt the guided, HDD-only write workflow on sacrificial hardware with all safeguards enabled:
 
 ```bash
 python scripts/build_desktop.py --repair-beta --no-wheel
-python dist/DriveRepair-0.3.3b23-repair-beta.pyz qt-gui
+python dist/DriveRepair-0.3.3b24-repair-beta.pyz qt-gui
 ```
 
 For a CLI image-only example, use a source **regular file** and an unused output path:
 
 ```bash
-python dist/DriveRepair-0.3.3b23-public-beta.pyz scan-image --image source.img --mode triage --json
-python dist/DriveRepair-0.3.3b23-public-beta.pyz rescue-image --image source.img --output recovered.img --json
-python dist/DriveRepair-0.3.3b23-public-beta.pyz rescue-status --output recovered.img --json
+python dist/DriveRepair-0.3.3b24-public-beta.pyz scan-image --image source.img --mode triage --json
+python dist/DriveRepair-0.3.3b24-public-beta.pyz rescue-image --image source.img --output recovered.img --json
+python dist/DriveRepair-0.3.3b24-public-beta.pyz rescue-status --output recovered.img --json
 ```
 
 A repair-beta build is **not** a recommendation to write to a failing or valuable patient. See [hardware testing requirements](docs/USB_REPAIR_PREFLIGHT_B17.md) and [release gates](docs/RELEASE_STATUS.md).

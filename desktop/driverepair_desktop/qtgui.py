@@ -805,7 +805,7 @@ def launch():
             self.refresh_button.clicked.connect(self.refresh_devices)
             tool_row.addWidget(self.refresh_button)
             self.smart_check_button=QPushButton('Check HDD eligibility')
-            self.smart_check_button.setToolTip('Read-only SMART / SATA passthrough identification. '
+            self.smart_check_button.setToolTip('Read-only SMART / SAT and Windows-native storage identification. '
                 'No repair or drive writes start here. Available in the Repair workspace.')
             self.smart_check_button.clicked.connect(lambda:self.probe_selected_media(force=True))
             tool_row.addWidget(self.smart_check_button)
@@ -840,8 +840,8 @@ def launch():
             self.device_note.setWordWrap(True)
             self.device_note.setObjectName('muted')
             drive_panel.addWidget(self.device_note)
-            self.smart_check_note=QLabel('Repair eligibility requires verified HDD media and SMART health. '
-                'If the USB adapter hides them, use read-only rescue or direct SATA.')
+            self.smart_check_note=QLabel('HDD identity uses SMART, then Windows native properties if SMART fails. '
+                'Unknown health requires separate, explicit risk approval; no writes are automatic.')
             self.smart_check_note.setObjectName('muted')
             self.smart_check_note.setWordWrap(True)
             self.smart_check_note.hide()  # repair-specific guidance belongs in repair workspace
@@ -855,7 +855,7 @@ def launch():
             # This does not bypass the CLI's independent physical-write checks.
             self.repair_next=QPushButton('Check drive readiness')
             self.repair_next.setAccessibleName('Next step for HDD repair eligibility')
-            self.repair_next.setToolTip('Read-only SMART check, optional approved tool setup, or rescue. Never authorizes an HDD write.')
+            self.repair_next.setToolTip('Check SMART, Windows-native disk evidence, or rescue; identity is not a write permit.')
             self.repair_next.clicked.connect(self.resolve_repair_next)
             self.repair_next.hide()
             drive_panel.addWidget(self.repair_next)
@@ -1330,6 +1330,10 @@ def launch():
                     bus=str(d.get('bus') or ''), sector=int(d.get('sector_size') or 512),
                     snapshot=snap)
                 title=profile.kind.upper().replace('_',' ') + ' · ' + profile.evidence
+                if snap.get('source') == 'windows_native_corrob_hdd':
+                    title += ' · Windows native HDD identity corroborated; SMART health UNKNOWN'
+                elif snap.get('source') == 'windows_native_unverified':
+                    title += ' · Windows native evidence inconclusive'
                 if profile.workload == 'surveillance':
                     title+=' · NVR / surveillance workload (NOT a recording type)'
                 self.profile_note.setText('Detected: ' + title + '\nSuggested: ' + profile.recovery_method)
@@ -1341,7 +1345,8 @@ def launch():
                         mode='full' if self.job_box.currentData()=='carefull' else 'quick')
                     self.auto_plan_note.setText(f'Automatic plan · {plan.title}. {plan.explanation}')
                 self.profile_note.setToolTip('Classification: '+profile.confidence+'. '+
-                    'USB is a transport, not a physical medium. '+profile.maintenance_note+
+                    'USB is a transport, not a physical medium. '+
+                    '; '.join(str(x) for x in snap.get('native_factors',[]))+'. '+profile.maintenance_note+
                     '\nRecommendation: '+decision.label+'; '+'; '.join(decision.reasons))
             except (ValueError,TypeError):
                 self.profile_note.setText('Unverified drive geometry — read-only rescue recommended.')
@@ -1366,9 +1371,9 @@ def launch():
                                          key in self._auto_probe_attempted)):
                 return
             if force:
-                self.smart_check_note.setText('Checking USB SMART / ATA identity read-only… '
+                self.smart_check_note.setText('Identifying USB media using SMART and Windows properties (read-only)… '
                     'the drive is not being repaired or rewritten.')
-            self.repair_next.setText('Checking drive SMART…')
+            self.repair_next.setText('Identifying drive…')
             self.repair_next.setEnabled(False)
             self._auto_probe_attempted.add(key)
             self._auto_probe_hint=key
@@ -1381,9 +1386,9 @@ def launch():
             self.update_action_state()
             def bound_probe(c=child):
                 if c.state()!=QProcess.NotRunning:
-                    self.note_log('SMART identification timed out; preserving unknown media. No writes attempted.')
+                    self.note_log('Hardware identification timed out; preserving unknown media. No writes attempted.')
                     c.kill()
-            QTimer.singleShot(22000,bound_probe)
+            QTimer.singleShot(42000,bound_probe)
 
         def media_probe_done(self, child, key, code):
             if child is not self._auto_probe_proc:
@@ -1411,19 +1416,19 @@ def launch():
             else:
                 self._smart_probe_failures[key]=(raw_stderr or 'SMART probe produced no valid health evidence.')[-500:]
             if self._smart_probe_failures.get(key):
-                self.note_log('Read-only SMART identification unavailable: '+self._smart_probe_failures[key])
+                self.note_log('SMART unavailable; Windows-native media checks attempted: '+self._smart_probe_failures[key])
             if self.selected() and self.selected().get('identity_hint') == key:
                 current=self._health_by_device.get(key)
                 from .repair_readiness import ui_repair_readiness
                 permitted, explanation = ui_repair_readiness(self.selected(), 'carequick',
                                                                snapshot=current)
                 self.smart_check_note.setText(
-                    'SMART/rotation check passed the UI eligibility stage; '
+                    'Drive identification passed the UI eligibility stage (health may still be unknown); '
                     'device identity, locks and journal remain mandatory.' if permitted else
                     'HDD repair is not authorized: '+explanation)
                 if not permitted and self._smart_probe_failures.get(key):
                     self.smart_check_note.setText(
-                        'SMART identification incomplete: '+self._smart_probe_failures[key]+'\n'+explanation)
+                        'SMART unavailable; alternate Windows identification attempted: '+self._smart_probe_failures[key]+'\n'+explanation)
                 self.update_drive_profile()
             self.update_action_state()
 
@@ -2235,10 +2240,46 @@ def launch():
             try:
                 require_debian_wsl()
             except RuntimeError as exc:
-                QMessageBox.information(self,'One-time Debian WSL setup required',str(exc)+
-                    '\n\nAfter Debian is installed, run in an elevated Debian WSL terminal: '
-                    'apt update && apt install live-build debootstrap xorriso. '
-                    'Then click Create recovery USB again. No installation was started.')
+                # Offer a single explicitly approved setup action, not a dead-end
+                # error with command lines John Doe must copy by hand.
+                dialog=QMessageBox(self)
+                dialog.setWindowTitle('Recovery USB · one-time Windows setup')
+                dialog.setIcon(QMessageBox.Information)
+                dialog.setText('Debian WSL is needed to build a genuine Linux recovery ISO.')
+                dialog.setInformativeText(str(exc)+'\n\n'
+                    'DriveRepair can start Windows WSL setup after you approve. '
+                    'Windows may require Administrator access, internet, a reboot, '
+                    'and Debian first-run initialization. No USB will be erased. '
+                    'After setup, return here to build and flash the ISO.')
+                install=dialog.addButton('Install Debian WSL (approved)',QMessageBox.AcceptRole)
+                dialog.addButton('Cancel',QMessageBox.RejectRole)
+                dialog.exec()
+                if dialog.clickedButton()!=install:
+                    return
+                # OS component install is always an explicit user action.
+                # Keep the subprocess visible in the operator log and never
+                # assume a reboot-free, successful installation.
+                child=QProcess(self)
+                self._wsl_setup_proc=child
+                child.setProgram('wsl.exe')
+                child.setArguments(['--install','-d','Debian'])
+                child.readyReadStandardOutput.connect(lambda:self.note_log(
+                    bytes(child.readAllStandardOutput()).decode('utf-8','replace')[-1200:]))
+                child.readyReadStandardError.connect(lambda:self.note_log(
+                    bytes(child.readAllStandardError()).decode('utf-8','replace')[-1200:]))
+                def on_finish(code,status):
+                    self._wsl_setup_proc=None
+                    QMessageBox.information(self,'Windows recovery build prerequisites',
+                        ('Windows reported WSL setup completed. Restart if Windows requests it, '
+                         'initialize Debian on first launch, then choose Create recovery USB again.'
+                         if code==0 else
+                         'Windows could not complete WSL setup (exit '+str(code)+'). '
+                         'Administrator approval or an OS restart may be needed. '
+                         'See the Expert log; no USB was written.'))
+                child.finished.connect(on_finish)
+                child.errorOccurred.connect(lambda error:self.note_log(
+                    'Windows WSL setup could not start: '+child.errorString()))
+                child.start()
                 return
             folder=QFileDialog.getExistingDirectory(self,'Choose empty destination for newly built ISO')
             if not folder:
@@ -2846,9 +2887,26 @@ def launch():
                           '--progress-jsonl','--json']
                     if REPAIR_BETA_GUARDED:
                         args += ['--max-regions','16']
+                        snap = self._health_by_device.get(d.get('identity_hint')) or {}
+                        if (snap.get('source') == 'windows_native_corrob_hdd'
+                                and snap.get('native_hdd_corrob') is True):
+                            native_risk=QMessageBox.warning(
+                                self,'Unknown media health — explicit authorization',
+                                'Windows independently reports an HDD-like device and matching '
+                                'identity, but the USB bridge did NOT provide SMART health. '
+                                'Seek penalty and TRIM flags can be misreported by USB bridges.\n\n'
+                                'Only proceed with a disposable or separately backed-up HDD. '
+                                'This can permanently destroy data or make the drive less reliable. '
+                                'No healthy-medium claim is possible.\n\n'
+                                'Do you explicitly accept UNKNOWN health for this SMALL, '
+                                'journaled HDD repair batch?',
+                                QMessageBox.Yes | QMessageBox.No,QMessageBox.No)
+                            if native_risk != QMessageBox.Yes:
+                                return
+                            args += ['--ack-unknown-health']
                     else:
-                        # Engineering builds can explicitly investigate unknown health;
-                        # a guarded release requires full smartctl evidence.
+                        # Engineering-only unknown-health acknowledgement;
+                        # medium, serial and transport remain independently checked.
                         args += ['--ack-unknown-health']
                     if save_scan_map:
                         args+=['--scan-checkpoint','auto']

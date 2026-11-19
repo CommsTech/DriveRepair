@@ -64,7 +64,14 @@ def check_guarded_repair_preflight(args, snapshot: dict | None, device) -> dict:
     if args.rewrite_neighbors or args.recording != 'auto':
         raise PermissionError('Guarded repair cannot force recording geometry or neighboring writes')
     if args.ack_unknown_health:
-        raise PermissionError('Guarded repair does not accept unknown SMART health')
+        if not (isinstance(snapshot, dict) and
+                snapshot.get('source') == 'windows_native_corrob_hdd' and
+                snapshot.get('native_hdd_corrob') is True and
+                snapshot.get('status') == 'unknown'):
+            raise PermissionError('Unknown-health acknowledgement is reserved for corroborated native Windows HDD identity')
+    elif (isinstance(snapshot, dict) and
+          snapshot.get('source') == 'windows_native_corrob_hdd'):
+        raise PermissionError('Native HDD identification does not measure health. Explicit --ack-unknown-health is required after data rescue.')
     if args.max_regions > 16 or args.max_regions < 1:
         raise PermissionError('Guarded repair limits each batch to 16 verified regions')
     if not args.auto_lock_volumes and __import__('sys').platform == 'win32':
