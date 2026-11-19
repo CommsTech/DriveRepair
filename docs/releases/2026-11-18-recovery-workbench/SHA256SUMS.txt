@@ -1,0 +1,2 @@
+98c199c626085a86b7779ae3513a1bd5758564ebef00116dfe8c96e8f9bc4452  DriveRepair_2026-11-18_Recovery_Workbench.patch
+37711ebf9535749e095c0a1085cae93a2124241862fbd402d14846caa137978f  DriveRepair_2026-11-18_Recovery_Workbench_Source.zip

@@ -146,11 +146,11 @@ def _qt_debug_log_path() -> Path | None:
 def launch():
     try:
         from PySide6.QtCore import Qt, QProcess, QTimer, QRectF, QPointF
-        from PySide6.QtGui import QColor, QFont, QPainter, QKeySequence, QShortcut, QPen, QPainterPath
+        from PySide6.QtGui import QColor, QFont, QPainter, QKeySequence, QShortcut, QPen, QPainterPath, QLinearGradient
         from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
             QLabel, QPushButton, QFrame, QProgressBar, QComboBox, QLineEdit, QFileDialog,
             QPlainTextEdit, QMessageBox, QCheckBox, QToolButton, QScrollArea, QGridLayout,
-            QDialog, QListWidget, QSizePolicy)
+            QDialog, QListWidget, QSizePolicy, QAbstractItemView)
     except ImportError as exc:
         raise RuntimeError('Qt workstation requires the optional PySide6 package: python -m pip install PySide6') from exc
 
@@ -175,14 +175,16 @@ def launch():
          'orange':'#f1b45e', 'red':'#f07e87', 'yellow':'#e6ca75'}
     css = f'''QWidget {{ background:{C['bg']}; color:{C['text']}; font-family:'Segoe UI',sans-serif; font-size:13px; }}
         QFrame#sidebar {{ background:{C['sidebar']}; border-right:1px solid {C['line']}; }}
-        QFrame#card {{ background:{C['panel']}; border:1px solid {C['line']}; border-radius:11px; }}
+        QFrame#card {{ background:{C['panel']}; border:1px solid {C['line']}; border-radius:14px; }}
+        QFrame#statTile {{ background:#1a2d42; border:1px solid #29435c; border-radius:10px; }}
         QFrame#actionDock {{ background:{C['sidebar']}; border-top:1px solid {C['line']}; }}
         QScrollArea {{ border:0; }}
         QScrollBar:vertical {{ background:{C['bg']}; width:10px; }}
         QScrollBar::handle:vertical {{background:#344961; border-radius:5px;min-height:32px;}}
+        QLabel {{ background:transparent; }}
         QLabel#muted {{ color:{C['muted']}; }}
-        QLabel#heading {{ font-size:24px; font-weight:750; }}
-        QLabel#metric {{ font-size:21px; font-weight:700; }}
+        QLabel#heading {{ font-size:27px; font-weight:750; }}
+        QLabel#metric {{ font-size:23px; font-weight:700; color:#f6fcff; }}
         QLabel#eyebrow {{ color:{C['muted']}; font-size:11px; font-weight:700; }}
         QLabel#section {{ font-size:16px; font-weight:700; }}
         QLabel#riskTag {{ color:{C['accent']}; background:#183b40; border:1px solid #285e60; border-radius:7px; padding:6px 10px; font-weight:700; }}
@@ -230,8 +232,8 @@ def launch():
         """Fixed full-drive map; sparse samples never paint whole cells healthy."""
         def __init__(self):
             super().__init__()
-            self.setMinimumHeight(130)
-            self.coverage = SurfaceCoverage()
+            self.setMinimumHeight(190)
+            self.coverage = SurfaceCoverage(cells=768)
             self.rescue_map = ''
             self.setMouseTracking(True)
 
@@ -259,22 +261,31 @@ def launch():
                 return
             if size != self.total:
                 self.reset(size)
-            offset = int(event.get('offset') or 0)
-            length = int(event.get('read_length') or event.get('length') or 0)
-            if length <= 0:
-                return
-            slow = ((event.get('latency_ms') or 0) >
-                    max(500, (event.get('median_ms') or 0) * 4))
-            self.coverage.observe(offset, length, failed=bool(event.get('failed')),
-                                  slow=slow)
+            spans = event.get('observed_read_spans')
+            if isinstance(spans, list):
+                for item in spans[:512]:
+                    if (isinstance(item, list) and len(item) == 4 and
+                            type(item[0]) is int and type(item[1]) is int and
+                            0 <= item[0] < size and 0 < item[1] <= size):
+                        self.coverage.observe(item[0], item[1],
+                            failed=bool(item[2]), slow=bool(item[3]))
+            else:
+                offset = int(event.get('offset') or 0)
+                length = int(event.get('read_length') or event.get('length') or 0)
+                if length <= 0:
+                    return
+                slow = ((event.get('latency_ms') or 0) >
+                        max(500, (event.get('median_ms') or 0) * 4))
+                self.coverage.observe(offset, length, failed=bool(event.get('failed')),
+                                      slow=slow)
             self.update()
 
         def paintEvent(self, _):
             p = QPainter(self)
             p.setRenderHint(QPainter.Antialiasing)
-            cols = 48
-            rows = 8
-            gap = 3
+            cols = 64
+            rows = 12
+            gap = 2
             width = max(3, (self.width() - gap * (cols - 1)) / cols)
             height = max(5, (self.height() - gap * (rows - 1)) / rows)
             p.setPen(Qt.NoPen)
@@ -311,12 +322,12 @@ def launch():
             p.end()
 
         def mouseMoveEvent(self, event):
-            cols, gap = 48, 3
+            cols, rows, gap = 64, 12, 2
             width = max(3, (self.width() - gap * (cols - 1)) / cols)
-            height = max(5, (self.height() - gap * 7) / 8)
+            height = max(5, (self.height() - gap * (rows - 1)) / rows)
             col = int(event.position().x() // (width + gap))
             row = int(event.position().y() // (height + gap))
-            if 0 <= col < 48 and 0 <= row < 8:
+            if 0 <= col < 64 and 0 <= row < 12:
                 if self.rescue_map:
                     self.setToolTip('Approximate rescue journal: green = copied from a readable source, '
                                     'red = unreadable source range, amber = partial work, dark = unprocessed. '
@@ -337,7 +348,7 @@ def launch():
         """
         def __init__(self):
             super().__init__()
-            self.setMinimumHeight(70)
+            self.setMinimumHeight(108)
             self.samples=deque(maxlen=180)
             self._last_sample_at=0.0
             self.setToolTip('Observed throughput over roughly the last 45 seconds. '
@@ -385,8 +396,58 @@ def launch():
                 y=rect.bottom()-(v/ymax)*rect.height()*.88
                 if i==0: path.moveTo(x,y)
                 else: path.lineTo(x,y)
-            painter.setPen(QPen(QColor('#4ad8bd'),2.2))
+            if len(visible) > 1:
+                area=QPainterPath(path)
+                area.lineTo(rect.right(),rect.bottom())
+                area.lineTo(rect.left(),rect.bottom())
+                area.closeSubpath()
+                grad=QLinearGradient(0,rect.top(),0,rect.bottom())
+                grad.setColorAt(0,QColor(64,207,181,85))
+                grad.setColorAt(1,QColor(64,207,181,0))
+                painter.fillPath(area,grad)
+            painter.setPen(QPen(QColor('#42e9d1'),2.4))
             painter.drawPath(path)
+            painter.end()
+
+    class ConditionGauge(QWidget):
+        """A condition-indicator gauge, NOT a probability of survival."""
+        def __init__(self):
+            super().__init__()
+            self.setMinimumSize(164,122)
+            self.setMaximumWidth(205)
+            self.score=None
+            self.caption='NO SMART SCORE'
+            self.setToolTip('Evidence-based condition indicator, not remaining life or an assurance of reliability.')
+
+        def set_assessment(self, report):
+            self.score=report.get('score') if isinstance(report,dict) else None
+            self.caption=str(report.get('band') or 'UNKNOWN') if isinstance(report,dict) else 'UNKNOWN'
+            self.update()
+
+        def paintEvent(self, event):
+            painter=QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing)
+            x,y=12,6
+            diameter=min(self.width()-24,106)
+            frame=QRectF(x,y,diameter,diameter)
+            painter.setPen(QPen(QColor('#304b62'),10,Qt.SolidLine,Qt.RoundCap))
+            painter.drawArc(frame, 210*16, -240*16)
+            if type(self.score) in (int,float):
+                value=max(0,min(100,float(self.score)))
+                color=('#e96e7b' if value<35 else '#f5b85e' if value<85 else '#41dbc0')
+                painter.setPen(QPen(QColor(color),10,Qt.SolidLine,Qt.RoundCap))
+                painter.drawArc(frame,210*16,round(-240*16*value/100))
+            painter.setPen(QColor('#f2f7fc'))
+            font=painter.font()
+            font.setBold(True)
+            font.setPixelSize(30)
+            painter.setFont(font)
+            number='—' if self.score is None else str(self.score)
+            painter.drawText(QRectF(x,y+24,diameter,48),Qt.AlignCenter,number)
+            font.setPixelSize(10)
+            painter.setFont(font)
+            painter.setPen(QColor('#b3c9dc'))
+            painter.drawText(QRectF(x,y+76,diameter,30),Qt.AlignCenter,self.caption)
             painter.end()
 
     class Workstation(QMainWindow):
@@ -412,6 +473,15 @@ def launch():
             self._last_io_offset=0
             self._last_io_length=0
             self._stop_requested=False
+            self._batch_queue=[]
+            self._batch_current=None
+            self._batch_manifest=None
+            self._batch_results=[]
+            self._batch_running=False
+            self._batch_sleep_prevented=False
+            self._manufacturer_rated_hours={}
+            self._last_health_snapshot=None
+            self._stall_terminated=False
             self._rescue_started_at=None
             self._rescue_sample=None
             self._heartbeat=QTimer(self)
@@ -472,6 +542,18 @@ def launch():
             self.legacy.setObjectName('nav')
             self.legacy.clicked.connect(self.open_legacy)
             nav.addWidget(self.legacy)
+            self.boot_button=QPushButton('Bootable media builder')
+            self.boot_button.setObjectName('nav')
+            self.boot_button.setToolTip('Export a complete Linux live-ISO build kit; boot testing is required.')
+            self.boot_button.clicked.connect(self.export_boot_kit)
+            nav.addWidget(self.boot_button)
+            self.iso_button=QPushButton('Build live ISO (Linux)')
+            self.iso_button.setObjectName('nav')
+            self.iso_button.setToolTip('Build an UNVERIFIED ISO on a prepared Debian x86-64 root session; never writes USB disks.')
+            self.iso_button.clicked.connect(self.build_iso)
+            nav.addWidget(self.iso_button)
+            self.iso_proc=None
+            self._iso_build_temp=None
             nav.addStretch()
             channel=QLabel('IMAGE-FIRST PUBLIC BETA' if PUBLIC_BETA_IMAGE_ONLY
                            else 'GUIDED HDD REPAIR BETA' if REPAIR_BETA_GUARDED
@@ -556,13 +638,17 @@ def launch():
             total_row.addWidget(self.overall_label)
             hero.addWidget(self.progress)
             metrics=QGridLayout()
-            metrics.setHorizontalSpacing(18)
-            metrics.setVerticalSpacing(14)
+            metrics.setHorizontalSpacing(10)
+            metrics.setVerticalSpacing(10)
             hero.addLayout(metrics)
             self.metric_labels={}
             self.metric_headers={}
-            for metric_index,(key,title) in enumerate([('done','JOB PROGRESS'),('read','DATA READ'),('rate','RECENT SPEED'),('avg','JOB AVERAGE'),('errors','READ ERRORS'),('eta','TIME LEFT')]):
-                area=QVBoxLayout()
+            for metric_index,(key,title) in enumerate([('done','CURRENT PHASE'),('read','DATA READ'),('rate','RECENT SPEED'),('avg','JOB AVERAGE'),('errors','READ ERRORS'),('eta','TIME LEFT')]):
+                tile=QFrame()
+                tile.setObjectName('statTile')
+                area=QVBoxLayout(tile)
+                area.setContentsMargins(13,10,13,10)
+                area.setSpacing(4)
                 m=QLabel(title)
                 m.setObjectName('eyebrow')
                 descriptions={'done':'Percent of planned scan work. Quick Scan samples 10% of the drive; this is not full-device coverage.',
@@ -577,7 +663,7 @@ def launch():
                 v=QLabel('—')
                 v.setObjectName('metric')
                 area.addWidget(v)
-                metrics.addLayout(area, metric_index//3, metric_index%3)
+                metrics.addWidget(tile, metric_index//3, metric_index%3)
                 self.metric_labels[key]=v
             body=QHBoxLayout()
             root.addLayout(body,1)
@@ -605,6 +691,13 @@ def launch():
             self.device_box.setMinimumContentsLength(14)
             self.device_box.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
             drive_panel.addWidget(self.device_box)
+            self.offline_devices=QCheckBox('Offline Linux: show internal disks for read-only rescue')
+            self.offline_devices.setToolTip('Only when booted from a trusted, separate Linux recovery OS. '
+                'The engine still requires unmounted source disks, a separate destination, and verified identity. '
+                'Internal disks can never be queued for physical repair here.')
+            self.offline_devices.setVisible(sys.platform=='linux')
+            self.offline_devices.toggled.connect(lambda _:self.refresh_devices())
+            drive_panel.addWidget(self.offline_devices)
             drive_panel.addWidget(help_icon('Check the model, capacity and serial suffix before starting. USB bridge numbers can change on reconnect. Physical writes always require renewed identity verification; read-only scans can resume using a stable media fingerprint.'))
             self.device_note=QLabel('The selected disk will be identified again before physical writes.')
             self.device_note.setWordWrap(True)
@@ -642,6 +735,14 @@ def launch():
             }
             self.job_box.currentIndexChanged.connect(self.choice_changed)
             workflow.addWidget(self.job_box)
+            self.batch_button=QPushButton('Queue multiple drives for rescue  +')
+            self.batch_button.setToolTip('Serial read-only imaging of multiple selected sources. Each destination is a unique NEW image on separate healthy storage.')
+            self.batch_button.clicked.connect(self.queue_rescue)
+            workflow.addWidget(self.batch_button)
+            self.batch_status=QLabel('One drive at a time · independent recovery journals · no automatic physical rewrites')
+            self.batch_status.setObjectName('muted')
+            self.batch_status.setWordWrap(True)
+            workflow.addWidget(self.batch_status)
             help_row=QHBoxLayout()
             workflow.addLayout(help_row)
             help_row.addWidget(help_icon('Repair: suitable HDDs only in the guarded beta, with SMART evidence, a separate journal and exclusive disk access. Rescue: new image. Diagnose: reads only.'))
@@ -649,6 +750,10 @@ def launch():
             self.auto_resume.setChecked(True)
             self.auto_resume.setToolTip('Only a read-only full scan with a saved checkpoint can restart automatically. No in-place writes or RAM-only transactions restart after a disconnect.')
             help_row.addWidget(self.auto_resume,1)
+            self.auto_pause=QCheckBox('Stop unresponsive read-only scan after 3 minutes')
+            self.auto_pause.setChecked(True)
+            self.auto_pause.setToolTip('Supervises the read-only child, not the kernel driver. A forced stop might not release a hung USB device. Never applied to physical writes.')
+            workflow.addWidget(self.auto_pause)
             self.dest=QLineEdit()
             self.dest.setPlaceholderText('Choose an existing source image…')
             self.browse=QPushButton('Choose image…')
@@ -706,6 +811,25 @@ def launch():
             results_heading=QLabel('03  Results and next action')
             results_heading.setStyleSheet('font-size:15px;font-weight:700;')
             result_card.addWidget(results_heading)
+            condition_row=QHBoxLayout()
+            self.condition_gauge=ConditionGauge()
+            condition_row.addWidget(self.condition_gauge)
+            condition_summary=QVBoxLayout()
+            self.condition_title=QLabel('Drive condition · not measured')
+            self.condition_title.setObjectName('section')
+            self.condition_title.setWordWrap(True)
+            condition_summary.addWidget(self.condition_title)
+            self.condition_evidence=QLabel('Run Check disk health for SMART-based indicators. Unknown is not healthy.')
+            self.condition_evidence.setWordWrap(True)
+            self.condition_evidence.setObjectName('muted')
+            condition_summary.addWidget(self.condition_evidence)
+            condition_summary.addStretch()
+            condition_row.addLayout(condition_summary,1)
+            result_card.addLayout(condition_row)
+            self.spec_button=QPushButton('Compare with documented service-hour rating…')
+            self.spec_button.setToolTip('Only supply a published model-specific operating-hour rating. Fleet MTBF is not a failure prediction.')
+            self.spec_button.clicked.connect(self.enter_manufacturer_specs)
+            result_card.addWidget(self.spec_button)
             self.result=QLabel('No job running')
             self.result.setTextFormat(Qt.PlainText)
             self.result.setWordWrap(True)
@@ -833,6 +957,31 @@ def launch():
                 self.explain.setText(f'Last request: byte offset {self._last_io_offset:,} · '
                     f'length {self._last_io_length:,} bytes · {elapsed}s without a result. '
                     'Check Expert details for the most recent observations.')
+                self.metric_labels['eta'].setText('Unknown · stalled')
+                self.phase_caption.setText('I/O pending · completion not confirmed')
+                if (elapsed >= 180 and self.auto_pause.isChecked()
+                        and self._last_job_kind in {'scanquick','scanfull','resume'}
+                        and not self._stop_requested):
+                    self.note_log('Read-only scan watchdog: no result in 180s. Requesting cooperative stop; '
+                        'the Windows storage driver may still ignore cancellation.')
+                    self._stall_terminated=True
+                    self.stop_job()
+                if (elapsed >= 240 and self._batch_running and self._batch_current
+                        and self._last_job_kind == 'rescue' and not self._stall_terminated):
+                    self._stall_terminated=True
+                    self.batch_status.setText('One queued rescue timed out waiting on the storage driver. '
+                        'Stopping its read-only worker; output is incomplete and must be checked before use.')
+                    self.note_log('Queue watchdog: 240s with no progress; terminating isolated rescue process. '
+                        'Do not treat an incomplete image or journal as a finished recovery.')
+                    child=self.proc
+                    child.terminate()
+                    QTimer.singleShot(6000,lambda c=child:self._force_stalled_batch_child(c))
+        def _force_stalled_batch_child(self, child):
+            if self._stall_terminated and child.state()!=QProcess.NotRunning:
+                self.note_log('Queue watchdog: read-only rescue subprocess did not exit; killing worker. '
+                    'USB controller cancellation may still fail; verify output journal.')
+                child.kill()
+
         def show_details(self, yes): self.log.setVisible(yes)
         def note_log(self, text: str) -> None:
             self.log.appendPlainText(text)
@@ -850,6 +999,15 @@ def launch():
             self.browse.setVisible(is_image)
             self.drive_panel.setVisible(not is_image)
             self.auto_resume.setVisible(kind in {'scanfull','resume','carefull'})
+            self.auto_pause.setVisible(kind in {'scanquick','scanfull','resume'})
+            self.batch_button.setVisible(kind == 'rescue')
+            self.batch_status.setVisible(kind == 'rescue')
+            self.offline_devices.setVisible(sys.platform=='linux' and kind == 'rescue')
+            if kind != 'rescue' and self.offline_devices.isChecked():
+                self.offline_devices.blockSignals(True)
+                self.offline_devices.setChecked(False)
+                self.offline_devices.blockSignals(False)
+                QTimer.singleShot(0,self.refresh_devices)
             hints={'health':'Reads SMART attributes where available; no physical writes.',
                    'scanquick':'Samples at least 10% of the entire drive with distributed random locations; no writes.',
                    'scanfull':'Reads the full address space, saving a resumable local checkpoint.',
@@ -910,7 +1068,7 @@ def launch():
 
         def update_action_state(self, *_):
             kind=self.job_box.currentData()
-            running=bool(self.proc and self.proc.state()!=QProcess.NotRunning)
+            running=self._batch_running or bool(self.proc and self.proc.state()!=QProcess.NotRunning)
             enabled, advice=can_start(kind, device_selected=bool(self.selected()),
                 image_exists=bool(self.dest.text().strip() and Path(self.dest.text().strip()).is_file()),
                 running=running, public_beta=PUBLIC_BETA_IMAGE_ONLY)
@@ -921,8 +1079,12 @@ def launch():
             self.ready_note.setText(advice)
             self.start.setToolTip(advice)
             self.device_box.setEnabled(not running)
+            self.offline_devices.setEnabled(not running)
             self.job_box.setEnabled(not running)
             self.browse.setEnabled(not running)
+            self.batch_button.setEnabled(not running)
+            self.boot_button.setEnabled(not running)
+            self.iso_button.setEnabled(not running and not (self.iso_proc and self.iso_proc.state()!=QProcess.NotRunning))
             for family, button in self.nav_buttons.items():
                 button.setEnabled(not running and (family != 'fix' or not PUBLIC_BETA_IMAGE_ONLY))
             self.refresh_button.setEnabled(not running)
@@ -941,13 +1103,272 @@ def launch():
             self.copy_summary_button.setText('Copied to clipboard')
             QTimer.singleShot(2500,lambda:self.copy_summary_button.setText('Copy operator summary'))
 
+        def enter_manufacturer_specs(self):
+            from PySide6.QtWidgets import QInputDialog
+            d=self._last_good_device or self.selected()
+            if not d:
+                QMessageBox.warning(self,'Select a drive','Select a specific drive first.')
+                return
+            hours,ok=QInputDialog.getInt(self,'Documented model rating',
+                'Manufacturer-published service-hour limit for this exact model (NOT MTBF).\n'
+                'Only enter a value from the model datasheet.',
+                0,0,10000000,1000)
+            if not ok or hours==0:
+                return
+            self._manufacturer_rated_hours[d.get('identity_hint')]=hours
+            if self._last_health_snapshot:
+                from .reliability_score import assess
+                self.show_condition(assess(self._last_health_snapshot,
+                    manufacturer_specs={'rated_power_on_hours':hours}))
+            self.note_log('Operator entered a purported model datasheet rating. '
+                'DriveRepair cannot independently verify it or predict drive lifespan.')
+
+        def show_condition(self, report, *, previous=None):
+            if not isinstance(report,dict):
+                return
+            self.condition_gauge.set_assessment(report)
+            score=report.get('score')
+            confidence=report.get('confidence') or 'unknown'
+            self.condition_title.setText('Condition index: ' +
+                ('Unknown' if score is None else f"{score}/100 · {report.get('band','UNKNOWN')}") +
+                f'  ({confidence} evidence)')
+            reasons=report.get('reasons') or []
+            statement='; '.join(str(t) for t in reasons[:3])
+            hours=report.get('power_on_hours')
+            if type(hours) is int:
+                statement+=f' · {hours:,} power-on hours'
+            if previous and previous.get('score') is not None and score is not None:
+                statement+=f" · Before {previous['score']}/100 → after {score}/100"
+            self.condition_evidence.setText(statement +
+                '\nCondition scores reflect observed warning signs, NOT remaining life or repair success.')
+
+        def export_boot_kit(self):
+            """Make the existing Linux ISO builder discoverable without writing a USB."""
+            from .boot_media import export_build_kit
+            repo=Path(__file__).resolve().parents[2]
+            output,_=QFileDialog.getSaveFileName(self,'Export Linux live-ISO build kit',
+                'DriveRepair-Live-Build-Kit.zip','ZIP archives (*.zip)')
+            if not output:
+                return
+            try:
+                info=export_build_kit(repo,output)
+            except (OSError,ValueError) as exc:
+                QMessageBox.warning(self,'Boot kit not created',str(exc))
+                return
+            QMessageBox.information(self,'Build kit ready — NOT an ISO',
+                f"Created {info['path']}\n\n"
+                'Extract on a clean Debian trixie x86-64 build VM. Read BOOT_KIT_INSTRUCTIONS.txt, '
+                'build the ISO, then verify BIOS and UEFI boot and patient read-only behavior. '
+                'The builder does not automatically write USB media.')
+
+        def build_iso(self):
+            """Opt-in Debian live-build job, no USB device writing.
+
+            Prerequisites are deliberately strict because build failures must
+            not be sold as distributable recovery media.
+            """
+            import shutil
+            if sys.platform!='linux' or not hasattr(os,'geteuid') or os.geteuid()!=0:
+                QMessageBox.information(self,'Build requires isolated Debian Linux VM',
+                    'Build ISO requires a prepared Debian trixie x86-64 build environment with root '
+                    'and live-build/debootstrap. On Windows, choose Bootable media builder to export '
+                    'the complete build kit. No USB drive is written by either action.')
+                return
+            if not all(shutil.which(tool) for tool in ('lb','debootstrap','sha256sum')):
+                QMessageBox.warning(self,'Missing Debian build tools',
+                    'Install live-build, debootstrap, xorriso and prerequisites in a disposable Debian VM.')
+                return
+            script=Path(__file__).resolve().parents[2]/'scripts'/'build_live_iso.sh'
+            if not script.is_file():
+                import tempfile
+                import zipfile
+                from .boot_media import export_build_kit
+                self._iso_build_temp=tempfile.TemporaryDirectory(prefix='driverepair-iso-kit-')
+                temporary=Path(self._iso_build_temp.name)
+                try:
+                    kit=temporary/'builder.zip'
+                    export_build_kit(None,kit)
+                    with zipfile.ZipFile(kit) as z:
+                        z.extractall(temporary)
+                    script=temporary/'driverepair'/'scripts'/'build_live_iso.sh'
+                except (OSError,ValueError,zipfile.BadZipFile) as exc:
+                    self._iso_build_temp.cleanup()
+                    self._iso_build_temp=None
+                    QMessageBox.warning(self,'Builder unavailable',str(exc))
+                    return
+            folder=QFileDialog.getExistingDirectory(self,'Select EMPTY output directory on the build VM')
+            if not folder:
+                return
+            if any(Path(folder).iterdir()):
+                QMessageBox.warning(self,'Not an empty output folder','Choose an empty, dedicated output folder.')
+                return
+            approval=QMessageBox.question(self,'Build experimental ISO',
+                'The Debian live-build recipe is NOT boot-verified. It downloads packages, uses root '
+                'inside the isolated build VM and writes ONLY ordinary build files and ISO output. '
+                'It does not write USB media. Continue?',
+                QMessageBox.Yes | QMessageBox.No,QMessageBox.No)
+            if approval!=QMessageBox.Yes:
+                return
+            self.iso_proc=QProcess(self)
+            self.iso_proc.setProgram('bash')
+            self.iso_proc.setArguments([str(script),str(Path(folder).resolve())])
+            self.iso_proc.readyReadStandardOutput.connect(lambda:self.note_log(
+                bytes(self.iso_proc.readAllStandardOutput()).decode('utf-8','replace')[-1200:]))
+            self.iso_proc.readyReadStandardError.connect(lambda:self.note_log(
+                bytes(self.iso_proc.readAllStandardError()).decode('utf-8','replace')[-1200:]))
+            self.iso_proc.finished.connect(lambda code,status:self.iso_finished(code))
+            self.details_button.setChecked(True)
+            self.note_log('UNVERIFIED ISO build started. Wait for native tool completion and SHA-256 receipt.')
+            self.iso_button.setEnabled(False)
+            self.iso_proc.start()
+
+        def iso_finished(self,code):
+            self.note_log('ISO builder exited with status '+str(code)+
+                '. Both BIOS and UEFI boot tests are required before distribution.')
+            self.iso_proc=None
+            if self._iso_build_temp is not None:
+                self._iso_build_temp.cleanup()
+                self._iso_build_temp=None
+            self.update_action_state()
+            QMessageBox.information(self,'ISO builder finished' if code==0 else 'ISO build failed',
+                'The builder exited with '+str(code)+'. Check Expert log and verify checksum, BIOS, '
+                'UEFI, device enumeration, no-automount and read-only behavior. '
+                'An ISO output is NOT a validated bootable recovery product.')
+
+        def _keep_host_awake(self, enabled):
+            """Best effort Windows OS system-sleep inhibition for an active queue."""
+            if sys.platform != 'win32':
+                return
+            try:
+                import ctypes
+                kernel=ctypes.WinDLL('kernel32', use_last_error=True)
+                kernel.SetThreadExecutionState.argtypes=[ctypes.c_uint32]
+                kernel.SetThreadExecutionState.restype=ctypes.c_uint32
+                # ES_CONTINUOUS | ES_SYSTEM_REQUIRED. Does not override lid,
+                # forced sleep, shutdown, firmware or power-loss conditions.
+                state=0x80000001 if enabled else 0x80000000
+                prior=kernel.SetThreadExecutionState(state)
+                self._batch_sleep_prevented=bool(enabled and prior)
+                if enabled and not prior:
+                    self.note_log('WARNING: could not inhibit Windows system sleep; unattended rescue may pause.')
+            except (OSError,AttributeError):
+                self.note_log('Windows sleep-inhibition unavailable; monitor system power policy.')
+
+        def queue_rescue(self):
+            """Require per-source selection and new destinations before unattended reads."""
+            if self._batch_running or (self.proc and self.proc.state()!=QProcess.NotRunning):
+                return
+            if not self._devices:
+                QMessageBox.warning(self,'No source drives','Refresh the device inventory first.')
+                return
+            dialog=QDialog(self)
+            dialog.setWindowTitle('Queue read-only imaging — multiple drives')
+            dialog.resize(650,430)
+            layout=QVBoxLayout(dialog)
+            layout.addWidget(QLabel('Select one or more source drives. Each will be reidentified by the engine.\n'
+                'Images are created sequentially, never in parallel. No physical repair writes are queued.'))
+            drive_list=QListWidget()
+            drive_list.setSelectionMode(QAbstractItemView.MultiSelection)
+            for d in self._devices:
+                drive_list.addItem(f"{d.get('model','Unknown')}  ·  {display_size(d.get('size_bytes') or 0)}  "
+                    f"·  {d.get('identity_hint','unknown')}")
+            layout.addWidget(drive_list)
+            accept=QPushButton('Continue with selected drives')
+            accept.setObjectName('primary')
+            accept.clicked.connect(dialog.accept)
+            layout.addWidget(accept)
+            if dialog.exec()!=QDialog.Accepted:
+                return
+            drives=[self._devices[i.row()] for i in drive_list.selectedIndexes()]
+            if not drives:
+                QMessageBox.warning(self,'No drives selected','Select at least one source drive.')
+                return
+            folder=QFileDialog.getExistingDirectory(self,'Select a folder on a DIFFERENT, healthy destination disk')
+            if not folder:
+                return
+            from .unattended import plan_rescue_batch, batch_manifest_path, store_manifest
+            try:
+                jobs=plan_rescue_batch(drives,folder)
+            except (ValueError, OSError) as exc:
+                QMessageBox.warning(self,'Unsafe rescue plan',str(exc))
+                return
+            question=QMessageBox.question(self,'Authorize unattended READ-ONLY rescue',
+                f'{len(jobs)} drives, {display_size(sum(j["size_bytes"] for j in jobs))} total source bytes.\n'
+                f'Destination: {folder}\n\n'
+                'Each output will be a NEW file. The engine checks device identity and destination ancestry '
+                'before imaging. A drive failure does not authorize writes and the next selected drive '
+                'will be attempted. Repeated read errors can stress failing media.\n\n'
+                'You must personally verify that the destination is healthy separate physical storage. Proceed?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if question!=QMessageBox.Yes:
+                return
+            manifest=batch_manifest_path(folder)
+            try:
+                store_manifest(manifest,jobs)
+            except (OSError,ValueError) as exc:
+                QMessageBox.warning(self,'Could not persist queue',str(exc))
+                return
+            self._batch_queue=jobs
+            self._batch_results=[]
+            self._batch_manifest=manifest
+            self._batch_current=None
+            self.select_goal('rescue')
+            self._batch_running=True
+            self._keep_host_awake(True)
+            self._launch_next_batch()
+
+        def _launch_next_batch(self):
+            if not self._batch_running:
+                return
+            if not self._batch_queue:
+                self._batch_running=False
+                self._keep_host_awake(False)
+                good=sum(x['status']=='COMPLETE' for x in self._batch_results)
+                self.batch_status.setText(f'Batch finished: {good}/{len(self._batch_results)} image jobs returned success. '
+                    'Inspect each .rescue.json journal for missing ranges.')
+                self.result.setText('Batch finished · review each journal')
+                self.stop.setEnabled(False)
+                self.update_action_state()
+                return
+            self._batch_current=self._batch_queue.pop(0)
+            job=self._batch_current
+            matching=[d for d in self._devices if d.get('id')==job['device_id'] and
+                      d.get('identity_hint')==job['fingerprint']]
+            if len(matching)!=1:
+                job['status']='SKIPPED_IDENTITY_CHANGED'
+                self._batch_results.append(job)
+                from .unattended import append_batch_event
+                append_batch_event(self._batch_manifest,job)
+                self._batch_current=None
+                QTimer.singleShot(0,self._launch_next_batch)
+                return
+            d=matching[0]
+            for i in range(self.device_box.count()):
+                if (self.device_box.itemData(i) or {}).get('id')==job['device_id']:
+                    self.device_box.setCurrentIndex(i)
+                    break
+            self._last_good_device=d
+            self._last_job_kind='rescue'
+            self.batch_status.setText(f'Imaging {len(self._batch_results)+1} of '
+                f'{len(self._batch_results)+len(self._batch_queue)+1}: {job["model"]}\n'
+                f'Output: {job["output"]}')
+            args=['rescue-external','--device',job['device_id'],'--output',job['output'],
+                '--ack-risk','--multi-pass','--progress-jsonl','--no-live-dashboard','--json']
+            if sys.platform=='linux' and self.offline_devices.isChecked():
+                args=['rescue-system','--device',job['device_id'],'--output',job['output'],
+                    '--ack-risk','--ack-offline-system','--expect-fingerprint',job['fingerprint'],
+                    '--multi-pass','--progress-jsonl','--no-live-dashboard','--json']
+            self.run_command(args)
+
         def refresh_devices(self):
             if self.inventory_proc and self.inventory_proc.state()!=QProcess.NotRunning:
                 return
             self.device_note.setText('Looking for external drives…')
             self.inventory_proc=QProcess(self)
             self.inventory_proc.setProgram(cli_prefix()[0])
-            self.inventory_proc.setArguments(cli_prefix()[1:]+['list','--json'])
+            self.inventory_proc.setArguments(cli_prefix()[1:]+[
+                'list-all-linux' if (sys.platform=='linux' and self.offline_devices.isChecked())
+                else 'list','--json'])
             self.inventory_proc.finished.connect(self.inventory_done)
             self.inventory_proc.start()
         def inventory_done(self,code,_status):
@@ -976,7 +1397,8 @@ def launch():
                     if d.get('id')==prev.get('id') and d.get('identity_hint')==prev.get('identity_hint'):
                         self.device_box.setCurrentIndex(i)
                         break
-            self.device_note.setText(f'{len(data)} external drive(s) available. Fresh identity required before writes.')
+            self.device_note.setText(f'{len(data)} whole disk(s) available (offline Linux)' if self.offline_devices.isChecked() else
+                f'{len(data)} external drive(s) available. Fresh identity required before writes.')
             self.update_action_state()
             pending=self._pending_resume
             if pending and self.auto_resume.isChecked() and not (self.proc and self.proc.state()!=QProcess.NotRunning):
@@ -1076,7 +1498,11 @@ def launch():
                         QMessageBox.Yes | QMessageBox.No)
                     if question != QMessageBox.Yes:
                         return
-                    args=['rescue-external','--device',d['id'],'--output',out,'--ack-risk']
+                    if sys.platform=='linux' and self.offline_devices.isChecked():
+                        args=['rescue-system','--device',d['id'],'--output',out,'--ack-risk',
+                            '--ack-offline-system','--expect-fingerprint',d['identity_hint']]
+                    else:
+                        args=['rescue-external','--device',d['id'],'--output',out,'--ack-risk']
                 args+=['--multi-pass','--progress-jsonl','--no-live-dashboard','--json']
             else:
                 if not d:
@@ -1235,10 +1661,11 @@ def launch():
                 if self._last_job_kind in {'rescue','rescueimage'} else
                 'Estimated whole-job progress · staged estimate, not disk coverage')
             self._stop_requested=False
+            self._stall_terminated=False
             # Image rescue must never inherit the size of an unrelated drive
             # that happens to remain selected in the (hidden) drive picker.
             source_size=(0 if self._last_job_kind == 'rescueimage' else
-                         int((self.selected() or {}).get('size_bytes') or 0))
+                         int((self._last_good_device or self.selected() or {}).get('size_bytes') or 0))
             self.map.reset(source_size)
             self.speed_graph.clear()
             self.coverage_label.setText('MEASURED COVERAGE  ·  0.00%')
@@ -1334,7 +1761,7 @@ def launch():
             self.progress.setValue(max(0,min(1000,round(10*overall))))
             self.overall_label.setText(f'{overall:.1f}% estimated' if self._last_job_kind.startswith('care')
                                       else f'{overall:.1f}% of current job')
-            self.metric_labels['done'].setText(f'{pct:.1f}%')
+            self.metric_labels['done'].setText(f'{pct:.1f}% · {phase.lower()}')
             self.metric_labels['eta'].setText(format_eta(event.get('eta_seconds')))
             if event.get('attempted_bytes') is not None:
                 self.metric_labels['read'].setText(display_size(event['attempted_bytes']))
@@ -1367,7 +1794,7 @@ def launch():
             self.overall_label.setText(f'{pct:.1f}% of '+('retry pass' if phase == 'RETRY' else 'source visited'))
             self.metric_headers['read'].setText('SAVED TO IMAGE')
             self.metric_headers['errors'].setText('MISSING DATA')
-            self.metric_labels['done'].setText(f'{pct:.1f}%')
+            self.metric_labels['done'].setText(f'{pct:.1f}% · {phase.lower()}')
             self.metric_labels['read'].setText(display_size(event.get('recovered_bytes') or 0))
             self.metric_labels['errors'].setText(display_size(event.get('unreadable_bytes') or 0))
             now=time.monotonic()
@@ -1410,7 +1837,7 @@ def launch():
             self.metric_labels['eta'].setText('—')
             self.proc=None
             self._stop_requested=False
-            if exit_code==0:
+            if exit_code==0 and self._final_stdout.strip():
                 self.progress.setValue(1000)
                 self.phase_progress.setValue(1000)
                 self.overall_label.setText('100% of planned job · review findings')
@@ -1422,6 +1849,24 @@ def launch():
                     self.note_log(self._final_stdout[-3000:])
             if not isinstance(result,dict):
                 result={}
+            condition_report = result.get('condition_comparison') or {}
+            if isinstance(result.get('health_after'),dict):
+                self._last_health_snapshot=result['health_after']
+            elif isinstance(result.get('ata_selected_raw_attributes'),list) or isinstance(result.get('nvme'),dict):
+                self._last_health_snapshot=result
+            rating=self._manufacturer_rated_hours.get(
+                (self._last_good_device or {}).get('identity_hint'))
+            if rating and self._last_health_snapshot:
+                from .reliability_score import assess
+                before=result.get('health_before')
+                self.show_condition(assess(self._last_health_snapshot,
+                    manufacturer_specs={'rated_power_on_hours':rating}),
+                    previous=assess(before,manufacturer_specs={'rated_power_on_hours':rating})
+                    if isinstance(before,dict) else None)
+            elif isinstance(condition_report,dict) and condition_report.get('after'):
+                self.show_condition(condition_report['after'], previous=condition_report.get('before'))
+            elif isinstance(result.get('condition_assessment'),dict):
+                self.show_condition(result['condition_assessment'])
             text=str(result.get('status') or ('Completed' if exit_code==0 else 'Stopped / failed'))
             self.status.setText(text.replace('_',' ').title())
             if user_stop_requested and exit_code!=0:
@@ -1480,6 +1925,8 @@ def launch():
                     self.metric_labels['read'].setText(display_size(scan['readable_bytes']))
                 if scan.get('read_error_chunks') is not None:
                     self.metric_labels['errors'].setText(str(scan['read_error_chunks']))
+                self.next_action.setText('Do not bypass Windows volume locks. Save a rescue image, '
+                    'or use a separately verified offline Linux recovery environment to inspect the drive.')
             elif 'device' in text or 'identity' in text or 'access' in text or 'discon' in text or result.get('scan',{}).get('status')=='aborted_device_or_access_error':
                 self.result.setText('Drive connection interrupted')
                 self.explain.setText('Reconnect the same drive, refresh the list, and select “Continue interrupted full scan”. Reverification is mandatory; no write restarts automatically.')
@@ -1523,12 +1970,33 @@ def launch():
                 self.next_action.setText('Reconnect the exact same drive for the saved read-only scan. Verify its identity first.')
             elif self._last_job_kind in ('rescue','rescueimage'):
                 self.next_action.setText('Keep the source unchanged. Inspect the image journal for missing ranges and validate important recovered files.')
+            elif result.get('status')=='repair_blocked_prewrite_access':
+                self.next_action.setText('Keep the patient unchanged. Check Windows Administrator rights, '
+                    'mounted/RAW partitions and the Expert log. Prefer offline rescue before further writes.')
             elif exit_code == 0:
                 self.next_action.setText('Review measured coverage and error evidence. For important data, make a separate recovery image before any further intervention.')
             else:
                 self.next_action.setText('Review the reported failure and Expert log before retrying. Do not bypass volume locks or identity verification.')
+            if self._batch_running and self._batch_current:
+                finished=dict(self._batch_current)
+                finished['status']='COMPLETE' if exit_code == 0 else ('STALLED_OR_INTERRUPTED' if self._stall_terminated else 'FAILED')
+                finished['exit_code']=int(exit_code)
+                self._batch_results.append(finished)
+                self.batch_status.setText(f"{finished['model']} → {finished['status']}; "
+                    f"{len(self._batch_queue)} jobs remaining. Check output journal for missing data.")
+                from .unattended import append_batch_event
+                append_batch_event(self._batch_manifest, finished)
+                self._batch_current=None
+                self._stall_terminated=False
+                QTimer.singleShot(0,self._launch_next_batch)
             self.update_action_state()
         def closeEvent(self, event):
+            if self.iso_proc and self.iso_proc.state()!=QProcess.NotRunning:
+                QMessageBox.warning(self,'ISO build in progress',
+                    'The experimental ISO builder is still running on this build VM. '
+                    'Review Expert log before stopping a privileged build.')
+                event.ignore()
+                return
             if self.proc and self.proc.state()!=QProcess.NotRunning:
                 if self._last_job_kind in ('carefull','carequick','careresume'):
                     answer=QMessageBox.question(self,'Physical write may be in progress',
@@ -1546,6 +2014,17 @@ def launch():
             event.accept()
 
         def stop_job(self):
+            if self._batch_running:
+                self._batch_queue.clear()
+                self.batch_status.setText('Queued jobs cancelled; current read-only imaging continues to its journal boundary.')
+                if self.proc and self.proc.state()!=QProcess.NotRunning:
+                    self.result.setText('Queue cancelled · current rescue still running')
+                    self.stop.setEnabled(False)
+                    return
+                self._batch_running=False
+                self._keep_host_awake(False)
+                self.update_action_state()
+                return
             if self._pending_resume:
                 self._pending_resume=None
                 self._reconnect_timer.stop()

@@ -49,11 +49,11 @@ def health_snapshot(device: Device,
     ata = raw.get('ata_smart_attributes') or {}
     attrs = []
     for item in ata.get('table', []):
-        if item.get('id') not in {5, 187, 188, 197, 198, 199}:
+        if item.get('id') not in {5, 9, 187, 188, 197, 198, 199}:
             continue
         attrs.append({'id': item.get('id'), 'name': item.get('name'),
                       'raw_value': (item.get('raw') or {}).get('value')})
-    return {
+    result = {
         'status': status,
         'device': device.public(),
         'smartctl_exit_status': proc.returncode,
@@ -70,6 +70,9 @@ def health_snapshot(device: Device,
                  'SMART pass does not rule out media defects or future failure. '
                  'No self-test, erase, remap, refresh, or repair was started.',
     }
+    from .reliability_score import assess
+    result['condition_assessment'] = assess(result)
+    return result
 
 
 def windows_storage_health(device: Device,

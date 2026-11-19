@@ -1347,6 +1347,19 @@ def _run_care(args) -> int:
                                   model=selected.model if is_hardware else '',
                                   media_type=(snapshot or {}).get('reported_medium', ''),
                                   recording='' if args.recording == 'auto' else args.recording)
+            # Win32 USB bridges can hold an individual synchronous ReadFile for
+            # many minutes. A 6-16 MiB request multiplies the bytes at risk of
+            # a driver stall. Bound requests to 1 MiB on Windows USB, including
+            # adaptive calibration and follow-up; this does not GUARANTEE a
+            # hung USB driver will ever return or honor cancellation.
+            if is_hardware and sys.platform == 'win32' and selected.bus.lower() in {
+                    'usb', 'thunderbolt', 'firewire'}:
+                settings['max_chunk'] = min(int(settings.get('max_chunk') or 1024*1024), 1024*1024)
+                settings['min_chunk'] = min(int(settings.get('min_chunk') or 1024*1024),
+                                            settings['max_chunk'])
+                settings['chunk'] = min(int(settings['chunk']), settings['max_chunk'])
+                settings['io_watchdog_note'] = ('Bounded to 1 MiB logical reads for Windows external-device triage. '
+                    'A blocked kernel I/O may still require reconnecting the USB bridge OFFLINE.')
             chunk = settings['chunk']
             # Large read requests identify weak areas; rewrite only a small,
             # separately verified and journaled subregion (SMR write amplification).
@@ -1651,6 +1664,8 @@ def _run_care(args) -> int:
         from .health_deltas import compare_health
         health_after = try_health_snapshot(selected) if is_hardware else None
         health_delta = compare_health(snapshot, health_after) if is_hardware else None
+        from .reliability_score import compare_assessments
+        condition_comparison = compare_assessments(snapshot, health_after) if is_hardware else None
         if ram_only:
             repair['journal'] = None
         result = {'status': ('repair_postverify_failed' if postverify and
@@ -1667,6 +1682,9 @@ def _run_care(args) -> int:
                   'repair_plan': plan, 'repair': repair,
                   'postverification': postverify,
                   'smart_health_comparison': health_delta,
+                  'condition_comparison': condition_comparison,
+                  'health_before': snapshot if is_hardware else None,
+                  'health_after': health_after if is_hardware else None,
                   'volatile_ram_only': ram_only,
                   'notes': 'Rewriting consistently readable regions does not restore unreadable files or physical lifespan.'}
         print(json.dumps(result, indent=2) if args.json else result, flush=True)
