@@ -161,6 +161,14 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument("--no-live-dashboard", action="store_true",
                          help="Reserved for GUI child processes (scan has no TTY dashboard)")
         cmd.add_argument("--json", action="store_true")
+    recheck = sub.add_parser('recheck-scan-errors',
+                             help='Read-only targeted follow-up using prior scan offsets; never writes patient')
+    recheck.add_argument('--device', required=True)
+    recheck.add_argument('--prior-report', required=True, help='Private JSON from matching previous diagnostic')
+    recheck.add_argument('--expect-fingerprint', required=True)
+    recheck.add_argument('--ack-read-stress', action='store_true',
+                          help='Explicit consent to focused rereads on potentially failing media')
+    recheck.add_argument('--json', action='store_true')
     # Guided workflow: scan and quarantine unreadable/unstable regions, then
     # investigate bounded error ranges and refresh only repeatably readable
     # candidates. No writes on unstable transport or unknown bytes.
@@ -1926,6 +1934,31 @@ def run(argv: list[str] | None = None) -> int:
             from .qtgui import launch
             launch()
             return 0
+        if args.command == 'recheck-scan-errors':
+            if not args.ack_read_stress:
+                raise PermissionError('Targeted rereads require --ack-read-stress')
+            from .scan_followup import recheck_errors
+            from pathlib import Path
+            path = Path(args.prior_report)
+            if (path.is_symlink() or not path.is_file() or
+                    path.stat().st_size > 1024 * 1024):
+                raise ValueError('Missing, unsafe or oversized private scan report')
+            scan = json.loads(path.read_text(encoding='utf-8'))
+            selected = select_external_device(args.device)
+            if selected.fingerprint[:12] != args.expect_fingerprint:
+                raise RuntimeError('Drive identity does not match scan follow-up request')
+            reread = select_external_device(args.device)
+            assert_stable_identity(selected, reread)
+            reader = open_device_readonly(selected)
+            try:
+                result = recheck_errors(scan, selected.public(), reader)
+            finally:
+                reader.close()
+            last = select_external_device(args.device)
+            if last.fingerprint != selected.fingerprint:
+                raise RuntimeError('Drive identity changed during targeted recheck; result invalid')
+            print(json.dumps(result, indent=2))
+            return 0  # 0 means command completed, NOT physical repair
         if args.command == 'probe-region':
             if not args.ack_read_stress:
                 raise ValueError('Explicit --ack-read-stress is required for problematic media')

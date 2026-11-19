@@ -1,0 +1,993 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,4 +1,13 @@
+ # Changelog
++
++## 0.3.3b21 — 2026-11-19: live evidence, focused follow-up and Windows boot building
++
++- Qt layout: remove numbered sidebar items, provide separate **Assessment** and **Surface map & throughput** tabs to reduce stacked scrolling; hide drive/workflow setup forms during active jobs and restore them at completion.
++- Add `Address scan errors…`: after a read-only scan, revalidate the same device identity and geometry and reread only previously recorded failed regions. The new CLI `recheck-scan-errors` is strictly read-only, time/read-budgeted and never treats consistent bytes as repaired media.
++- Add Windows Debian WSL ISO builder invoked from the recovery-USB entry. It constructs a fresh kit, copies it into WSL's Linux filesystem, optionally installs Debian build prerequisites with consent, and runs the existing live-build recipe. USB flashing remains separately authorized; actual BIOS/UEFI boot unverified.
++- Add verified staged portable Windows smartctl detection and a consent-based Windows Package Manager setup action. The source repository does not ship an upstream binary; authentic release verification and GPL obligations remain release engineering tasks. USB bridge support remains hardware-dependent.
++- Retain all existing physical repair gates and journal checks. This revision does not prove improved disk lifespan or resolve OS/kernel USB read stalls.
++- Synthetic regression tests and Windows hardware QA checklist extended; native Windows Qt UI, real ISO boot and physical drive writes still require validation.
+ 
+ ## 0.3.3b20 — 2026-11-19: Qt consolidation, boot-media qualification, and UI cleanup
+ 
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,7 @@
+ 
+ **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
+ 
+-> **Release status:** `0.3.3b20` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
++> **Release status:** `0.3.3b21` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+ 
+ The Qt workstation now selects an **automatic, bounded HDD investigation level** from available media and error evidence; it never uses a plan to bypass media-write safety. Expert CLI overrides remain for controlled laboratory work. Read [`docs/CAPACITY_AUTHENTICITY.md`](docs/CAPACITY_AUTHENTICITY.md) for the separate USB capacity-integrity test. See also `docs/STATISTICAL_SECTOR_RECOVERY_B18.md` for the level policies.
+ 
+@@ -64,8 +64,8 @@
+ ### Requirements
+ 
+ - **Python 3.10+** on Windows or Linux (some read-only tools also work on macOS).
+-- **PySide6** for the modern desktop workstation; without it, `gui` can use the Qt interface.
+-- **smartmontools / `smartctl`** strongly recommended for disk-specific health and rotational-media identification. USB enclosures may block its ATA/SAT pass-through; that limitation cannot be fixed by clicking past a warning.
++- **PySide6** for the Qt workstation (`gui` and `qt-gui` both require it). The old Tk GUI is no longer shipped.
++- **smartmontools / `smartctl`** provides disk-specific health and rotational-media identification. A packaged, integrity-checked Windows smartctl can live beside the `.pyz` in `tools/smartmontools/`; if absent, the Qt UI offers a consent-based Windows Package Manager setup. **The source ZIP and test build do not contain a verified smartctl executable**. Some USB bridges still block ATA/SAT passthrough.
+ - A **separate healthy physical drive** with space for a full recovery image and its journal. Do not save a rescue image to the patient disk.
+ - Appropriate OS permissions for raw-drive access. Windows may deny physical writes when a drive is mounted or held open. Do not bypass exclusive access checks.
+ 
+@@ -87,22 +87,22 @@
+ 
+ ```bash
+ python scripts/build_desktop.py --public-beta --no-wheel
+-python dist/DriveRepair-0.3.3b20-public-beta.pyz gui
++python dist/DriveRepair-0.3.3b21-public-beta.pyz gui
+ ```
+ 
+ Install optional `PySide6` in that Python environment if you want the new Qt workstation. The **public-beta** package blocks physical in-place writes. The separate **repair-beta** package may attempt the guided, HDD-only write workflow on sacrificial hardware with all safeguards enabled:
+ 
+ ```bash
+ python scripts/build_desktop.py --repair-beta --no-wheel
+-python dist/DriveRepair-0.3.3b20-repair-beta.pyz qt-gui
++python dist/DriveRepair-0.3.3b21-repair-beta.pyz qt-gui
+ ```
+ 
+ For a CLI image-only example, use a source **regular file** and an unused output path:
+ 
+ ```bash
+-python dist/DriveRepair-0.3.3b20-public-beta.pyz scan-image --image source.img --mode triage --json
+-python dist/DriveRepair-0.3.3b20-public-beta.pyz rescue-image --image source.img --output recovered.img --json
+-python dist/DriveRepair-0.3.3b20-public-beta.pyz rescue-status --output recovered.img --json
++python dist/DriveRepair-0.3.3b21-public-beta.pyz scan-image --image source.img --mode triage --json
++python dist/DriveRepair-0.3.3b21-public-beta.pyz rescue-image --image source.img --output recovered.img --json
++python dist/DriveRepair-0.3.3b21-public-beta.pyz rescue-status --output recovered.img --json
+ ```
+ 
+ A repair-beta build is **not** a recommendation to write to a failing or valuable patient. See [hardware testing requirements](docs/USB_REPAIR_PREFLIGHT_B17.md) and [release gates](docs/RELEASE_STATUS.md).
+@@ -112,6 +112,8 @@
+ ### 1. Diagnose
+ 
+ Select the actual *source* disk; double-check its capacity and masked serial suffix. **Check HDD eligibility** in the Repair workspace is a read-only SMART/protocol probe, not a write authorization. If the bridge hides the real medium or serial, try a compatible SATA pass-through bridge or a controlled offline direct-SATA setup. Do not assume that a manufacturer model label by itself proves which physical disk is attached.
++
++After a quick or full scan with recorded read failures, **Address scan errors…** can perform bounded, read-only rereads of **those saved offsets** without repeating the full-drive scan, or route directly to image rescue. Reread success is not a physical repair or integrity certificate.
+ 
+ The evidence map distinguishes **readable**, **slow**, **failed read requests**, and **untested** regions. Progress is the amount of the selected job completed; **measured read coverage** is the unique portion of the medium observed. These percentages can differ, especially on a quick sample. Failed read requests are not a count of bad sectors.
+ 
+@@ -143,13 +145,13 @@
+ 3. Type exactly the displayed `ERASE <device-id>` confirmation **and check the separate permanent-data-loss acknowledgement box**. Until all three requirements are complete, the Flash button remains disabled and the wizard tells you what is missing.
+ 4. Review the final OS-level confirmation, then flash. The program rereads the written image and checks its bytes. A readback match is **not** proof that the media boots.
+ 
+-**Important:** The repository includes a Debian live-ISO build recipe, **not a qualified, preinstalled universal recovery OS**. On a prepared Debian build host, an advanced operator can build the image using `scripts/build_live_iso.sh`; see [boot recovery documentation](docs/BOOT_RECOVERY.md). A release maintainer may package a built ISO alongside the desktop app:
++**Important:** The repository includes a Debian live-ISO build recipe, **not a qualified, preinstalled universal recovery OS**. On Windows, select **Create recovery USB → Build recovery ISO on this computer**. DriveRepair uses an existing **Debian WSL** distribution, copies its sources into WSL's Linux filesystem, installs the Debian build tools after your explicit approval, and builds an ISO; it **does not install WSL automatically**. If Debian WSL is absent, install it once using `wsl --install -d Debian` in an Administrator terminal and reboot if required. The ISO is not ready for distribution until independently boot-tested. An advanced operator can also run `scripts/build_live_iso.sh` on a prepared Debian Linux host; see [boot recovery documentation](docs/BOOT_RECOVERY.md). A release maintainer may package a built ISO alongside the desktop app:
+ 
+ ```bash
+ python scripts/build_desktop.py --repair-beta --no-wheel --recovery-iso /path/to/DriveRepair-Live-amd64.iso
+ ```
+ 
+-The ISO must still pass independent BIOS/UEFI and device-access tests. The GUI will not invent or silently download an ISO. Do **not** select your patient drive as the USB flash target.
++The ISO must still pass independent BIOS/UEFI and device-access tests. The GUI will not invent or silently download an ISO. The Windows WSL build downloads packages from configured Debian repositories only with operator consent; it does not flash a USB until separately authorized. Do **not** select your patient drive as the USB flash target.
+ 
+ ## Command-line examples
+ 
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b20"
++__version__ = "0.3.3b21"
+diff --git a/desktop/driverepair_desktop/boot_media.py b/desktop/driverepair_desktop/boot_media.py
+--- a/desktop/driverepair_desktop/boot_media.py
++++ b/desktop/driverepair_desktop/boot_media.py
+@@ -13,7 +13,11 @@
+ 
+ _INSTRUCTIONS = '''EXPERIMENTAL / UNVERIFIED BOOT MEDIA
+ 
+-On a clean, isolated Debian trixie x86-64 build VM:
++On Debian Linux OR Windows with a Debian WSL distribution:
++  Windows: in DriveRepair select Create recovery USB → Build on this computer
++  (requires WSL and Debian; WSL builder installs missing Debian build tools).
++
++Manual clean Debian trixie x86-64 build VM:
+   sudo apt install live-build debootstrap xorriso
+   cd driverepair
+   sudo bash scripts/build_live_iso.sh /path/to/fresh/output
+diff --git a/desktop/driverepair_desktop/cli.py b/desktop/driverepair_desktop/cli.py
+--- a/desktop/driverepair_desktop/cli.py
++++ b/desktop/driverepair_desktop/cli.py
+@@ -161,6 +161,14 @@
+         cmd.add_argument("--no-live-dashboard", action="store_true",
+                          help="Reserved for GUI child processes (scan has no TTY dashboard)")
+         cmd.add_argument("--json", action="store_true")
++    recheck = sub.add_parser('recheck-scan-errors',
++                             help='Read-only targeted follow-up using prior scan offsets; never writes patient')
++    recheck.add_argument('--device', required=True)
++    recheck.add_argument('--prior-report', required=True, help='Private JSON from matching previous diagnostic')
++    recheck.add_argument('--expect-fingerprint', required=True)
++    recheck.add_argument('--ack-read-stress', action='store_true',
++                          help='Explicit consent to focused rereads on potentially failing media')
++    recheck.add_argument('--json', action='store_true')
+     # Guided workflow: scan and quarantine unreadable/unstable regions, then
+     # investigate bounded error ranges and refresh only repeatably readable
+     # candidates. No writes on unstable transport or unknown bytes.
+@@ -1926,6 +1934,31 @@
+             from .qtgui import launch
+             launch()
+             return 0
++        if args.command == 'recheck-scan-errors':
++            if not args.ack_read_stress:
++                raise PermissionError('Targeted rereads require --ack-read-stress')
++            from .scan_followup import recheck_errors
++            from pathlib import Path
++            path = Path(args.prior_report)
++            if (path.is_symlink() or not path.is_file() or
++                    path.stat().st_size > 1024 * 1024):
++                raise ValueError('Missing, unsafe or oversized private scan report')
++            scan = json.loads(path.read_text(encoding='utf-8'))
++            selected = select_external_device(args.device)
++            if selected.fingerprint[:12] != args.expect_fingerprint:
++                raise RuntimeError('Drive identity does not match scan follow-up request')
++            reread = select_external_device(args.device)
++            assert_stable_identity(selected, reread)
++            reader = open_device_readonly(selected)
++            try:
++                result = recheck_errors(scan, selected.public(), reader)
++            finally:
++                reader.close()
++            last = select_external_device(args.device)
++            if last.fingerprint != selected.fingerprint:
++                raise RuntimeError('Drive identity changed during targeted recheck; result invalid')
++            print(json.dumps(result, indent=2))
++            return 0  # 0 means command completed, NOT physical repair
+         if args.command == 'probe-region':
+             if not args.ack_read_stress:
+                 raise ValueError('Explicit --ack-read-stress is required for problematic media')
+diff --git a/desktop/driverepair_desktop/dependencies.py b/desktop/driverepair_desktop/dependencies.py
+--- a/desktop/driverepair_desktop/dependencies.py
++++ b/desktop/driverepair_desktop/dependencies.py
+@@ -20,6 +20,24 @@
+         found = None
+     if found:
+         return found
++    # Signed/verified smartmontools can be staged as a local companion tool
++    # during distribution. Never download or execute arbitrary binaries at runtime.
++    if sys.platform == 'win32':
++        import hashlib
++        import json
++        locations = [Path(__file__).resolve().parent / 'vendor' / 'windows',
++                     Path(sys.argv[0]).resolve().parent / 'tools' / 'smartmontools',
++                     Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent)) / 'tools' / 'smartmontools']
++        for folder in locations:
++            binary = folder / 'smartctl.exe'
++            manifest = folder / 'smartctl.sha256'
++            try:
++                if binary.is_file() and manifest.is_file():
++                    digest = manifest.read_text(encoding='ascii').strip().split()[0].lower()
++                    if len(digest) == 64 and hashlib.sha256(binary.read_bytes()).hexdigest() == digest:
++                        return str(binary)
++            except (OSError, ValueError, UnicodeError):
++                continue
+     if sys.platform == 'win32':
+         for root in (os.environ.get('ProgramFiles'), os.environ.get('ProgramFiles(x86)')):
+             if root:
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+--- a/desktop/driverepair_desktop/qtgui.py
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -154,7 +154,7 @@
+         from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+             QLabel, QPushButton, QFrame, QProgressBar, QComboBox, QLineEdit, QFileDialog,
+             QPlainTextEdit, QMessageBox, QCheckBox, QToolButton, QScrollArea, QGridLayout,
+-            QDialog, QListWidget, QSizePolicy, QAbstractItemView, QInputDialog)
++            QDialog, QListWidget, QSizePolicy, QAbstractItemView, QInputDialog, QTabWidget)
+     except ImportError as exc:
+         raise RuntimeError('Qt workstation requires the optional PySide6 package: python -m pip install PySide6') from exc
+ 
+@@ -183,7 +183,12 @@
+         QFrame#statTile {{ background:#1a2d42; border:1px solid #29435c; border-radius:10px; }}
+         QFrame#actionDock {{ background:{C['sidebar']}; border-top:1px solid {C['line']}; }}
+         QScrollArea {{ border:0; }}
+-        QScrollBar:vertical {{ background:{C['bg']}; width:10px; }}
++        QTabWidget::pane {{ background:transparent; border:0; }}
++        QTabBar::tab {{ padding:10px 18px; margin-right:5px; background:#1a2b3e;
++                         border:1px solid #344c61; border-radius:7px; color:#bdd3e6; }}
++        QTabBar::tab:selected {{ background:#1b4647; color:#a5ffe9;
++                                  border-bottom:2px solid #40cfb5; }}
++        QScrollBar:vertical {{ background:{C['bg']}; width:8px; }}
+         QScrollBar::handle:vertical {{background:#344961; border-radius:5px;min-height:32px;}}
+         QLabel {{ background:transparent; }}
+         QLabel#muted {{ color:{C['muted']}; }}
+@@ -584,9 +589,9 @@
+             nav.addWidget(nav_title)
+             self.nav_buttons={}
+             for family, label, key in (
+-                ('check','01   Diagnose','scanquick'),
+-                ('recover','02   Rescue data','rescue'),
+-                ('fix','03   HDD maintenance','carequick')):
++                ('check','Diagnose','scanquick'),
++                ('recover','Rescue data','rescue'),
++                ('fix','HDD maintenance','carequick')):
+                 b=QPushButton(label)
+                 b.setObjectName('nav')
+                 b.setCheckable(True)
+@@ -659,6 +664,7 @@
+             shell_layout.addWidget(main_col,1)
+             scroll=QScrollArea()
+             scroll.setWidgetResizable(True)
++            self._main_scroll=scroll
+             scroll.setFrameShape(QFrame.NoFrame)
+             main_col_layout.addWidget(scroll,1)
+             central=QWidget()
+@@ -769,7 +775,7 @@
+             drive_panel=card(left)
+             pick=QHBoxLayout()
+             drive_panel.addLayout(pick)
+-            ttl=QLabel('01  Select a drive')
++            ttl=QLabel('SOURCE DEVICE')
+             ttl.setStyleSheet('font-weight:700;font-size:15px')
+             pick.addWidget(ttl)
+             pick.addStretch()
+@@ -787,6 +793,14 @@
+                 'No repair or drive writes start here. Available in the Repair workspace.')
+             self.smart_check_button.clicked.connect(lambda:self.probe_selected_media(force=True))
+             tool_row.addWidget(self.smart_check_button)
++            self.enable_smart_button=QPushButton('Enable SMART tools')
++            self.enable_smart_button.setToolTip('Use the packaged SMART component when present, '
++                'or explicitly install upstream smartmontools with Windows Package Manager. '
++                'No device firmware or patient sectors are changed.')
++            self.enable_smart_button.clicked.connect(self.enable_smart_tools)
++            from .dependencies import smartctl_path
++            self.enable_smart_button.setVisible(sys.platform=='win32' and not smartctl_path())
++            tool_row.addWidget(self.enable_smart_button)
+             tool_row.addStretch()
+             self.device_box=QComboBox()
+             self.device_box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+@@ -826,7 +840,7 @@
+             self.device_box.currentIndexChanged.connect(self.update_drive_profile)
+             self.drive_panel=drive_panel.parentWidget()
+             workflow=card(left)
+-            title=QLabel('02  Choose a workflow')
++            title=QLabel('TASK')
+             title.setStyleSheet('font-weight:700;font-size:15px')
+             workflow.addWidget(title)
+             advanced=QLabel('Select an operation. Nothing begins until you press Start.')
+@@ -894,6 +908,29 @@
+             self.drive_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+             workflow.parentWidget().setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+             left.addStretch(1)
++            # Live focus replaces the configuration forms while a scan runs.
++            # This uses the same measured events as the map; no invented score.
++            self.live_card=QFrame()
++            self.live_card.setObjectName('card')
++            live_lay=QVBoxLayout(self.live_card)
++            live_lay.setContentsMargins(18,16,18,16)
++            label=QLabel('LIVE SESSION')
++            label.setObjectName('eyebrow')
++            live_lay.addWidget(label)
++            self.live_device=QLabel('Selected source')
++            self.live_device.setObjectName('section')
++            self.live_device.setWordWrap(True)
++            live_lay.addWidget(self.live_device)
++            self.live_action=QLabel('Scanning without writing to the source')
++            self.live_action.setObjectName('muted')
++            self.live_action.setWordWrap(True)
++            live_lay.addWidget(self.live_action)
++            self.live_stage=MediaPipeline()
++            live_lay.addWidget(self.live_stage)
++            live_lay.addStretch(1)
++            left.insertWidget(0,self.live_card)
++            self.live_card.hide()
++            self.workflow_panel=workflow.parentWidget()
+             map_card=card(right)
+             self.map_card=map_card.parentWidget()
+             self.map_card.hide()  # don't present a vast empty evidence grid before the first scan
+@@ -937,7 +974,7 @@
+             self.speed_graph=RateGraph()
+             map_card.addWidget(self.speed_graph)
+             result_card=card(right)
+-            results_heading=QLabel('03  Results and next action')
++            results_heading=QLabel('FINDINGS & NEXT ACTION')
+             results_heading.setStyleSheet('font-size:15px;font-weight:700;')
+             result_card.addWidget(results_heading)
+             condition_row=QHBoxLayout()
+@@ -1001,10 +1038,27 @@
+             # Actionable outcome precedes dense telemetry. The evidence map
+             # remains available immediately below for operator drilldown.
+             right.insertWidget(0, result_card.parentWidget())
++            self.results_card=result_card.parentWidget()
++            # Visual graph and findings are separate views of ONE job; stacking
++            # both vertically created scrollbars and buried the answer.
++            right.removeWidget(self.map_card)
++            right.removeWidget(self.results_card)
++            self.evidence_tabs=QTabWidget()
++            self.evidence_tabs.setDocumentMode(True)
++            self.evidence_tabs.addTab(self.results_card,'Assessment')
++            self.evidence_tabs.addTab(self.map_card,'Surface map & throughput')
++            right.addWidget(self.evidence_tabs,1)
++            self.evidence_tabs.setCurrentIndex(0)
++            self.recheck_button=QPushButton('Address scan errors…')
++            self.recheck_button.setToolTip('Reuse recorded failed offsets for bounded read-only follow-up, '
++                'or rescue to an image. It will never silently rewrite source data.')
++            self.recheck_button.clicked.connect(self.address_scan_errors)
++            self.recheck_button.setVisible(False)
++            report_row.insertWidget(1,self.recheck_button)
+             self.log=QPlainTextEdit()
+             self.log.setReadOnly(True)
+             self.log.setMaximumBlockCount(4000)
+-            self.log.setVisible(bool(debug_log_path))
++            self.log.setVisible(False)  # Debug enabled does not monopolize the main workspace
+             root.addWidget(self.log)
+             # Persistent action dock: the Start/Stop controls remain visible even
+             # while users inspect the map or scroll through diagnostics.
+@@ -1052,6 +1106,125 @@
+                 self.setWindowTitle(self.windowTitle() + ' [DEBUG]')
+             self.select_goal('scanquick')
+             QTimer.singleShot(100,self.refresh_devices)
++        def enable_smart_tools(self):
++            """Explicit one-time upstream setup, no downloader in the repair engine."""
++            import shutil
++            from .dependencies import smartctl_path
++            if smartctl_path():
++                QMessageBox.information(self,'SMART support available',
++                    'DriveRepair can use the packaged or installed smartctl executable. '
++                    'USB bridge passthrough support still depends on hardware.')
++                self.enable_smart_button.hide()
++                return
++            if sys.platform!='win32' or not shutil.which('winget'):
++                QMessageBox.warning(self,'SMART support missing',
++                    'This distribution has no bundled smartctl. Obtain the official '
++                    'smartmontools release and add its bin directory to PATH, or use '
++                    'a Windows release with the verified component bundled.')
++                return
++            consent=QMessageBox.question(self,'Install SMART support once',
++                'Install the official smartmontools package using Windows Package Manager '
++                '(winget, package ID smartmontools.smartmontools)? '
++                'Windows may request Administrator permission. The installer requires '
++                'network access; no SMART query or disk write begins during installation.',
++                QMessageBox.Yes | QMessageBox.No,QMessageBox.No)
++            if consent!=QMessageBox.Yes:
++                return
++            child=QProcess(self)
++            self._smart_install_proc=child
++            child.setProgram(shutil.which('winget'))
++            child.setArguments(['install','--id','smartmontools.smartmontools','--exact',
++                '--source','winget','--accept-source-agreements',
++                '--accept-package-agreements'])
++            self.enable_smart_button.setEnabled(False)
++            self.details_button.setChecked(True)
++            child.readyReadStandardOutput.connect(lambda:self.note_log(
++                bytes(child.readAllStandardOutput()).decode('utf-8','replace')[-1600:]))
++            child.readyReadStandardError.connect(lambda:self.note_log(
++                bytes(child.readAllStandardError()).decode('utf-8','replace')[-1600:]))
++            def done(code,status):
++                self._smart_install_proc=None
++                self.enable_smart_button.setEnabled(True)
++                installed=bool(smartctl_path())
++                self.enable_smart_button.setVisible(not installed)
++                if installed:
++                    d=self.selected() or {}
++                    self._auto_probe_attempted.discard(d.get('identity_hint'))
++                    self._health_by_device.pop(d.get('identity_hint'),None)
++                    self.probe_selected_media(force=True)
++                QMessageBox.information(self,'SMART setup result',
++                    'SMART executable available; identification will be rechecked.' if installed else
++                    'The installer finished without a discoverable SMART executable. '
++                    'Check the log or restart DriveRepair; physical repair remains unavailable '
++                    'without verified SMART/rotational evidence.')
++            child.finished.connect(done)
++            child.start()
++
++        def set_live_focus(self, running):
++            """One-screen live workbench: no drive/form respecification mid-run."""
++            self.live_card.setVisible(bool(running))
++            self.drive_panel.setVisible(not running)
++            self.workflow_panel.setVisible(not running)
++            if running:
++                d=self._last_good_device or self.selected() or {}
++                self.live_device.setText(str(d.get('model') or 'Source image'))
++                self.live_action.setText('Source identity fixed for this job. '
++                    'Observe the measured map; Stop requests a safe boundary.')
++                self.live_stage.set_policy('unknown',False)
++                self.evidence_tabs.setCurrentIndex(1)
++            elif self._last_job_result:
++                self.evidence_tabs.setCurrentIndex(0)
++
++        def address_scan_errors(self):
++            """Use *existing* scan offsets instead of repeating a surface pass."""
++            result=self._last_job_result
++            d=self.selected()
++            previous=self._last_good_device or {}
++            if (not isinstance(result,dict) or not d or
++                    d.get('identity_hint') != previous.get('identity_hint') or
++                    not isinstance(result.get('read_error_ranges'),list) or
++                    not result['read_error_ranges']):
++                QMessageBox.warning(self,'No reusable scan evidence',
++                    'A matching completed diagnostic with recorded error locations is required. '
++                    'Reconnect the original drive or rescue important data first.')
++                return
++            dialog=QMessageBox(self)
++            dialog.setWindowTitle('Address observed scan errors')
++            dialog.setText(f"{len(result['read_error_ranges'])} recorded problem regions · {d.get('model','source')}")
++            dialog.setInformativeText('Recheck only the recorded failed positions (read-only), '
++                'or copy readable data onto a healthy disk. These are failed read requests, '
++                'not necessarily bad sectors. No source rewrite will be authorized by the scan alone.')
++            probe=dialog.addButton('Recheck failed positions',QMessageBox.AcceptRole)
++            rescue=dialog.addButton('Rescue data to image',QMessageBox.ActionRole)
++            dialog.addButton(QMessageBox.Cancel)
++            dialog.exec()
++            if dialog.clickedButton()==rescue:
++                self.select_goal('rescue')
++                return
++            if dialog.clickedButton()!=probe:
++                return
++            import tempfile
++            from .scan_followup import checked_ranges
++            try:
++                checked_ranges(result,d)
++                private_dir=Path.home()/'.driverepair'/'recheck'
++                private_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
++                fd,path=tempfile.mkstemp(prefix='offsets-',suffix='.json',dir=private_dir)
++                self._recheck_file=path
++                with os.fdopen(fd,'w',encoding='utf-8') as handle:
++                    json.dump(result,handle,separators=(',',':'))
++                try: os.chmod(path,0o600)
++                except OSError: pass
++            except (OSError,ValueError) as exc:
++                QMessageBox.warning(self,'Cannot reuse scan evidence',str(exc))
++                return
++            self._last_good_device=d
++            self._last_job_kind='recheck'
++            self.recheck_button.hide()
++            self.run_command(['recheck-scan-errors','--device',d['id'],
++                '--expect-fingerprint',d['identity_hint'],
++                '--prior-report',path,'--ack-read-stress','--json'])
++
+         def explain_repair_eligibility(self):
+             from .repair_readiness import ui_repair_readiness
+             d=self.selected() or {}
+@@ -1191,6 +1364,10 @@
+             self.smart_check_note.setVisible(family=='fix')
+             self.repair_help.setVisible(family=='fix')
+             self.choice_changed()
++            if not (self.proc and self.proc.state()!=QProcess.NotRunning):
++                self.set_live_focus(False)
++                self.evidence_tabs.setCurrentIndex(0)
++                self._main_scroll.verticalScrollBar().setValue(0)
+         def check_stall(self):
+             if (self.proc and self.proc.state()!=QProcess.NotRunning
+                     and self._last_progress_at is not None
+@@ -1671,10 +1848,10 @@
+                 choose.setWindowTitle('DriveRepair recovery image not installed')
+                 choose.setText('No structurally complete DriveRepair live ISO was found.')
+                 choose.setInformativeText('A complete DriveRepair live ISO (kernel, initramfs, squashfs and BIOS/UEFI entries) must be built or included with the release. A 32 MiB placeholder with ISO markers is not enough. '
+-                    'On Windows, export the build kit for a Debian build host. '
++                    'On Windows, DriveRepair can build with an installed Debian WSL environment. '
+                     'If you already have a hybrid ISO, select it once; it will be preselected next time.')
+                 browse=choose.addButton('Use existing ISO…',QMessageBox.AcceptRole)
+-                build=choose.addButton('Build ISO (Linux)',QMessageBox.ActionRole)
++                build=choose.addButton('Build recovery ISO on this computer',QMessageBox.ActionRole)
+                 export=choose.addButton('Export build kit',QMessageBox.ActionRole)
+                 choose.addButton(QMessageBox.Cancel)
+                 choose.exec()
+@@ -1947,6 +2124,54 @@
+                 'build the ISO, then verify BIOS and UEFI boot and patient read-only behavior. '
+                 'The builder does not automatically write USB media.')
+ 
++        def build_iso_windows(self):
++            """Build Debian live recovery ISO on Windows in preinstalled WSL2."""
++            from .windows_iso_build import require_debian_wsl, prepare_wsl_build
++            import tempfile
++            try:
++                require_debian_wsl()
++            except RuntimeError as exc:
++                QMessageBox.information(self,'One-time Debian WSL setup required',str(exc)+
++                    '\n\nAfter Debian is installed, run in an elevated Debian WSL terminal: '
++                    'apt update && apt install live-build debootstrap xorriso. '
++                    'Then click Create recovery USB again. No installation was started.')
++                return
++            folder=QFileDialog.getExistingDirectory(self,'Choose empty destination for newly built ISO')
++            if not folder:
++                return
++            answer=QMessageBox.question(self,'Build genuine recovery ISO on Windows',
++                'DriveRepair will use the installed Debian WSL environment as root to build '
++                'a hybrid Linux recovery ISO. If Debian build tools are missing, '
++                'it will install them from configured Debian repositories (network access needed). '
++                'No USB disk will be erased by this build. The output must still pass '
++                'BIOS/UEFI boot qualification. Continue?',QMessageBox.Yes | QMessageBox.No,QMessageBox.No)
++            if answer!=QMessageBox.Yes:
++                return
++            self._iso_build_temp=tempfile.TemporaryDirectory(prefix='driverepair-wsl-')
++            try:
++                args,info=prepare_wsl_build(Path(__file__).resolve().parents[2],
++                    self._iso_build_temp.name,folder)
++            except (OSError,RuntimeError,ValueError) as exc:
++                self._iso_build_temp.cleanup()
++                self._iso_build_temp=None
++                QMessageBox.warning(self,'Cannot prepare Debian WSL builder',str(exc))
++                return
++            self._iso_output_folder=Path(folder)
++            child=QProcess(self)
++            self.iso_proc=child
++            child.setProgram(args[0])
++            child.setArguments(args[1:])
++            child.readyReadStandardOutput.connect(lambda:self.note_log(
++                bytes(child.readAllStandardOutput()).decode('utf-8','replace')[-1800:]))
++            child.readyReadStandardError.connect(lambda:self.note_log(
++                bytes(child.readAllStandardError()).decode('utf-8','replace')[-1800:]))
++            child.finished.connect(lambda code,status:self.iso_finished(code))
++            self.details_button.setChecked(True)
++            self.note_log('Debian WSL live-build started. Only new output files are written; '
++                'boot and physical USB tests are still required.')
++            child.start()
++            self.update_action_state()
++
+         def build_iso(self):
+             """Opt-in Debian live-build job, no USB device writing.
+ 
+@@ -1954,11 +2179,12 @@
+             not be sold as distributable recovery media.
+             """
+             import shutil
++            if sys.platform=='win32':
++                self.build_iso_windows()
++                return
+             if sys.platform!='linux' or not hasattr(os,'geteuid') or os.geteuid()!=0:
+-                QMessageBox.information(self,'Build requires isolated Debian Linux VM',
+-                    'Build ISO requires a prepared Debian trixie x86-64 build environment with root '
+-                    'and live-build/debootstrap. On Windows, choose Bootable media builder to export '
+-                    'the complete build kit. No USB drive is written by either action.')
++                QMessageBox.warning(self,'Unsupported host',
++                    'Use prepared Debian Linux or Windows with Debian WSL to build this live ISO.')
+                 return
+             if not all(shutil.which(tool) for tool in ('lb','debootstrap','sha256sum')):
+                 QMessageBox.warning(self,'Missing Debian build tools',
+@@ -2027,6 +2253,8 @@
+                 'The builder exited with '+str(code)+'. Check Expert log and verify checksum, BIOS, '
+                 'UEFI, device enumeration, no-automount and read-only behavior. '
+                 'An ISO output is NOT a validated bootable recovery product.')
++            if code == 0 and image and not self._batch_running:
++                QTimer.singleShot(0,self.flash_boot_usb)
+ 
+         def _keep_host_awake(self, enabled):
+             """Best effort Windows OS system-sleep inhibition for an active queue."""
+@@ -2565,6 +2793,7 @@
+             self._last_io_offset=0
+             self._last_io_length=0
+             self._last_error=None
++            self.set_live_focus(True)
+             self.proc=QProcess(self)
+             self.proc.setProgram(cli_prefix()[0])
+             self.proc.setArguments(cli_prefix()[1:]+args)
+@@ -2735,6 +2964,12 @@
+             self.phase_caption.setText('Worker exited · final outcome shown below')
+             self.proc=None
+             self._stop_requested=False
++            self.set_live_focus(False)
++            prior_path=getattr(self,'_recheck_file',None)
++            if prior_path:
++                try: Path(prior_path).unlink(missing_ok=True)
++                except OSError: pass
++                self._recheck_file=None
+             if exit_code==0 and self._final_stdout.strip():
+                 self.progress.setValue(1000)
+                 self.phase_progress.setValue(1000)
+@@ -2898,6 +3133,20 @@
+                 self.metric_labels['done'].setText(f'{verified} / {requested} sample passes')
+                 self.metric_labels['errors'].setText(str(max(0,requested-verified)))
+             self.copy_summary_button.setEnabled(True)
++            dev=self.selected() or {}
++            scanned=self._last_good_device or {}
++            self.recheck_button.setVisible(
++                self._last_job_kind in {'scanquick','scanfull','resume'}
++                and bool(result.get('read_error_ranges'))
++                and dev.get('identity_hint') == scanned.get('identity_hint'))
++            if self._last_job_kind=='recheck':
++                good=len(result.get('repeatably_readable_ranges') or [])
++                remaining=len(result.get('unresolved_ranges') or [])
++                self.result.setText(f'Focused reread: {good} consistent · {remaining} unresolved')
++                self.explain.setText('Rechecked recorded failing positions without another full-drive scan. '
++                    'No patient bytes were written and repeatable data is not certified original.')
++                self.next_action.setText('Rescue readable data to a new image and inspect any remaining errors. '
++                    'Only verified rotational HDDs may separately request authorized maintenance.')
+             if self._last_job_kind=='capacity':
+                 pass  # keep capacity-specific advice
+             elif self._pending_resume:
+@@ -2925,6 +3174,8 @@
+                 self._batch_current=None
+                 self._stall_terminated=False
+                 QTimer.singleShot(0,self._launch_next_batch)
++            self.evidence_tabs.setCurrentIndex(0)
++            self._main_scroll.verticalScrollBar().setValue(0)
+             self.update_action_state()
+         def closeEvent(self, event):
+             if self.flash_proc and self.flash_proc.state()!=QProcess.NotRunning:
+diff --git a/desktop/driverepair_desktop/scan_followup.py b/desktop/driverepair_desktop/scan_followup.py
+new file mode 100644
+--- /dev/null
++++ b/desktop/driverepair_desktop/scan_followup.py
+@@ -0,0 +1,59 @@
++"""Read-only follow-up from a completed scan; no repeat full-surface sweep.
++
++Scan findings are hints, never write authority and never original data. A
++repeatable read is not a checksum-verified recovered file or repaired medium.
++"""
++from __future__ import annotations
++
++from .guided_repair import investigate_failed_ranges
++
++
++def checked_ranges(scan: dict, device: dict, *, maximum: int = 32) -> list[dict]:
++    if not isinstance(scan, dict) or not isinstance(device, dict):
++        raise ValueError('Missing previous scan and current device identity')
++    scanned = scan.get('device')
++    if not isinstance(scanned, dict) or scanned.get('identity_hint') != device.get('identity_hint'):
++        raise ValueError('Prior scan belongs to another device. No reads were started')
++    size = int(device.get('size_bytes') or 0)
++    sector = int(device.get('sector_size') or 0)
++    if (size <= 0 or sector <= 0 or size % sector or
++            scan.get('device_size_bytes') != size or scan.get('logical_sector_bytes') != sector):
++        raise ValueError('Geometry changed since scan; cannot reuse suspect offsets')
++    candidates = scan.get('read_error_ranges')
++    if not isinstance(candidates, list) or len(candidates) > 4096 or not candidates:
++        raise ValueError('No bounded failed ranges in the prior scan; do not invent repair targets')
++    accepted: list[dict] = []
++    for raw in candidates[:maximum]:
++        if not isinstance(raw, dict):
++            raise ValueError('Invalid prior scan range')
++        off, length = raw.get('offset'), raw.get('length')
++        if (type(off) is not int or type(length) is not int or off < 0 or length < sector or
++                off % sector or length % sector or off + length > size):
++            raise ValueError('Malformed or unaligned failed range')
++        accepted.append({'offset': off, 'length': length})
++    return accepted
++
++
++def recheck_errors(scan: dict, device: dict, reader, *, max_reads: int = 96,
++                   max_elapsed_seconds: float = 75.0) -> dict:
++    ranges = checked_ranges(scan, device)
++    info = investigate_failed_ranges(reader, ranges,
++        sector=int(device['sector_size']), max_regions=len(ranges),
++        max_reads=max_reads, max_elapsed_seconds=max_elapsed_seconds,
++        max_probe_bytes=65536)
++    unresolved = info['unresolved_regions']
++    # Never use a success status for remediation: only a read-only follow-up.
++    return {'status': 'read_only_suspect_recheck_completed',
++            'device': {'identity_hint': device['identity_hint'], 'model': device.get('model')},
++            'scan_regions_considered': len(ranges),
++            'original_read_failures': scan.get('read_error_chunks'),
++            'repeatably_readable_ranges': info['consistent_regions'],
++            'unresolved_ranges': unresolved,
++            'read_calls': info['read_calls'],
++            'remaining_unchecked': bool(info.get('budget_exhausted')) or
++                                   bool(scan.get('read_error_ranges_truncated')),
++            'patient_writes': 0,
++            'verified_files': 0,
++            'message': 'Rechecked prior failed addresses without repeating the full scan. '
++                       'No source sectors were repaired or written. To save data use Rescue to image; '
++                       'repeatability does not prove original bytes.'}
+diff --git a/desktop/driverepair_desktop/vendor/windows/README.md b/desktop/driverepair_desktop/vendor/windows/README.md
+new file mode 100644
+--- /dev/null
++++ b/desktop/driverepair_desktop/vendor/windows/README.md
+@@ -0,0 +1,16 @@
++# Offline Windows SMART component
++
++This directory is a deployment slot for `smartctl.exe` from the **upstream
++smartmontools** project. DriveRepair includes read-only ATA/SAT/NVMe SMART
++integration, but cannot manufacture missing controller passthrough capabilities.
++
++To ship SMART as a standard part of a Windows release, obtain the authentic
++smartmontools Windows executable from the official upstream release, verify the
++publisher-signed archive, stage it using `scripts/vendor_smartctl.py`, and
++include the companion `dist/tools/smartmontools` directory alongside the
++DriveRepair `.pyz` launcher. The launcher checks SHA-256 on every discovery.
++
++**A local SHA-256 file is an integrity check, not an upstream signature.**
++Verify the original distribution independently and comply with smartmontools'
++GPL source/license distribution obligations. No arbitrary code is fetched or
++executed during DriveRepair's recovery or repair workflow.
+diff --git a/desktop/driverepair_desktop/windows_iso_build.py b/desktop/driverepair_desktop/windows_iso_build.py
+new file mode 100644
+--- /dev/null
++++ b/desktop/driverepair_desktop/windows_iso_build.py
+@@ -0,0 +1,103 @@
++"""Prepare an explicit, isolated Debian-WSL live ISO build from Windows.
++
++Only builds ordinary files. Never chooses, formats, or writes a USB disk.
++Requires an *existing* Debian WSL distribution; no implicit installation or
++privilege escalation is performed by the preparation function. The caller
++must obtain user consent before starting the root WSL build process.
++"""
++from __future__ import annotations
++
++import os
++from pathlib import Path
++import subprocess
++import sys
++import zipfile
++
++
++def wsl_path(path: str | Path, *, runner=subprocess.run) -> str:
++    """Convert an absolute Windows filesystem path without shell interpolation."""
++    value = str(Path(path).resolve())
++    done = runner(['wsl.exe', '-d', 'Debian', '--exec', 'wslpath', '-u', value],
++                  capture_output=True, text=True, timeout=15, check=False)
++    if done.returncode or not done.stdout.strip().startswith('/'):
++        raise RuntimeError('Debian WSL could not resolve the Windows build path: '
++                           + (done.stderr or '').strip()[:220])
++    return done.stdout.strip()
++
++
++def require_debian_wsl(*, runner=subprocess.run) -> None:
++    if sys.platform != 'win32':
++        raise RuntimeError('Debian WSL ISO building is only for Windows hosts')
++    try:
++        done = runner(['wsl.exe', '--list', '--quiet'], capture_output=True,
++                      timeout=18, check=False)
++    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
++        raise RuntimeError('WSL is unavailable. Install WSL and Debian first; no USB was written.') from exc
++    # Windows WSL may output UTF-16LE (even without an explicit encoding flag).
++    content = done.stdout if isinstance(done.stdout, bytes) else str(done.stdout).encode()
++    decoded = content.decode('utf-16-le', 'ignore') if b'\x00' in content else content.decode('utf-8', 'ignore')
++    if done.returncode or 'Debian' not in [line.strip().strip('\x00') for line in decoded.splitlines()]:
++        raise RuntimeError('Debian WSL distribution not installed. Run "wsl --install -d Debian" '
++                           'from an administrator terminal; reboot if prompted. No installation was started.')
++
++
++# This static shell script copies the checkout to native WSL storage before
++# running live-build. Building directly on /mnt/c may break Unix permissions,
++# device nodes, symlinks and filesystem assumptions of debootstrap.
++_WSL_BUILD_SCRIPT = r'''set -euo pipefail
++SOURCE_DIR="$1"
++OUTPUT_DIR="$2"
++if [[ -z "$SOURCE_DIR" || -z "$OUTPUT_DIR" || "$OUTPUT_DIR" == / ]]; then
++  echo 'Unsafe WSL build arguments' >&2; exit 2
++fi
++if [[ "$(id -u)" != 0 ]]; then echo 'Debian WSL root required' >&2; exit 2; fi
++if ! command -v lb >/dev/null || ! command -v debootstrap >/dev/null || ! command -v xorriso >/dev/null; then
++  echo 'Installing Debian live-build prerequisites in isolated WSL distro (approved by operator).' >&2
++  apt-get update
++  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends live-build debootstrap xorriso
++fi
++WORK="$(mktemp -d /tmp/driverepair-wsl-build.XXXXXXXX)"
++trap 'echo "Build workspace retained for review: $WORK"' EXIT
++cp -a -- "$SOURCE_DIR/driverepair" "$WORK/driverepair"
++mkdir -- "$WORK/output"
++bash "$WORK/driverepair/scripts/build_live_iso.sh" "$WORK/output"
++shopt -s nullglob
++artifacts=("$WORK/output"/*.iso "$WORK/output"/*.sha256)
++if (( ${#artifacts[@]} < 2 )); then echo 'ISO or checksum missing' >&2; exit 4; fi
++for entry in "${artifacts[@]}"; do
++  name="${entry##*/}"
++  if [[ -e "$OUTPUT_DIR/$name" ]]; then echo 'Refusing to overwrite existing ISO: '$name >&2; exit 5; fi
++done
++cp -- "${artifacts[@]}" "$OUTPUT_DIR/"
++echo 'STRUCTURAL ISO VALIDATION PASSED. BIOS/UEFI actual boot remains unverified.'
++'''
++
++
++def prepare_wsl_build(repo: str | Path | None, staging: str | Path, destination: str | Path,
++                      *, runner=subprocess.run) -> tuple[list[str], dict]:
++    """Create kit and WSL invocation. Destination must already exist and be empty."""
++    from .boot_media import export_build_kit
++    stage = Path(staging).resolve()
++    dest = Path(destination).resolve()
++    if not dest.is_dir() or any(dest.iterdir()):
++        raise ValueError('Select an empty existing destination folder (no files may be overwritten)')
++    if stage == dest or dest.is_relative_to(stage):
++        raise ValueError('Build staging directory and output destination must be separate')
++    stage.mkdir(parents=True, exist_ok=True)
++    kit = stage / 'driverepair-build.zip'
++    if kit.exists():
++        raise ValueError('Choose a fresh build staging directory')
++    export_build_kit(repo, kit)
++    with zipfile.ZipFile(kit) as z:
++        for item in z.infolist():
++            # Archive is authored by DriveRepair; still enforce containment.
++            parts = Path(item.filename).parts
++            if not parts or parts[0] != 'driverepair' or '..' in parts or item.filename.startswith('/'):
++                raise ValueError('Unsafe build-kit member')
++        z.extractall(stage)
++    stage_wsl = wsl_path(stage, runner=runner)
++    out_wsl = wsl_path(dest, runner=runner)
++    args = ['wsl.exe', '-d', 'Debian', '-u', 'root', '--exec',
++            'bash', '-c', _WSL_BUILD_SCRIPT, 'driverepair-wsl-build', stage_wsl, out_wsl]
++    return args, {'staging': str(stage), 'destination': str(dest), 'debian_root': True,
++                  'downloads': False, 'writes_physical_media': False}
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b20"
++version = "0.3.3b21"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_b21_scan_followup_wsl.py b/desktop/tests/test_b21_scan_followup_wsl.py
+new file mode 100644
+--- /dev/null
++++ b/desktop/tests/test_b21_scan_followup_wsl.py
+@@ -0,0 +1,78 @@
++import json
++import tempfile
++import unittest
++from pathlib import Path
++from unittest.mock import patch
++
++from driverepair_desktop.scan_followup import checked_ranges, recheck_errors
++from driverepair_desktop.windows_iso_build import wsl_path, require_debian_wsl
++from driverepair_desktop.dependencies import smartctl_path
++
++DEVICE = {'identity_hint': '123456789abc', 'model': 'Synthetic HDD',
++          'size_bytes': 16*1024, 'sector_size': 512}
++SCAN = {'device': DEVICE.copy(), 'device_size_bytes': DEVICE['size_bytes'],
++        'logical_sector_bytes':512, 'read_error_chunks':1,
++        'read_error_ranges':[{'offset':1024, 'length':1024}]}
++
++class Reader:
++    def __init__(self): self.calls=[]
++    def read_at(self, offset, count):
++        self.calls.append((offset,count))
++        return b'G'*count
++
++class ScanFollowupTests(unittest.TestCase):
++    def test_unchanged_fingerprint_required(self):
++        bad=dict(DEVICE, identity_hint='wrong')
++        with self.assertRaisesRegex(ValueError, 'another device'):
++            checked_ranges(SCAN,bad)
++
++    def test_geometry_must_match(self):
++        with self.assertRaisesRegex(ValueError, 'Geometry'):
++            checked_ranges(SCAN,dict(DEVICE,size_bytes=8192))
++
++    def test_rejects_malformed_offset(self):
++        with self.assertRaisesRegex(ValueError, 'Malformed'):
++            checked_ranges(dict(SCAN, read_error_ranges=[{'offset':1025,'length':512}]),DEVICE)
++
++    def test_only_prior_failed_ranges_are_read_without_writes(self):
++        reader=Reader()
++        report=recheck_errors(SCAN,DEVICE,reader,max_reads=8)
++        self.assertEqual(report['status'],'read_only_suspect_recheck_completed')
++        self.assertEqual(report['patient_writes'],0)
++        self.assertEqual(report['verified_files'],0)
++        self.assertTrue(reader.calls)
++        self.assertTrue(all(1024 <= start < 2048 for start,length in reader.calls))
++        self.assertEqual(len(report['repeatably_readable_ranges']),1)
++
++    def test_recheck_does_not_claim_full_scan_or_repaired_lifespan(self):
++        result=recheck_errors(SCAN,DEVICE,Reader())
++        self.assertIn('No source sectors were repaired',result['message'])
++
++class WSLTests(unittest.TestCase):
++    def test_wsl_path_no_shell(self):
++        class Response:
++            returncode=0
++            stdout='/mnt/c/drive/output\n'
++            stderr=''
++        seen=[]
++        def fake(cmd,**kwargs):
++            seen.append(cmd); return Response()
++        result=wsl_path(Path('/tmp/drive-output'),runner=fake)
++        self.assertEqual(result,'/mnt/c/drive/output')
++        self.assertEqual(seen[0][:5],['wsl.exe','-d','Debian','--exec','wslpath'])
++
++    def test_distro_not_found(self):
++        class Response:
++            returncode=0
++            stdout='Ubuntu\n'
++        with patch('driverepair_desktop.windows_iso_build.sys.platform','win32'):
++            with self.assertRaisesRegex(RuntimeError,'Debian WSL distribution'):
++                require_debian_wsl(runner=lambda *a,**k:Response())
++
++class BundledSmartTests(unittest.TestCase):
++    def test_missing_bundled_binary_not_falsely_available(self):
++        with patch('driverepair_desktop.dependencies.shutil.which',return_value=None), \
++             patch('driverepair_desktop.dependencies.sys.platform','linux'):
++            self.assertIsNone(smartctl_path())
++
++if __name__=='__main__': unittest.main()
+diff --git a/docs/B21_WINDOWS_QT_RECOVERY_AND_BOOT_QA.md b/docs/B21_WINDOWS_QT_RECOVERY_AND_BOOT_QA.md
+new file mode 100644
+--- /dev/null
++++ b/docs/B21_WINDOWS_QT_RECOVERY_AND_BOOT_QA.md
+@@ -0,0 +1,32 @@
++# b21: Native Windows QA and release gates
++
++## Changes and verification boundaries
++
++The Qt workstation now has tabbed findings/visualization, a live-only setup collapse, a targeted error recheck and a Windows Debian WSL build path. Automated tests use synthetic readers and process mocks; **there is no claim of real-drive repair, boot success, or new neural reconstruction.**
++
++### Native UI / layout (test 100%, 125%, 150%, 200% display scaling)
++
++1. Run GUI at 1280×720, 1366×768, 1920×1080; assert no indispensable control is clipped, and no unnecessary main-panel scrolling at normal scale. A scrollbar may remain at high DPI/accessibility scaling rather than hiding controls.
++2. In Diagnose, before Start, inspect the compact source, task and assessment. Start a sacrificial read-only quick scan. Source/task setup must disappear while the active session and **Surface map & throughput** tab appear. Stop must remain visible. After completion, source/task selection returns and **Assessment** opens automatically.
++3. After a scan with recorded failures, `Address scan errors…` must show (a) reuse known bad read addresses with no whole-disk rescan, or (b) rescue-to-image. Confirm device disconnect/reorder invalidates the stored scan identity and blocks the action. Verify the CLI never opens a write handle.
++4. No fabricated coverage: unique successful read coverage may differ from whole-job progress; zero errors is not a lifetime estimate.
++5. Test out-of-date/empty scan reports, no SMART, USB transient removal and protected folder paths. Confirm no GUI freeze or command-line argument injection.
++
++### SMART on Windows / external USB
++
++1. Supply vetted official `smartctl.exe` and accompanying `smartctl.sha256` in `tools/smartmontools` adjacent to `.pyz`; confirm it is found without PATH entries. Replace 1 byte and confirm manifest check fails closed.
++2. With no companion and no installed tool, **Enable SMART tools** must request consent and run Windows Package Manager in a nonblocking process. No silent executable download or unauthorized privilege action is allowed.
++3. Test SATA direct connection, USB-SAT bridge, NVMe USB bridge, no-passthrough bridge, disconnected drive and serial-less drive. Verify physical repair remains unavailable when media identification, SMART, stable serial, exclusive access or journal preconditions are missing. Do NOT bypass the gate to manufacture a passing test.
++4. Respect upstream smartmontools GPL license and corresponding-source requirements when shipping binary packages. A local checksum alone does not establish authenticity.
++
++### Create recovery USB on Windows
++
++1. `wsl -l -v` must show Debian (WSL2). If missing, the GUI must give the one-time Windows setup instruction and never silently install it.
++2. With explicit operator consent, build on Debian WSL using the native Linux filesystem and check `lb`, debootstrap and xorriso. Confirm package installation happens only after approval. Use a brand-new empty destination folder. Re-running must not overwrite an existing ISO.
++3. Confirm produced image has valid ISO9660/El Torito structures, a live kernel, initramfs, squashfs and BIOS/UEFI boot entries. Confirm the SHA-256 file. **These file checks do not prove bootability.**
++4. Boot image in both SeaBIOS and OVMF UEFI VMs. Confirm GUI launches, disks enumerate, no patient is auto-mounted, and live recovery writes only to a distinct destination.
++5. Flash only to a disposable USB with independent backup; type the exact device confirmation and select the conspicuous erase acknowledgement. Read back ISO bytes; then boot on physical BIOS and UEFI machines. Review Secure Boot separately; do not promise compatibility without tests.
++
++### Hardware recovery qualification
++
++Use sacrificial CMR, SMR, SSD, NVMe USB, and generic flash media. Record model, firmware, interface, SMART before/after, read-error locations, bytes recovered to a separate destination, repeat-read hashes, bridge disconnects, job time and whether a physical write occurred. Confirm weak-region HDD maintenance only after verified rotational media, backup, per-device consent, separate durable journal, locks, identity and postverify. Validate power interruption recovery **only on nonvaluable sacrificial disks**.
+diff --git a/scripts/vendor_smartctl.py b/scripts/vendor_smartctl.py
+new file mode 100644
+--- /dev/null
++++ b/scripts/vendor_smartctl.py
+@@ -0,0 +1,38 @@
++#!/usr/bin/env python3
++"""Stage an operator-supplied upstream smartctl.exe for offline DriveRepair builds.
++
++Acquire smartmontools from its official publisher, verify upstream PGP
++signature/provenance *before* using this script, and include GPLv2 compliance
++materials when distributing. We do not fetch or install executable code at
++runtime. Output folder is a companion to .pyz: dist/tools/smartmontools/.
++"""
++import argparse
++import hashlib
++import shutil
++from pathlib import Path
++
++
++def stage(executable: Path, dest: Path) -> Path:
++    if executable.name.lower() != 'smartctl.exe' or not executable.is_file():
++        raise ValueError('Provide an extracted official smartctl.exe; no installer EXE')
++    if dest.exists():
++        raise FileExistsError('Destination exists; staged executable must not be overwritten')
++    dest.mkdir(parents=True, exist_ok=False)
++    dst = dest / 'smartctl.exe'
++    shutil.copyfile(executable, dst)
++    (dest / 'smartctl.sha256').write_text(hashlib.sha256(dst.read_bytes()).hexdigest() + '  smartctl.exe\n')
++    (dest / 'SOURCE_AND_LICENSE.txt').write_text(
++        'smartmontools / smartctl (GPL-2.0-or-later, upstream documentation controls).\n'
++        'Official upstream: https://github.com/smartmontools/smartmontools\n'
++        'The distributor must supply the corresponding source/license notices and verify\n'
++        'upstream binary origin/signature before shipping. Local SHA-256 only detects\n'
++        'alteration after staging; it does NOT authenticate the publisher.\n')
++    return dst
++
++
++if __name__ == '__main__':
++    p = argparse.ArgumentParser(description=__doc__)
++    p.add_argument('official_smartctl_exe', type=Path)
++    p.add_argument('--destination', type=Path, default=Path('dist/tools/smartmontools'))
++    args = p.parse_args()
++    print(stage(args.official_smartctl_exe, args.destination))

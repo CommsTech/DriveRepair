@@ -20,6 +20,23 @@ def smartctl_path() -> str | None:
         found = None
     if found:
         return found
+    # Signed/verified smartmontools can be staged as a local companion tool
+    # during distribution. Never download or execute arbitrary binaries at runtime.
+    if sys.platform == 'win32':
+        import hashlib
+        locations = [Path(__file__).resolve().parent / 'vendor' / 'windows',
+                     Path(sys.argv[0]).resolve().parent / 'tools' / 'smartmontools',
+                     Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent)) / 'tools' / 'smartmontools']
+        for folder in locations:
+            binary = folder / 'smartctl.exe'
+            manifest = folder / 'smartctl.sha256'
+            try:
+                if binary.is_file() and manifest.is_file():
+                    digest = manifest.read_text(encoding='ascii').strip().split()[0].lower()
+                    if len(digest) == 64 and hashlib.sha256(binary.read_bytes()).hexdigest() == digest:
+                        return str(binary)
+            except (OSError, ValueError, UnicodeError):
+                continue
     if sys.platform == 'win32':
         for root in (os.environ.get('ProgramFiles'), os.environ.get('ProgramFiles(x86)')):
             if root:

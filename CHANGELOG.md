@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.3b21 — 2026-11-19: live evidence, focused follow-up and Windows boot building
+
+- Qt layout: remove numbered sidebar items, provide separate **Assessment** and **Surface map & throughput** tabs to reduce stacked scrolling; hide drive/workflow setup forms during active jobs and restore them at completion.
+- Add `Address scan errors…`: after a read-only scan, revalidate the same device identity and geometry and reread only previously recorded failed regions. The new CLI `recheck-scan-errors` is strictly read-only, time/read-budgeted and never treats consistent bytes as repaired media.
+- Add Windows Debian WSL ISO builder invoked from the recovery-USB entry. It constructs a fresh kit, copies it into WSL's Linux filesystem, optionally installs Debian build prerequisites with consent, and runs the existing live-build recipe. USB flashing remains separately authorized; actual BIOS/UEFI boot unverified.
+- Add verified staged portable Windows smartctl detection and a consent-based Windows Package Manager setup action. The source repository does not ship an upstream binary; authentic release verification and GPL obligations remain release engineering tasks. USB bridge support remains hardware-dependent.
+- Retain all existing physical repair gates and journal checks. This revision does not prove improved disk lifespan or resolve OS/kernel USB read stalls.
+- Synthetic regression tests and Windows hardware QA checklist extended; native Windows Qt UI, real ISO boot and physical drive writes still require validation.
+
 ## 0.3.3b20 — 2026-11-19: Qt consolidation, boot-media qualification, and UI cleanup
 
 - Remove the old Tk desktop runtime from the distributed source. Both `gui` and `qt-gui` now launch only PySide6/Qt; `gui-legacy` is a compatibility alias that also opens Qt, not Tk. Python CLI operations remain independently available.

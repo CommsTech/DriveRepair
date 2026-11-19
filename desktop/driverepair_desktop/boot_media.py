@@ -13,7 +13,11 @@ import zipfile
 
 _INSTRUCTIONS = '''EXPERIMENTAL / UNVERIFIED BOOT MEDIA
 
-On a clean, isolated Debian trixie x86-64 build VM:
+On Debian Linux OR Windows with a Debian WSL distribution:
+  Windows: in DriveRepair select Create recovery USB → Build on this computer
+  (requires WSL and Debian; WSL builder installs missing Debian build tools).
+
+Manual clean Debian trixie x86-64 build VM:
   sudo apt install live-build debootstrap xorriso
   cd driverepair
   sudo bash scripts/build_live_iso.sh /path/to/fresh/output
