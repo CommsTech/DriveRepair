@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .surface_map import SurfaceCoverage
 from .release_policy import PUBLIC_BETA_IMAGE_ONLY, REPAIR_BETA_GUARDED
+from .rates import choose_speed
 from .workstation_ui import (
     WORKSPACES, can_start, operation_impact, operation_family, operator_summary,
     repair_presentation, drive_inspection_text,
@@ -2326,6 +2327,17 @@ def launch():
             if event.get('speed_bps') is not None:
                 self.metric_labels['rate'].setText(display_size(event['speed_bps'])+'/s')
                 self.speed_graph.ingest(event['speed_bps'])
+            else:
+                probe_total=int(event.get('probe_total') or 0)
+                probe_index=int(event.get('probe_index') or 0)
+                # A job that finishes inside one rate-window sample has no
+                # recent speed; show the measured average instead of a stale
+                # "Measuring…" placeholder.
+                shown,is_average=choose_speed(None,event.get('average_speed_bps'),
+                                              finished=bool(probe_total) and probe_index>=probe_total)
+                if shown:
+                    self.metric_labels['rate'].setText(
+                        display_size(shown)+('/s avg' if is_average else '/s'))
             if event.get('average_speed_bps') is not None:
                 self.metric_labels['avg'].setText(display_size(event['average_speed_bps'])+'/s')
             if phase!='INVESTIGATING':

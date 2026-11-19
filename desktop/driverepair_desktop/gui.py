@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .rescue_display import RescueDisplayState, format_duration
 from .console_ui import fmt_bytes
+from .rates import choose_speed
 from .preferences import load_preferences, save_preferences
 from .media_profiles import identify_profile
 from .release_policy import PUBLIC_BETA_IMAGE_ONLY, IN_PLACE_WRITE_COMMANDS
@@ -672,8 +673,13 @@ def launch() -> None:
             error_count = int(event.get('read_error_chunks') or 0)
             errors_var.set(f'{error_count} failed region(s)' if error_count else '0 observed')
             speed_bps = event.get('speed_bps')
-            if speed_bps is not None and float(speed_bps) > 0:
-                speed_var.set(f'{fmt_bytes(int(speed_bps))}/s')
+            probe_total = int(event.get('probe_total') or 0)
+            probe_index = int(event.get('probe_index') or 0)
+            finished = bool(probe_total) and probe_index >= probe_total
+            shown, is_average = choose_speed(speed_bps, event.get('average_speed_bps'),
+                                             finished=finished)
+            if shown:
+                speed_var.set(f'{fmt_bytes(int(shown))}/s' + (' (avg)' if is_average else ''))
             elif phase == 'INVESTIGATING':
                 speed_var.set('Targeted retries')
             elif speed_bps is None:

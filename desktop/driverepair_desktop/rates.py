@@ -21,3 +21,29 @@ class RateWindow:
         if elapsed <= 0:
             return None
         return max(0.0, (byte_count - self.points[0][1]) / elapsed)
+
+
+def choose_speed(speed_bps, average_bps=None, *, finished: bool = False):
+    """Pick the throughput value the UI should show.
+
+    A job short enough to finish inside one rate-window sample never produces a
+    recent-speed value. Rather than leaving "Measuring…" on screen after the
+    work is done, fall back to the measured average once the job has finished.
+
+    Returns ``(bytes_per_second, is_average)``; ``(None, False)`` means no
+    measurement exists yet and the caller should keep its placeholder.
+    """
+    try:
+        value = float(speed_bps)
+    except (TypeError, ValueError):
+        value = 0.0
+    if value > 0:
+        return value, False
+    if finished and average_bps is not None:
+        try:
+            average = float(average_bps)
+        except (TypeError, ValueError):
+            average = 0.0
+        if average > 0:
+            return average, True
+    return None, False
