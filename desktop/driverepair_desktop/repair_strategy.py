@@ -7,7 +7,6 @@ Unknown USB enclosures remain unknown. Missing SMART attributes are not a pass.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from .health import media_from_smart, transport_from_smart
 from .media_profiles import identify_profile
