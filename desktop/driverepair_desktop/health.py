@@ -45,6 +45,22 @@ def _usable_ata_view(raw: dict | None) -> bool:
     return 'ata' in protocol
 
 
+def _smartctl_low_bits_message(returncode: int) -> str:
+    """Explain smartctl bits 0-2 without treating higher health bits as parse errors."""
+    bits = returncode & 0x07
+    meanings = []
+    if bits & 0x01:
+        meanings.append('command line did not parse')
+    if bits & 0x02:
+        meanings.append('device open failed')
+    if bits & 0x04:
+        meanings.append('SMART or ATA identity command failed')
+    detail = '; '.join(meanings) if meanings else 'unspecified low-status failure'
+    return (f'SMART probe failed (status bits {bits}: {detail}); health unknown. '
+            'For USB enclosures this often means the bridge does not expose ATA SMART; '
+            'try a different cable/dock or direct SATA for HDD maintenance.')
+
+
 def _smart_logs(run: Callable[..., subprocess.CompletedProcess], executable: str,
                 path: str, deadline: float, *, device_type: str | None = None) -> dict:
     """Read-only self-test and error log summary; never starts a test.
@@ -184,7 +200,7 @@ def health_snapshot(device: Device,
     # CLI command, open/identity and SMART command failures invalidate the snapshot.
     # Other smartctl bits describe actual health concerns and must be retained.
     if proc.returncode & 0x07:
-        raise RuntimeError(f'SMART probe failed (status bits {proc.returncode & 0x07}); health unknown')
+        raise RuntimeError(_smartctl_low_bits_message(proc.returncode))
     passed = (raw.get('smart_status') or {}).get('passed')
     status = ('failure_reported' if proc.returncode & (0x08 | 0x10) or passed is False
               else 'smart_passed_limited' if passed is True
