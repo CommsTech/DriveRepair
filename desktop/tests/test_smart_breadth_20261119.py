@@ -147,6 +147,28 @@ class SmartBreadthTests(unittest.TestCase):
         html = render_report({'status': 'completed'}, device={'model': 'Example'})
         self.assertNotIn('SMART evidence', html)
 
+    def test_health_cli_falls_back_to_coarse_windows_health(self):
+        """SMART failure must degrade to Windows HealthStatus, labelled as weaker."""
+        import contextlib
+        import io
+
+        from driverepair_desktop import cli
+
+        with mock.patch.object(cli, 'select_external_device', side_effect=[self.device, self.device]), \
+             mock.patch.object(cli, 'health_snapshot', side_effect=RuntimeError('probe failed')), \
+             mock.patch.object(cli, 'windows_storage_health',
+                               return_value={'status': 'windows_health_limited',
+                                             'source': 'windows_storage_healthstatus',
+                                             'device': self.device.public()}):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = cli.run(['health', '--device', 'windows:PhysicalDrive3', '--json'])
+        self.assertEqual(code, 0, out.getvalue())
+        payload = json.loads(out.getvalue())
+        self.assertEqual(payload['status'], 'windows_health_limited')
+        self.assertIn('not SMART', payload['notes'])
+        self.assertIn('probe failed', payload['smart_unavailable_reason'])
+
 
 if __name__ == '__main__':
     unittest.main()

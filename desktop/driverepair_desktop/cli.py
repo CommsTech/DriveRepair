@@ -26,7 +26,7 @@ from .scan_history import load_hints, save_hints
 from .benchmark import read_benchmark, compare_benchmarks
 from .carving import carve_image
 from .archive_recovery import salvage_zip
-from .health import health_snapshot, try_health_snapshot, ScanHealthTracker
+from .health import health_snapshot, try_health_snapshot, windows_storage_health, ScanHealthTracker
 from .recovery import (inspect_rescue_status,
                        _rescue_writer_lock, _rescue_reader_locked)
 from .fat32_undelete import undelete_fat32, list_deleted_fat32
@@ -749,13 +749,24 @@ def _run_extras(args) -> int:
             result = health_snapshot(selected)
         except RuntimeError as exc:
             # Missing smartctl / unknown SMART must stay UNKNOWN — never invent a pass.
-            result = {
-                'status': 'unknown',
-                'device': selected.public(),
-                'reason': str(exc),
-                'notes': 'SMART unavailable. Install smartmontools (smartctl) for hardware counters. '
-                         'Unknown is not a clean bill of health.',
-            }
+            # On Windows the OS may still offer a coarse HealthStatus, which is
+            # explicitly weaker than SMART and never satisfies repair gating.
+            fallback = windows_storage_health(selected)
+            if fallback is not None:
+                fallback['smart_unavailable_reason'] = str(exc)
+                fallback['notes'] = (
+                    'SMART query unavailable (' + str(exc) + '). Showing Windows '
+                    'HealthStatus only, which is not SMART attributes and does not '
+                    'authorize repair. No self-test or write was performed.')
+                result = fallback
+            else:
+                result = {
+                    'status': 'unknown',
+                    'device': selected.public(),
+                    'reason': str(exc),
+                    'notes': 'SMART unavailable. Install smartmontools (smartctl) for hardware counters. '
+                             'Unknown is not a clean bill of health.',
+                }
     elif args.command == 'rescue-image' and args.engine == 'rust':
         # The native engine is opt-in until independent OS builds and crash
         # recovery tests are complete. Never quietly switch journal formats.
@@ -1308,7 +1319,8 @@ def _run_extras(args) -> int:
                                          'completed_with_skips_or_verify_failures',
                                          'power_and_ram_verified', 'baseline_recorded', 'no_new_signal_observed',
                                          # Honest soft outcomes (never invent a pass).
-                                         'unknown', 'completed_with_missing_data'} else 2
+                                         'unknown', 'windows_health_limited',
+                                         'completed_with_missing_data'} else 2
 
 
 def _run_care(args) -> int:
