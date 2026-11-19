@@ -324,5 +324,5 @@ class RefreshDashboard:
         try:
             self.stream.write("\n")
             self.stream.flush()
-        except Exception:
+        except (BrokenPipeError, OSError):
             pass
