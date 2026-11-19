@@ -17,8 +17,16 @@ import sys
 
 
 def load_scan(path: str) -> dict:
-    with open(path, encoding="utf-8", errors="replace") as handle:
-        lines = handle.read().splitlines()
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    # PowerShell redirects with UTF-16LE by default; other shells write UTF-8.
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        text = raw.decode("utf-16", errors="replace")
+    elif b"\x00" in raw[:64]:
+        text = raw.decode("utf-16-le", errors="replace")
+    else:
+        text = raw.decode("utf-8", errors="replace")
+    lines = text.splitlines()
     for index, line in enumerate(lines):
         stripped = line.strip()
         # PowerShell redirection can wrap the captured string in '[' ']' and
