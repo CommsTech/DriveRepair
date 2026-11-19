@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.3b27 — 2026-11-19: native read-only ATA IDENTIFY fallback (experimental)
+
+- Added a bounded, isolated Windows SAT ATA IDENTIFY DEVICE probe for compatible USB bridges when smartctl and Windows storage-property identification are inconclusive.
+- Validate the returned ATA model, full logical capacity, logical sector size, serial suffix, and rotational rate against the selected inventory record before treating it as a corroborated HDD candidate.
+- Preserve unknown SMART health, independent Get-Disk system/external checks, disk-fingerprint consent, exclusive locking and durable separate-disk journal. A second ATA probe immediately before writable access rejects a changed/unavailable device.
+- An SSD, missing identity, conflicting model/serial/capacity, bridge that refuses SAT, or a driver that blocks exclusive access remains ineligible for HDD rewrites. No read-only fallback can prove future drive reliability or regenerate unreadable data.
+- Added synthetic regression tests for SATA/SAT pass-through encoding, valid/mismatched ATA replies, withheld SMART health, probe timeouts and guarded-beta unknown-health consent.
+- Windows hardware verification of the SAT call, live disk locking, rollback, and successful physical repair is still **NOT PERFORMED**.
+
 ## 0.3.3b26 — 2026-11-19: Windows USB discovery and write-gate regression fixes
 
 - Fixed a **real repair-blocking contradiction**: Windows inventory was changed to CIM-first, but the journal preflight still rejected every disk whose provenance wasn't literally `Get-Disk`. The journal preflight now repeats the independent authoritative `Get-Disk` external/online/non-system safety gate regardless of inventory source. This does **not** waive device serial, SMART/media policy, locking, separate journal, explicit consent, or readback requirements.

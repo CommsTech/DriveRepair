@@ -1349,7 +1349,7 @@ def launch():
                     bus=str(d.get('bus') or ''), sector=int(d.get('sector_size') or 512),
                     snapshot=snap)
                 title=profile.kind.upper().replace('_',' ') + ' · ' + profile.evidence
-                if snap.get('source') == 'windows_native_corrob_hdd':
+                if snap.get('source') in {'windows_native_corrob_hdd', 'windows_ata_identify_hdd'}:
                     title += ' · Windows native HDD identity corroborated; SMART health UNKNOWN'
                 elif snap.get('source') == 'windows_native_unverified':
                     title += ' · Windows native evidence inconclusive'
@@ -3007,13 +3007,13 @@ def launch():
                     if REPAIR_BETA_GUARDED:
                         args += ['--max-regions','16']
                         snap = self._health_by_device.get(d.get('identity_hint')) or {}
-                        if (snap.get('source') == 'windows_native_corrob_hdd'
+                        if (snap.get('source') in {'windows_native_corrob_hdd', 'windows_ata_identify_hdd'}
                                 and snap.get('native_hdd_corrob') is True):
                             native_risk=QMessageBox.warning(
                                 self,'Unknown media health — explicit authorization',
-                                'Windows independently reports an HDD-like device and matching '
-                                'identity, but the USB bridge did NOT provide SMART health. '
-                                'Seek penalty and TRIM flags can be misreported by USB bridges.\n\n'
+                                'Windows storage properties or ATA IDENTIFY corroborate the rotational '
+                                'HDD identity, but the USB bridge did NOT provide SMART health. '
+                                'USB bridges may misreport information or refuse passthrough.\n\n'
                                 'Only proceed with a disposable or separately backed-up HDD. '
                                 'This can permanently destroy data or make the drive less reliable. '
                                 'No healthy-medium claim is possible.\n\n'

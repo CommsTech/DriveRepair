@@ -226,7 +226,25 @@ def _windows_devices_from_get_disk(run: Callable[..., bytes], number: int | None
         records = [records]
     devices: list[Device] = []
     for record in records or []:
-        bus = canonicalize_windows_external_bus(str(record.get("BusType") or ""))
+        bus_label = str(record.get("BusType") or "").strip().lower()
+        bus = canonicalize_windows_external_bus(bus_label)
+        # Get-Disk may report USB Attached SCSI (UASP) as SCSI. The WRITE gate
+        # must not contradict the read-only CIM inventory in this case, but
+        # accepting all SCSI disks would expose internal SAS disks. Require a
+        # separate bounded native descriptor query proving USB transport and
+        # matching this exact PhysicalDrive number/capacity. Boot/system/offline
+        # tests below remain mandatory in both cases.
+        if bus is None and bus_label in {'scsi', 'uasp', 'bus_type_scsi'}:
+            try:
+                disk_number = int(record.get('Number'))
+                size = _positive_int(record.get('Size'))
+                corroborated = _windows_native_usb_indices(
+                    [{'Index': disk_number, 'InterfaceType': bus_label,
+                      'Size': size}], run, max_probes=1)
+                if disk_number in corroborated:
+                    bus = 'usb'
+            except (ValueError, TypeError):
+                pass
         # Some PowerShell versions serialize BusType as an enum integer.
         # Only positively identified external buses are admitted.
         if bus is None:

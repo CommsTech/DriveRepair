@@ -1,0 +1,2 @@
+dc18924394968da3169acf44795064cac5359884544497e3a6c0a9733ebfd982  DriveRepair_0.3.3b27_ATA_UASP_Repair_Fixes.patch
+f3207662cdedc9621c5de3c0c02b04384669b02dd2ed71f427a85dd3866eea72  DriveRepair_0.3.3b27_Complete_Source.zip

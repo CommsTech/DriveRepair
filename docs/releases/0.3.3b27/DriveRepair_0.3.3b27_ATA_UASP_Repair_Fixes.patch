@@ -1,0 +1,664 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 5b2810e..8634899 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,3 +1,12 @@
++## 0.3.3b27 — native read-only ATA IDENTIFY fallback (experimental)
++
++- Added a bounded, isolated Windows SAT ATA IDENTIFY DEVICE probe for compatible USB bridges when smartctl and Windows storage-property identification are inconclusive.
++- Validate the returned ATA model, full logical capacity, logical sector size, serial suffix, and rotational rate against the selected inventory record before treating it as a corroborated HDD candidate.
++- Preserve unknown SMART health, independent Get-Disk system/external checks, disk-fingerprint consent, exclusive locking and durable separate-disk journal. A second ATA probe immediately before writable access rejects a changed/unavailable device.
++- An SSD, missing identity, conflicting model/serial/capacity, bridge that refuses SAT, or a driver that blocks exclusive access remains ineligible for HDD rewrites. No read-only fallback can prove future drive reliability or regenerate unreadable data.
++- Added synthetic regression tests for SATA/SAT pass-through encoding, valid/mismatched ATA replies, withheld SMART health, probe timeouts and guarded-beta unknown-health consent.
++- Windows hardware verification of the SAT call, live disk locking, rollback, and successful physical repair is still **NOT PERFORMED**.
++
+ # Changelog
+ 
+ ## 0.3.3b26 — 2026-11-19: Windows USB discovery and write-gate regression fixes
+diff --git a/README.md b/README.md
+index 278eb6a..19a73f8 100644
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,7 @@
+ 
+ **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
+ 
+-> **Release status:** `0.3.3b24` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
++> **Release status:** `0.3.3b27` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+ 
+ **Drive models:** The bundled [offline model catalog](docs/DRIVE_MODEL_CATALOG.md) currently documents four vendor-backed model entries (three Seagate SMR models and one SanDisk SSD family). It guides scanning; it is not a comprehensive database or authorization to rewrite a disk.
+ 
+@@ -43,7 +43,7 @@ qualification gap on some USB adapters, not a software repair success.
+ ### When USB SMART information is unavailable (Windows)
+ 
+ DriveRepair now automatically tries **two independent read-only identification paths**:
+-SMART/ATA SAT pass-through, followed by **Windows-native storage properties** if SMART
++SMART/ATA SAT pass-through, followed by **Windows-native storage properties** and a bounded read-only **ATA IDENTIFY** attempt through compatible SAT USB bridges if SMART
+ fails or is not installed. The native query asks Windows for the disk descriptor, reported
+ seek penalty, TRIM capability, size, and serial suffix. This can sometimes identify an
+ external mechanical HDD behind a bridge that blocks SMART, but **USB adapters can hide or
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index 595e7af..0e6ae3b 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b26"
++__version__ = "0.3.3b27"
+diff --git a/desktop/driverepair_desktop/ata_identity.py b/desktop/driverepair_desktop/ata_identity.py
+new file mode 100644
+index 0000000..c43f7d0
+--- /dev/null
++++ b/desktop/driverepair_desktop/ata_identity.py
+@@ -0,0 +1,202 @@
++"""Bounded, READ-ONLY ATA IDENTIFY fallback for compatible Windows SAT USB bridges.
++
++Unlike seek/trim heuristics, a valid ATA IDENTIFY block reports the ATA media's
++own model, serial, capacity and rotation-rate field. The command is issued in an
++isolated child with a bounded parent deadline by ``windows_ata_snapshot``.
++
++No SMART health information is fabricated; ATA IDENTIFY is NOT a write permit.
++The guarded engine independently enforces confirmation, Windows disk admission,
++exclusive locks, separate durable rollback journal, and explicit unknown-health
++consent. Some USB bridges will reject this harmless read-only command.
++"""
++from __future__ import annotations
++
++import ctypes
++import json
++import re
++import struct
++import subprocess
++import sys
++
++from .devices import Device
++from .media_profiles import identify_profile
++
++SOURCE = 'windows_ata_identify_hdd'
++IOCTL_SCSI_PASS_THROUGH = 0x4D004
++
++
++class _SCSI_PASS_THROUGH(ctypes.Structure):
++    _fields_ = [
++        ('Length', ctypes.c_uint16), ('ScsiStatus', ctypes.c_uint8),
++        ('PathId', ctypes.c_uint8), ('TargetId', ctypes.c_uint8),
++        ('Lun', ctypes.c_uint8), ('CdbLength', ctypes.c_uint8),
++        ('SenseInfoLength', ctypes.c_uint8), ('DataIn', ctypes.c_uint8),
++        ('DataTransferLength', ctypes.c_uint32), ('TimeOutValue', ctypes.c_uint32),
++        ('DataBufferOffset', ctypes.c_size_t), ('SenseInfoOffset', ctypes.c_uint32),
++        ('Cdb', ctypes.c_uint8 * 16),
++    ]
++
++
++def _ata_text(data: bytes, start_word: int, count: int) -> str:
++    # ATA IDENTIFY strings store each ASCII pair in reversed byte order.
++    payload = bytearray()
++    for pos in range(start_word * 2, (start_word + count) * 2, 2):
++        payload.extend((data[pos + 1], data[pos]))
++    return payload.decode('ascii', 'replace').strip(' \x00')
++
++
++def parse_ata_identify(data: bytes) -> dict:
++    """Only accept an apparently complete IDENTIFY DEVICE reply with sane fields."""
++    if len(data) != 512 or not any(data):
++        raise ValueError('ATA IDENTIFY response is empty or truncated')
++    words = struct.unpack('<256H', data)
++    # Bit 15 of word 0 identifies packet devices; never classify optical ATA as HDD.
++    if words[0] & 0x8000:
++        raise ValueError('ATA packet device is not a physical HDD')
++    model = _ata_text(data, 27, 20)
++    serial = _ata_text(data, 10, 10)
++    if not (8 <= len(model) <= 40 and 4 <= len(serial) <= 20):
++        raise ValueError('ATA IDENTIFY model or serial is incomplete')
++    if not all(32 <= ord(ch) < 127 for ch in model + serial):
++        raise ValueError('ATA IDENTIFY contains invalid model/serial characters')
++    rpm = words[217]
++    if rpm == 1:
++        medium = 'ssd'
++    elif 360 <= rpm <= 30000:
++        medium = 'hdd'
++    else:
++        medium = 'unknown'
++    sectors = (words[100] | (words[101] << 16) | (words[102] << 32) |
++               (words[103] << 48))
++    if not sectors:
++        sectors = words[60] | (words[61] << 16)
++    # Logical-sector size from IDENTIFY words 106,117,118 when valid.
++    logical = 512
++    if words[106] & 0xD000 == 0x5000:
++        reported = (words[118] << 16) | words[117]
++        if 256 <= reported <= 32768:
++            logical = reported * 2
++    if not sectors or sectors * logical > (1 << 75):
++        raise ValueError('ATA IDENTIFY capacity is invalid')
++    return {'model': model, 'serial_suffix': '***' + serial[-4:],
++            'size_bytes': sectors * logical, 'logical_sector_bytes': logical,
++            'rotation_rate': rpm if medium != 'unknown' else None,
++            'reported_medium': medium, 'evidence': 'ATA IDENTIFY DEVICE via SAT16'}
++
++
++def sat_identify_cdb() -> bytes:
++    # ATA PASS-THROUGH(16), PIO Data-In, 1 sector, command 0xEC (IDENTIFY).
++    return bytes((0x85, 0x08, 0x0e, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0xec, 0))
++
++
++def inspect_windows_sat(number: int) -> dict:
++    """One read-only SAT command; isolated in a short-lived subprocess by caller."""
++    if sys.platform != 'win32':
++        raise RuntimeError('Windows SATA/SAT passthrough only')
++    if not isinstance(number, int) or not 0 <= number <= 255:
++        raise ValueError('Invalid physical disk number')
++    from ctypes import wintypes
++    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
++    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
++                                    ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
++    kernel.CreateFileW.restype = wintypes.HANDLE
++    kernel.DeviceIoControl.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p,
++                                        wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
++                                        ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p]
++    kernel.DeviceIoControl.restype = wintypes.BOOL
++    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
++    kernel.CloseHandle.restype = wintypes.BOOL
++    handle = kernel.CreateFileW(r'\\.\PhysicalDrive' + str(number), 0x80000000, 3,
++                                None, 3, 0, None)  # GENERIC_READ only
++    if handle is None or handle == ctypes.c_void_p(-1).value:
++        raise ctypes.WinError(ctypes.get_last_error())
++    try:
++        header = ctypes.sizeof(_SCSI_PASS_THROUGH)
++        sense_off = (header + 7) & ~7
++        data_off = (sense_off + 32 + 7) & ~7
++        length = data_off + 512
++        packet = ctypes.create_string_buffer(length)
++        cdb = _SCSI_PASS_THROUGH.from_buffer(packet)
++        cdb.Length = header
++        cdb.CdbLength = 16
++        cdb.SenseInfoLength = 32
++        cdb.SenseInfoOffset = sense_off
++        cdb.DataIn = 1  # SCSI_IOCTL_DATA_IN, never send data to device
++        cdb.DataTransferLength = 512
++        cdb.TimeOutValue = 5
++        cdb.DataBufferOffset = data_off
++        for i, byte in enumerate(sat_identify_cdb()):
++            cdb.Cdb[i] = byte
++        count = wintypes.DWORD(0)
++        ok = kernel.DeviceIoControl(handle, IOCTL_SCSI_PASS_THROUGH,
++                                    packet, length, packet, length,
++                                    ctypes.byref(count), None)
++        if not ok:
++            raise ctypes.WinError(ctypes.get_last_error())
++        if cdb.ScsiStatus != 0 or cdb.DataTransferLength != 512 or count.value < header:
++            raise ValueError('USB bridge rejected or truncated the ATA IDENTIFY response')
++        result = parse_ata_identify(packet.raw[data_off:data_off + 512])
++        result['number'] = number
++        return result
++    finally:
++        kernel.CloseHandle(handle)
++
++
++def interpret_sat_evidence(device: Device, ata: dict) -> dict | None:
++    """Corroboration cannot invent healthy SMART or erase a contradictory result."""
++    if device.bus.lower() not in {'usb', 'thunderbolt', 'firewire'}:
++        return None
++    if ata.get('reported_medium') != 'hdd':
++        return None
++    profile = identify_profile(model=device.model, bus=device.bus,
++                               sector=device.sector_size)
++    if profile.kind in {'ssd', 'nvme', 'flash'}:
++        return None
++    def token(value: str) -> str:
++        return re.sub(r'[^A-Z0-9]', '', str(value).upper())
++    model = token(device.model)
++    actual = token(ata.get('model', ''))
++    serial = device.serial.strip()
++    suffix = str(ata.get('serial_suffix') or '')
++    if not (len(model) >= 8 and len(actual) >= 8 and
++            (actual in model or model in actual)):
++        return None
++    if not (len(serial) >= 4 and suffix.endswith(serial[-4:])):
++        return None
++    if ata.get('size_bytes') != device.size_bytes:
++        return None
++    if ata.get('logical_sector_bytes') != device.sector_size:
++        return None
++    return {'source': SOURCE, 'status': 'unknown', 'reported_medium': 'hdd',
++            'native_hdd_corrob': True, 'ata_identify_corrob': True,
++            'native_factors': ['ATA IDENTIFY model matches inventory',
++                               'ATA IDENTIFY serial suffix matches inventory',
++                               'ATA IDENTIFY capacity and logical sector agree',
++                               'ATA IDENTIFY reports mechanical rotational speed'],
++            'rotation_rate': ata.get('rotation_rate'),
++            'smart_status_passed': None, 'temperature_c': None,
++            'ata_selected_raw_attributes': [], 'nvme': {}, 'device': device.public(),
++            'notes': 'Read-only ATA IDENTIFY through USB SAT; no SMART health evidence. '
++                     'Requires independently validated physical disk identity, exclusive '
++                     'locks, durable separate journal and explicit UNKNOWN-health consent.'}
++
++
++def windows_ata_snapshot(device: Device, *, runner=subprocess.run) -> dict | None:
++    if sys.platform != 'win32':
++        return None
++    match = re.fullmatch(r'windows:PhysicalDrive(\d+)', device.id)
++    if not match:
++        return None
++    try:
++        command = [sys.executable, '-m', 'driverepair_desktop',
++                   'inspect-windows-ata', '--number', match.group(1)]
++        done = runner(command, capture_output=True, timeout=8, check=False)
++        if done.returncode:
++            return None
++        report = json.loads(done.stdout.decode('utf-8-sig') if isinstance(done.stdout, bytes)
++                            else done.stdout)
++        if not isinstance(report, dict) or report.get('number') != int(match.group(1)):
++            return None
++        return interpret_sat_evidence(device, report)
++    except (OSError, ValueError, TypeError, subprocess.TimeoutExpired, UnicodeError):
++        return None
+diff --git a/desktop/driverepair_desktop/cli.py b/desktop/driverepair_desktop/cli.py
+index ec030e3..a7a5219 100644
+--- a/desktop/driverepair_desktop/cli.py
++++ b/desktop/driverepair_desktop/cli.py
+@@ -123,6 +123,9 @@ def parser() -> argparse.ArgumentParser:
+     win_probe = sub.add_parser('inspect-windows-disk', help='READ-ONLY: native Win32 disk properties without PowerShell (NOT write authority)')
+     win_probe.add_argument('--number', type=int, required=True)
+     win_probe.add_argument('--json', action='store_true')
++    ata_probe = sub.add_parser('inspect-windows-ata', help='READ-ONLY: ATA IDENTIFY through a compatible Windows SAT bridge; health remains unknown')
++    ata_probe.add_argument('--number', type=int, required=True)
++    ata_probe.add_argument('--json', action='store_true')
+     all_disks = sub.add_parser("list-all-linux", help="READ-ONLY: show internal and external Linux whole disks for offline recovery")
+     all_disks.add_argument("--json", action="store_true")
+     planning = sub.add_parser("plan-system-recovery", help="READ-ONLY: validate offline internal disk and destination before rescue")
+@@ -1711,6 +1714,16 @@ def _run_care(args) -> int:
+                     assert_stable_identity(selected, select_external_device(args.device))
+                 except (RuntimeError, ValueError):
+                     assert_stable_identity(selected, verify_windows_patient_still_present(selected))
++                # An ATA IDENTIFY snapshot can establish physical HDD identity
++                # without SMART. Re-query the actual patient immediately before
++                # RW access: a replaced dock/patient must never inherit stale
++                # ATA identification from the earlier scan.
++                if (snapshot and snapshot.get('source') == 'windows_ata_identify_hdd'):
++                    from .ata_identity import windows_ata_snapshot
++                    fresh_ata = windows_ata_snapshot(selected)
++                    if (fresh_ata is None or not fresh_ata.get('ata_identify_corrob')
++                            or fresh_ata.get('rotation_rate') != snapshot.get('rotation_rate')):
++                        raise RuntimeError('ATA IDENTIFY prewrite recheck failed; no patient writes')
+                 writer = open_device_readwrite(
+                     selected, **({'auto_lock_volumes': True}
+                                  if getattr(args, 'auto_lock_volumes', False) else {}))
+@@ -1953,6 +1966,10 @@ def run(argv: list[str] | None = None) -> int:
+             from .host_capabilities import inspect_readonly
+             print(json.dumps(inspect_readonly(args.device),indent=2))
+             return 0
++        if args.command == 'inspect-windows-ata':
++            from .ata_identity import inspect_windows_sat
++            print(json.dumps(inspect_windows_sat(args.number), indent=2))
++            return 0
+         if args.command == 'inspect-windows-disk':
+             from .windows_native import probe_physicaldrive
+             info=probe_physicaldrive(args.number)
+diff --git a/desktop/driverepair_desktop/devices.py b/desktop/driverepair_desktop/devices.py
+index 86238c0..6017a17 100644
+--- a/desktop/driverepair_desktop/devices.py
++++ b/desktop/driverepair_desktop/devices.py
+@@ -226,7 +226,25 @@ def _windows_devices_from_get_disk(run: Callable[..., bytes], number: int | None
+         records = [records]
+     devices: list[Device] = []
+     for record in records or []:
+-        bus = canonicalize_windows_external_bus(str(record.get("BusType") or ""))
++        bus_label = str(record.get("BusType") or "").strip().lower()
++        bus = canonicalize_windows_external_bus(bus_label)
++        # Get-Disk may report USB Attached SCSI (UASP) as SCSI. The WRITE gate
++        # must not contradict the read-only CIM inventory in this case, but
++        # accepting all SCSI disks would expose internal SAS disks. Require a
++        # separate bounded native descriptor query proving USB transport and
++        # matching this exact PhysicalDrive number/capacity. Boot/system/offline
++        # tests below remain mandatory in both cases.
++        if bus is None and bus_label in {'scsi', 'uasp', 'bus_type_scsi'}:
++            try:
++                disk_number = int(record.get('Number'))
++                size = _positive_int(record.get('Size'))
++                corroborated = _windows_native_usb_indices(
++                    [{'Index': disk_number, 'InterfaceType': bus_label,
++                      'Size': size}], run, max_probes=1)
++                if disk_number in corroborated:
++                    bus = 'usb'
++            except (ValueError, TypeError):
++                pass
+         # Some PowerShell versions serialize BusType as an enum integer.
+         # Only positively identified external buses are admitted.
+         if bus is None:
+diff --git a/desktop/driverepair_desktop/health.py b/desktop/driverepair_desktop/health.py
+index 2eb9687..a9e05f6 100644
+--- a/desktop/driverepair_desktop/health.py
++++ b/desktop/driverepair_desktop/health.py
+@@ -366,6 +366,13 @@ def supplement_inconclusive_smart(device: Device, snapshot: dict) -> dict:
+         return snapshot
+     from .native_media import windows_native_snapshot
+     native = windows_native_snapshot(device)
++    # Contradictory flash/SSD evidence is a veto, not a reason to probe for a
++    # more convenient HDD answer. Never replace it with ATA/model data.
++    if native and str(native.get('reported_medium') or '').lower() == 'ssd':
++        return snapshot
++    if not native or native.get('native_hdd_corrob') is not True:
++        from .ata_identity import windows_ata_snapshot
++        native = windows_ata_snapshot(device)
+     if not native or native.get('native_hdd_corrob') is not True:
+         return snapshot
+     native['smart_unavailable_reason'] = 'SMART reply did not establish physical rotational medium'
+@@ -385,6 +392,15 @@ def try_health_snapshot(device: Device,
+         # It is never interpreted as a passed SMART/health assessment.
+         from .native_media import windows_native_snapshot
+         native = windows_native_snapshot(device)
++        # Native SSD/TRIM evidence conflicts with an HDD claim. Retain the
++        # conflict, never promote a convenient SAT result to a write candidate.
++        if (native is None or
++                (native.get('native_hdd_corrob') is not True and
++                 str(native.get('reported_medium') or '').lower() != 'ssd')):
++            from .ata_identity import windows_ata_snapshot
++            ata = windows_ata_snapshot(device)
++            if ata is not None:
++                native = ata
+         if native is not None:
+             native['smart_unavailable_reason'] = str(exc)
+             # A Windows HealthStatus failure/warning may be imperfect through
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+index a7f342e..307125e 100644
+--- a/desktop/driverepair_desktop/qtgui.py
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -1349,7 +1349,7 @@ def launch():
+                     bus=str(d.get('bus') or ''), sector=int(d.get('sector_size') or 512),
+                     snapshot=snap)
+                 title=profile.kind.upper().replace('_',' ') + ' · ' + profile.evidence
+-                if snap.get('source') == 'windows_native_corrob_hdd':
++                if snap.get('source') in {'windows_native_corrob_hdd', 'windows_ata_identify_hdd'}:
+                     title += ' · Windows native HDD identity corroborated; SMART health UNKNOWN'
+                 elif snap.get('source') == 'windows_native_unverified':
+                     title += ' · Windows native evidence inconclusive'
+@@ -3007,13 +3007,13 @@ def launch():
+                     if REPAIR_BETA_GUARDED:
+                         args += ['--max-regions','16']
+                         snap = self._health_by_device.get(d.get('identity_hint')) or {}
+-                        if (snap.get('source') == 'windows_native_corrob_hdd'
++                        if (snap.get('source') in {'windows_native_corrob_hdd', 'windows_ata_identify_hdd'}
+                                 and snap.get('native_hdd_corrob') is True):
+                             native_risk=QMessageBox.warning(
+                                 self,'Unknown media health — explicit authorization',
+-                                'Windows independently reports an HDD-like device and matching '
+-                                'identity, but the USB bridge did NOT provide SMART health. '
+-                                'Seek penalty and TRIM flags can be misreported by USB bridges.\n\n'
++                                'Windows storage properties or ATA IDENTIFY corroborate the rotational '
++                                'HDD identity, but the USB bridge did NOT provide SMART health. '
++                                'USB bridges may misreport information or refuse passthrough.\n\n'
+                                 'Only proceed with a disposable or separately backed-up HDD. '
+                                 'This can permanently destroy data or make the drive less reliable. '
+                                 'No healthy-medium claim is possible.\n\n'
+diff --git a/desktop/driverepair_desktop/release_policy.py b/desktop/driverepair_desktop/release_policy.py
+index 248aad8..7a7868d 100644
+--- a/desktop/driverepair_desktop/release_policy.py
++++ b/desktop/driverepair_desktop/release_policy.py
+@@ -65,12 +65,12 @@ def check_guarded_repair_preflight(args, snapshot: dict | None, device) -> dict:
+         raise PermissionError('Guarded repair cannot force recording geometry or neighboring writes')
+     if args.ack_unknown_health:
+         if not (isinstance(snapshot, dict) and
+-                snapshot.get('source') == 'windows_native_corrob_hdd' and
++                snapshot.get('source') in {'windows_native_corrob_hdd', 'windows_ata_identify_hdd'} and
+                 snapshot.get('native_hdd_corrob') is True and
+                 snapshot.get('status') == 'unknown'):
+             raise PermissionError('Unknown-health acknowledgement is reserved for corroborated native Windows HDD identity')
+     elif (isinstance(snapshot, dict) and
+-          snapshot.get('source') == 'windows_native_corrob_hdd'):
++          snapshot.get('source') in {'windows_native_corrob_hdd', 'windows_ata_identify_hdd'}):
+         raise PermissionError('Native HDD identification does not measure health. Explicit --ack-unknown-health is required after data rescue.')
+     if args.max_regions > 16 or args.max_regions < 1:
+         raise PermissionError('Guarded repair limits each batch to 16 verified regions')
+diff --git a/desktop/driverepair_desktop/repair_strategy.py b/desktop/driverepair_desktop/repair_strategy.py
+index a52bc9e..65ab1ad 100644
+--- a/desktop/driverepair_desktop/repair_strategy.py
++++ b/desktop/driverepair_desktop/repair_strategy.py
+@@ -94,14 +94,14 @@ def advise(*, model: str = '', bus: str = '', media_type: str = '',
+         return RepairAdvice('identify_rescue', 'Identify media first; rescue data', False,
+                             ('Underlying media cannot be verified through this device/bridge.',),
+                             profile.kind, 'unknown')
+-    if (snap.get('source') == 'windows_native_corrob_hdd' and
++    if (snap.get('source') in {'windows_native_corrob_hdd', 'windows_ata_identify_hdd'} and
+             snap.get('native_hdd_corrob') is True and state == 'UNKNOWN'):
+         # This is a *candidate* for the separately consented unknown-health
+         # workflow, not a SMART pass or a write permit. The engine requires
+         # --ack-unknown-health, exclusive access and the original-byte journal.
+         return RepairAdvice('hdd_native_unknown_health',
+                             'HDD identified by Windows; health unknown — explicit consent required',
+-                            True, ('Windows reports mechanical seek penalty and no TRIM; model, serial and size corroborate.',
++                            True, ('Read-only Windows or ATA IDENTIFY evidence corroborates HDD model, identity and size.',
+                                    'The USB bridge may misreport. SMART health is UNKNOWN: rescue important data first and explicitly acknowledge unknown health.',),
+                             profile.kind, 'native_corrob_not_health')
+     if not snapshot or snap.get('source') == 'windows_storage_healthstatus' or state == 'UNKNOWN':
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index 619ac38..bed64c6 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b26"
++version = "0.3.3b27"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_b27_sat_identify.py b/desktop/tests/test_b27_sat_identify.py
+new file mode 100644
+index 0000000..1a288dc
+--- /dev/null
++++ b/desktop/tests/test_b27_sat_identify.py
+@@ -0,0 +1,152 @@
++"""Regression: compatible Windows USB SAT bridges can identify HDDs without SMART.
++
++All tests are synthetic: no hardware IO is performed on the test runner.
++"""
++import json
++import struct
++import subprocess
++import unittest
++from argparse import Namespace
++from unittest import mock
++
++from driverepair_desktop.ata_identity import (
++    SOURCE, _SCSI_PASS_THROUGH, interpret_sat_evidence, parse_ata_identify,
++    sat_identify_cdb, windows_ata_snapshot,
++)
++from driverepair_desktop.devices import Device
++from driverepair_desktop import ata_identity, release_policy
++from driverepair_desktop.repair_strategy import advise
++from driverepair_desktop.repair_readiness import ui_repair_readiness
++
++
++def device(model='ST1000LM048-2E7172', serial='SN0001'):
++    return Device('windows:PhysicalDrive4', r'\\.\PhysicalDrive4',
++                  model, 1000204886016, 512, 'usb', serial)
++
++
++def sample(*, model='ST1000LM048-2E7172', serial='SN0001', rpm=5400,
++           size=1000204886016):
++    words = [0] * 256
++    words[0] = 0x40
++    def string(start, count, text):
++        raw = text.ljust(2 * count).encode('ascii')
++        for i in range(count):
++            words[start + i] = (raw[2*i] << 8) | raw[2*i+1]
++    string(10, 10, serial)
++    string(27, 20, model)
++    sectors = size // 512
++    for k in range(4):
++        words[100 + k] = (sectors >> (16*k)) & 0xffff
++    words[217] = rpm
++    return struct.pack('<256H', *words)
++
++
++class SATIdentificationTests(unittest.TestCase):
++    def test_only_identify_read_command_is_encoded(self):
++        command = sat_identify_cdb()
++        self.assertEqual(len(command), 16)
++        self.assertEqual(command, bytes.fromhex('85080e0000000100000000000000ec00'))
++        self.assertGreaterEqual(__import__('ctypes').sizeof(_SCSI_PASS_THROUGH), 44)
++
++    def test_parse_hdd_and_ssd_and_unknown_rotation(self):
++        result = parse_ata_identify(sample())
++        self.assertEqual(result['reported_medium'], 'hdd')
++        self.assertEqual(result['size_bytes'], 1000204886016)
++        self.assertEqual(result['rotation_rate'], 5400)
++        self.assertEqual(result['serial_suffix'], '***0001')
++        self.assertEqual(parse_ata_identify(sample(rpm=1))['reported_medium'], 'ssd')
++        self.assertEqual(parse_ata_identify(sample(rpm=0))['reported_medium'], 'unknown')
++
++    def test_reject_packet_empty_and_incomplete_identity(self):
++        for invalid in (b'', bytes(512), sample()[:480]):
++            with self.assertRaises(ValueError):
++                parse_ata_identify(invalid)
++        packet = bytearray(sample())
++        packet[1] = 0x80
++        with self.assertRaises(ValueError):
++            parse_ata_identify(bytes(packet))
++
++    def test_corrob_requires_all_identity_factors(self):
++        base = parse_ata_identify(sample())
++        report = interpret_sat_evidence(device(), base)
++        self.assertEqual(report['source'], SOURCE)
++        self.assertTrue(report['native_hdd_corrob'])
++        self.assertEqual(report['status'], 'unknown')
++        self.assertTrue(advise(model=device().model, bus='usb', snapshot=report).can_attempt_hdd_refresh)
++        self.assertTrue(ui_repair_readiness(device().public(), 'carequick', report)[0])
++        for change in ({'size_bytes':1000204886016-512},
++                       {'logical_sector_bytes':4096},
++                       {'reported_medium':'ssd'}, {'serial_suffix':'***9999'},
++                       {'model':'Fake SSD Controller'}):
++            with self.subTest(change=change):
++                self.assertIsNone(interpret_sat_evidence(device(), {**base, **change}))
++        self.assertIsNone(interpret_sat_evidence(device(model='SanDisk SDSSDH3 500G'),
++                                                   {**base, 'model':'SanDisk SDSSDH3 500G'}))
++
++    def test_bounded_read_only_child_and_failure(self):
++        result = {**parse_ata_identify(sample()), 'number':4}
++        mock_runner = mock.Mock(return_value=subprocess.CompletedProcess([],0,stdout=json.dumps(result).encode()))
++        with mock.patch.object(ata_identity.sys,'platform','win32'):
++            report = windows_ata_snapshot(device(), runner=mock_runner)
++            self.assertEqual(report['source'], SOURCE)
++            self.assertEqual(mock_runner.call_args.kwargs['timeout'], 8)
++            self.assertEqual(mock_runner.call_args.args[0][-3:], ['inspect-windows-ata','--number','4'])
++            mock_runner.side_effect = subprocess.TimeoutExpired('identify',8)
++            self.assertIsNone(windows_ata_snapshot(device(),runner=mock_runner))
++
++    def test_smart_failure_uses_sat_after_native_inconclusive(self):
++        from driverepair_desktop import health
++        qualified = interpret_sat_evidence(device(), parse_ata_identify(sample()))
++        inconclusive = {'source':'windows_native_unverified', 'status':'unknown',
++                        'reported_medium':'unknown', 'native_hdd_corrob':False}
++        with (mock.patch.object(health, 'health_snapshot', side_effect=RuntimeError('SMART unavailable')),
++              mock.patch('driverepair_desktop.native_media.windows_native_snapshot',
++                         return_value=inconclusive),
++              mock.patch('driverepair_desktop.ata_identity.windows_ata_snapshot',
++                         return_value=qualified),
++              mock.patch.object(health,'windows_storage_health',return_value=None)):
++            result = health.try_health_snapshot(device())
++        self.assertEqual(result['source'], SOURCE)
++        self.assertEqual(result['status'], 'unknown')
++        self.assertIn('SMART unavailable', result['smart_unavailable_reason'])
++
++    def test_native_reports_ssd_conflict_is_not_overridden(self):
++        from driverepair_desktop import health
++        qualified = interpret_sat_evidence(device(), parse_ata_identify(sample()))
++        contradictory = {'source':'windows_native_unverified','status':'unknown',
++                         'reported_medium':'ssd','native_hdd_corrob':False}
++        with (mock.patch.object(health, 'health_snapshot', side_effect=RuntimeError('SMART unavailable')),
++              mock.patch('driverepair_desktop.native_media.windows_native_snapshot',
++                         return_value=contradictory),
++              mock.patch('driverepair_desktop.ata_identity.windows_ata_snapshot',
++                         return_value=qualified) as probe,
++              mock.patch.object(health, 'windows_storage_health',return_value=None)):
++            response = health.try_health_snapshot(device())
++        self.assertEqual(response['reported_medium'],'ssd')
++        self.assertFalse(response['native_hdd_corrob'])
++        probe.assert_not_called()
++
++    def test_smart_media_failure_cannot_be_replaced_with_ata_hint(self):
++        from driverepair_desktop import health
++        failed = {'source':'smartctl_auto', 'reported_medium':'unknown',
++                  'status':'failure_reported', 'ata_selected_raw_attributes':[]}
++        with mock.patch.object(health,'health_snapshot',return_value=failed):
++            self.assertEqual(health.try_health_snapshot(device()), failed)
++
++    def test_guarded_engine_still_needs_explicit_risk_and_journal(self):
++        report = interpret_sat_evidence(device(), parse_ata_identify(sample()))
++        args = Namespace(command='care-external', journal_backend='disk',
++                         journal='/healthy/new-journal', rewrite_neighbors=False,
++                         recording='auto', ack_unknown_health=False, max_regions=16,
++                         auto_lock_volumes=True, ack_media_warning=False)
++        with mock.patch.object(release_policy,'REPAIR_BETA_GUARDED',True):
++            with self.assertRaisesRegex(PermissionError, 'ack-unknown-health'):
++                release_policy.check_guarded_repair_preflight(args,report,device())
++            args.ack_unknown_health = True
++            self.assertTrue(release_policy.check_guarded_repair_preflight(args,report,device())['can_attempt_hdd_refresh'])
++            args.journal = None
++            with self.assertRaises(PermissionError):
++                release_policy.check_guarded_repair_preflight(args,report,device())
++
++if __name__=='__main__':
++    unittest.main()
+diff --git a/desktop/tests/test_b27_uasp_write_gate.py b/desktop/tests/test_b27_uasp_write_gate.py
+new file mode 100644
+index 0000000..d77ea47
+--- /dev/null
++++ b/desktop/tests/test_b27_uasp_write_gate.py
+@@ -0,0 +1,53 @@
++"""Windows UASP USB HDDs must pass the same independent external disk gate."""
++import json
++import unittest
++from unittest import mock
++from driverepair_desktop.devices import Device, assert_windows_external_write_gate
++
++
++def dev():
++    return Device('windows:PhysicalDrive4',r'\\.\PhysicalDrive4','ST1000LM048',
++                  1000204886016,512,'usb','SN0001')
++
++
++def run_case(*, get_bus='SCSI', native_bus='USB', native_size=1000204886016,
++             is_boot=False, is_system=False, is_offline=False, gate_serial='SN0001'):
++    calls=[]
++    def run(args,timeout=None):
++        text=' '.join(args).lower()
++        calls.append(text)
++        if 'get-disk' in text:
++            return json.dumps({'Number':4,'BusType':get_bus,'FriendlyName':'Seagate',
++                'SerialNumber':gate_serial,'Size':1000204886016,'LogicalSectorSize':512,
++                'IsBoot':is_boot,'IsSystem':is_system,'IsOffline':is_offline}).encode()
++        if 'inspect-windows-disk' in text:
++            return json.dumps({'number':4,'bus':native_bus,'size_bytes':native_size}).encode()
++        raise AssertionError('Unexpected subprocess')
++    return run, calls
++
++
++class UASPGateTests(unittest.TestCase):
++    def test_independent_native_usb_admits_uasp_with_system_gates(self):
++        runner,calls=run_case()
++        with mock.patch('driverepair_desktop.devices.sys.platform','win32'):
++            assert_windows_external_write_gate(dev(), runner)
++        self.assertTrue(any('inspect-windows-disk' in call for call in calls))
++
++    def test_uasp_internal_sas_and_mismatched_size_not_admitted(self):
++        for kw in ({'native_bus':'SAS'}, {'native_size':1000204886016+256*1024*1024},
++                   {'is_boot':True}, {'is_system':True}, {'is_offline':True},
++                   {'gate_serial':'OTHER-DRIVE'}):
++            with self.subTest(kw=kw):
++                runner,_=run_case(**kw)
++                with mock.patch('driverepair_desktop.devices.sys.platform','win32'):
++                    with self.assertRaises(RuntimeError):
++                        assert_windows_external_write_gate(dev(),runner)
++
++    def test_plain_usb_does_not_need_extra_probe(self):
++        runner,calls=run_case(get_bus='USB')
++        with mock.patch('driverepair_desktop.devices.sys.platform','win32'):
++            assert_windows_external_write_gate(dev(),runner)
++        self.assertFalse(any('inspect-windows-disk' in c for c in calls))
++
++if __name__=='__main__':
++    unittest.main()

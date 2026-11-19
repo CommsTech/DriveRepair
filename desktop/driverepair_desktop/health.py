@@ -366,6 +366,13 @@ def supplement_inconclusive_smart(device: Device, snapshot: dict) -> dict:
         return snapshot
     from .native_media import windows_native_snapshot
     native = windows_native_snapshot(device)
+    # Contradictory flash/SSD evidence is a veto, not a reason to probe for a
+    # more convenient HDD answer. Never replace it with ATA/model data.
+    if native and str(native.get('reported_medium') or '').lower() == 'ssd':
+        return snapshot
+    if not native or native.get('native_hdd_corrob') is not True:
+        from .ata_identity import windows_ata_snapshot
+        native = windows_ata_snapshot(device)
     if not native or native.get('native_hdd_corrob') is not True:
         return snapshot
     native['smart_unavailable_reason'] = 'SMART reply did not establish physical rotational medium'
@@ -385,6 +392,15 @@ def try_health_snapshot(device: Device,
         # It is never interpreted as a passed SMART/health assessment.
         from .native_media import windows_native_snapshot
         native = windows_native_snapshot(device)
+        # Native SSD/TRIM evidence conflicts with an HDD claim. Retain the
+        # conflict, never promote a convenient SAT result to a write candidate.
+        if (native is None or
+                (native.get('native_hdd_corrob') is not True and
+                 str(native.get('reported_medium') or '').lower() != 'ssd')):
+            from .ata_identity import windows_ata_snapshot
+            ata = windows_ata_snapshot(device)
+            if ata is not None:
+                native = ata
         if native is not None:
             native['smart_unavailable_reason'] = str(exc)
             # A Windows HealthStatus failure/warning may be imperfect through
