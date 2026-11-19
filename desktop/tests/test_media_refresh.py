@@ -174,6 +174,65 @@ class RollingJournalTests(unittest.TestCase):
         self.assertIn(result["status"], {"completed", "completed_with_skips_or_verify_failures"})
         self.assertIsNone(result["transaction"])
 
+    def test_resume_rejects_malformed_transaction_before_write(self):
+        class CountingMedia:
+            def __init__(self):
+                self.writes = []
+
+            def read_at(self, offset, count):
+                return b"R" * count
+
+            def write_at(self, offset, data):
+                self.writes.append((offset, len(data)))
+                return len(data)
+
+            def flush(self):
+                pass
+
+        from driverepair_desktop.recovery import _state_save
+
+        media = CountingMedia()
+        os.makedirs(self.journal, mode=0o700)
+        region = b"R" * 512
+        _atomic_write_bytes(str(Path(self.journal) / "region.bin"), region)
+        _state_save(str(Path(self.journal) / "meta.json"), {
+            "schema": 2,
+            "operation": "media_refresh_rolling",
+            "mode": "targeted",
+            "size": len(self.raw),
+            "sector": 512,
+            "chunk": 1024,
+            "source_token": "tok",
+            "verify": True,
+            "consistency_reads": 2,
+            "cursor": 0,
+            "queue": [[len(self.raw), 512]],
+            "target_digest": _sha256(json.dumps(
+                [[len(self.raw), 512]], separators=(",", ":")
+            ).encode()),
+            "rewritten_bytes": 0,
+            "verified_bytes": 0,
+            "skipped_ranges": [],
+            "inconsistent_ranges": [],
+            "failed_read_attempts": 0,
+            "failed_write_attempts": 0,
+            "transaction": {
+                "state": "SAVED",
+                "offset": len(self.raw),
+                "length": 512,
+                "sha256": _sha256(region),
+            },
+            "status": "in_progress",
+            "journal_backend": "disk",
+            "notes": "test journal",
+        })
+        with self.assertRaises(ValueError):
+            refresh_media(media, size=len(self.raw), sector=512,
+                          source_token="tok", journal=self.journal,
+                          chunk=1024, mode="targeted", resume=True,
+                          journal_backend="disk")
+        self.assertEqual(media.writes, [])
+
     def test_adaptive_refreshes_only_slow_regions(self):
         class SlowSpot(ImageReadWriter):
             def read_at(self, offset, count):

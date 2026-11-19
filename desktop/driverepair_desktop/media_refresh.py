@@ -989,6 +989,44 @@ def _recover_interrupted_transaction(media: ReadWriter, store: JournalStore, met
     return meta
 
 
+def _validate_resume_transaction(meta: dict, *, size: int, sector: int,
+                                 chunk: int, mode: str) -> None:
+    """Reject malformed journal coordinates before any patient write.
+
+    Journal files are operator-visible state, not an authorization boundary.
+    A damaged or hand-edited transaction must never turn into an unchecked
+    offset passed to a physical writer during resume.
+    """
+    transaction = meta.get("transaction")
+    if transaction is None:
+        return
+    if not isinstance(transaction, dict):
+        raise ValueError("Malformed refresh journal transaction")
+    state = transaction.get("state")
+    if state not in {STATE_SAVED, STATE_WRITING, STATE_VERIFIED, STATE_COMMITTED}:
+        raise ValueError("Malformed refresh journal transaction state")
+    offset = transaction.get("offset")
+    length = transaction.get("length")
+    digest = transaction.get("sha256")
+    if (type(offset) is not int or type(length) is not int or
+            offset < 0 or length <= 0 or offset % sector or length % sector or
+            length > chunk or offset + length > size or
+            not isinstance(digest, str) or len(digest) != 64 or
+            any(c not in '0123456789abcdef' for c in digest)):
+        raise ValueError("Malformed or out-of-bounds refresh journal transaction")
+    if mode == "full":
+        cursor = meta.get("cursor")
+        if (state != STATE_COMMITTED and
+                (type(cursor) is not int or cursor != offset)):
+            raise ValueError("Refresh journal cursor does not match its transaction")
+    else:
+        queue = meta.get("queue")
+        if state != STATE_COMMITTED:
+            if (not isinstance(queue, list) or not queue or
+                    queue[0] != [offset, length]):
+                raise ValueError("Refresh journal queue does not match its transaction")
+
+
 def _stop_with_journal(store: JournalStore, meta: dict, status: str,
                        *, error: str | None = None) -> str:
     """Stop on write/verify failure; DO NOT discard the only surviving original bytes."""
@@ -1077,6 +1115,8 @@ def refresh_media(
         if mode == "targeted" and (meta.get("target_digest") is None or
                                     target_digest is not None and meta["target_digest"] != target_digest):
             raise RuntimeError("Target set differs from the interrupted journal")
+        _validate_resume_transaction(meta, size=size, sector=sector,
+                                     chunk=chunk, mode=mode)
         meta = _recover_interrupted_transaction(media, store, meta, identity_check, pre_write_check)
     else:
         store.prepare_new()

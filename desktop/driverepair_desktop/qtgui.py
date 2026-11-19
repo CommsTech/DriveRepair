@@ -394,8 +394,10 @@ def launch():
             for i,(t,v) in enumerate(visible):
                 x=rect.left()+max(0.,min(1.,(t-start)/45.))*rect.width()
                 y=rect.bottom()-(v/ymax)*rect.height()*.88
-                if i==0: path.moveTo(x,y)
-                else: path.lineTo(x,y)
+                if i==0:
+                    path.moveTo(x,y)
+                else:
+                    path.lineTo(x,y)
             if len(visible) > 1:
                 area=QPainterPath(path)
                 area.lineTo(rect.right(),rect.bottom())
@@ -1047,7 +1049,8 @@ def launch():
             query.setPlaceholderText('Filter operations…')
             layout.addWidget(query)
             items=QListWidget()
-            for title,_ in choices: items.addItem(title)
+            for title,_ in choices:
+                items.addItem(title)
             layout.addWidget(items)
             items.setCurrentRow(0)
             def filter_items(value):
@@ -1055,8 +1058,10 @@ def launch():
                 for i,(name,_) in enumerate(choices):
                     visible=value.casefold() in name.casefold()
                     items.item(i).setHidden(not visible)
-                    if visible and first<0: first=i
-                if first>=0: items.setCurrentRow(first)
+                    if visible and first<0:
+                        first=i
+                if first>=0:
+                    items.setCurrentRow(first)
             query.textChanged.connect(filter_items)
             query.returnPressed.connect(dialog.accept)
             items.itemActivated.connect(lambda _:dialog.accept())

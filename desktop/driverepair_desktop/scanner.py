@@ -357,10 +357,12 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
     inconsistent_reads: list[dict] = []
     repeated_read_errors = 0
     repeat_probe_failed_ranges: list[dict] = []
+    # Keep the result schema stable when an abort skips optional follow-up
+    # reads. The caller still needs the abort evidence, not an exception.
+    extra_attempts = 0
     if compare_suspects and mode == 'triage' and not status.startswith('aborted'):
         candidates = sorted(set(anomalous_indices))[:min(12, samples)]
         followup_deadline = time.monotonic() + 15.0
-        extra_attempts = 0
         for index in candidates:
             if time.monotonic() >= followup_deadline:
                 break

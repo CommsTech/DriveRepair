@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — workbench-20261118 hardening merge and qtgui lint cleanup (2026-11-18)
+
+- Port unique `workbench-20261118` repair-engine hardening onto current `main` without regressing guarded-repair / recovery-workbench features already landed via PRs #178–#183.
+- Initialize triage `extra_suspect_reads` before optional follow-up so aborted scans still return a stable evidence result.
+- Validate interrupted refresh journal transaction coordinates (alignment, bounds, digest, cursor/queue match) before any resume write.
+- Expand `BrokenPipeError`/`OSError` handling in the refresh dashboard stream flush; expand one-line colon statements in `qtgui.py` (ruff E701 / issues #179–#181).
+
 ## Unreleased — multi-drive, condition evidence, live ISO and truthful Qt telemetry (2026-11-18)
 
 - Preserve aggregated successful and failed read spans across throttled progress messages, addressing the inaccurate GUI coverage map in the supplied Windows screenshots. Keep unobserved drive regions unknown.

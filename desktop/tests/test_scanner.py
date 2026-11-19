@@ -58,6 +58,26 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(result["attempted_chunks"], 2)
         self.assertEqual(result["read_error_ranges"][0]["offset"], 0)
 
+    def test_aborted_triage_error_limit_returns_evidence(self):
+        src = FakeReader(b"a" * 4096, fails={0})
+        result = scan_reader(src, size=4096, sector=512, mode="triage",
+                             samples=4, chunk=1024, max_errors=1,
+                             compare_suspects=True)
+        self.assertEqual(result["status"], "aborted_error_limit")
+        self.assertEqual(result["extra_suspect_reads"], 0)
+
+    def test_aborted_triage_device_error_returns_evidence(self):
+        src = FakeReader(b"a" * 4096)
+
+        def disconnected(offset, count):
+            raise OSError(errno.ENODEV, "unplugged")
+
+        src.read_at = disconnected
+        result = scan_reader(src, size=4096, sector=512, mode="triage",
+                             samples=4, chunk=1024, compare_suspects=True)
+        self.assertEqual(result["status"], "aborted_device_or_access_error")
+        self.assertEqual(result["extra_suspect_reads"], 0)
+
     def test_short_read_is_not_success(self):
         src = FakeReader(b"a" * 512)
         result = scan_reader(src, size=1024, sector=512, mode="full", chunk=1024)
