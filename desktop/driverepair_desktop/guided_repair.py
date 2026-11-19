@@ -266,6 +266,12 @@ def plan_targeted_refresh(scan: dict, *, sector: int, chunk: int,
     if not 1 <= max_regions <= 256:
         raise ValueError("Region budget must be 1–256")
     if hardware:
+        # A consent flag can acknowledge UNKNOWN *health*, never UNKNOWN *medium*.
+        # Generic HDD-style rewrites must not be attempted on an SSD or USB
+        # enclosure whose underlying recording medium was not established.
+        physical_medium = str((smart or {}).get('reported_medium') or '').strip().lower()
+        if physical_medium not in {'hdd', 'hard disk', 'rotational'}:
+            reasons.append('Rotational HDD medium not independently confirmed; no HDD-style physical rewrites. Use read-only rescue.')
         # The journaled hardware writer is for rotational HDD regions only.
         # Even engineering builds must not reinterpret flash translation-layer
         # behavior as magnetic weak-sector refresh. Never turn NVMe/SSD/flash

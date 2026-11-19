@@ -13,6 +13,10 @@ MIB = 1024 * 1024
 # Manufacturer datasheet, BarraCuda 2.5 DS1907: ST1000LM048 = SMR.
 # Never extrapolate model families to all Seagate drives.
 KNOWN_SMR_MODELS = frozenset({'ST1000LM048', 'ST500LM030', 'ST500LM034'})
+# SanDisk published Ultra 3D SATA SSD SKU SDSSDH3-500G (sandisk.com).
+# Model-family recognition is ADVISORY for rescue profiles, not an attestation
+# that the USB bridge exposes the actual patient or a write authorization.
+KNOWN_SSD_MODEL_FAMILIES = frozenset({'SDSSDH3'})
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,8 @@ def identify_profile(*, model: str = '', bus: str = '', media_type: str = '',
     model_id = re.sub(r'(?<=[A-Z0-9])\s+(?=[0-9])', '', model.upper().strip())
     known_smr = any(re.search(rf'(?<![A-Z0-9]){part}(?![A-Z0-9])', model_id)
                     for part in KNOWN_SMR_MODELS)
+    known_ssd_model = any(re.search(rf'(?<![A-Z0-9]){part}(?![A-Z0-9])', model.upper())
+                          for part in KNOWN_SSD_MODEL_FAMILIES)
     bus_id = bus.strip().lower()
     recording_id = recording.strip().lower()
     medium = media_type.strip().lower()
@@ -67,7 +73,7 @@ def identify_profile(*, model: str = '', bus: str = '', media_type: str = '',
         raise ValueError('Unknown reported medium')
     # A contradictory set of physical claims must NEVER be resolved by
     # guessing that one source is more trustworthy. Prefer read-only unknown.
-    if ((nvme_protocol or solid_state or bus_id in {'nvme', 'nvm express'}) and
+    if ((nvme_protocol or solid_state or known_ssd_model or bus_id in {'nvme', 'nvm express'}) and
             (known_smr or recording_id or rotational)) or (known_smr and recording_id == 'cmr'):
         kind, evidence, confidence = 'unknown', 'conflicting solid-state and magnetic evidence', 'conflict'
     elif (recording_id == 'smr' or (not recording_id and known_smr)):
@@ -80,6 +86,8 @@ def identify_profile(*, model: str = '', bus: str = '', media_type: str = '',
         kind, evidence, confidence = 'flash', 'reported removable flash medium', 'reported'
     elif medium in {'ssd', 'solid state', 'solid-state'}:
         kind, evidence, confidence = 'ssd', 'reported solid-state medium', 'reported'
+    elif known_ssd_model:
+        kind, evidence, confidence = 'ssd', 'manufacturer SSD model-family specification; USB identity unverified', 'model'
     elif rotational:
         kind, evidence, confidence = 'hdd_unknown_recording', 'reported rotational medium; CMR/SMR unspecified', 'reported'
     else:

@@ -97,7 +97,121 @@ def operator_summary(*, operation: str, device: dict | None, result: str,
         f'Outcome: {result}',
         f'Details: {explanation}',
         f'Planned work progress: {progress}',
-        f'Read errors / unresolved data: {errors}',
+        f'Failed read requests (not confirmed bad sectors): {errors}',
         f'Measured successful read coverage: {observed_coverage}',
         'Interpretation: completed operations and readable regions do not certify file integrity or media lifespan.',
     ))
+
+@dataclass(frozen=True)
+class RepairPresentation:
+    heading: str
+    explanation: str
+    next_action: str
+    status_label: str
+    complete_with_unresolved: bool
+
+
+def repair_presentation(result: dict, *, exit_code: int) -> RepairPresentation | None:
+    """Interpret the machine result without using process exit code as a health score.
+
+    A successful *transaction* is not successful data restoration. In
+    particular partial_repair_unresolved_data exits nonzero by design and must
+    not collapse to a generic 'failed (2)' user message.
+    """
+    if not isinstance(result, dict):
+        return None
+    state = str(result.get('status') or '')
+    if state not in {
+        'partial_repair_unresolved_data', 'completed_targeted_refresh',
+        'repair_postverify_failed', 'repair_postverify_unavailable',
+        'repair_health_deteriorated', 'repair_incomplete',
+        'repair_stopped_safely', 'completed_no_refresh_needed',
+    }:
+        return None
+    scan = result.get('scan') if isinstance(result.get('scan'),dict) else {}
+    repair = result.get('repair') if isinstance(result.get('repair'),dict) else {}
+    verification = result.get('postverification') if isinstance(result.get('postverification'),dict) else {}
+    attempted = scan.get('read_error_chunks')
+    attempts = (f'{attempted} failed read attempts in the scan' if type(attempted) is int
+                else 'read-failure count unavailable')
+    written = max(0,int(repair.get('rewritten_bytes') or 0))
+    independently_verified = (max(0,int(verification.get('verified_bytes') or 0))
+                              if verification.get('status') == 'postverify_passed' else 0)
+    def size(n: int) -> str:
+        for unit in ('B','KiB','MiB','GiB','TiB'):
+            if n < 1024 or unit == 'TiB':
+                return f'{n:,.0f} {unit}' if unit == 'B' else f'{n:,.2f} {unit}'
+            n /= 1024
+        return 'unknown'
+    evidence = (f'{size(written)} rewritten; {size(independently_verified)} independently reread '
+                f'and digest-matched' if verification.get('status') == 'postverify_passed'
+                else f'{size(written)} reported rewritten; independent verification is NOT confirmed '
+                     f'({verification.get("status", "not reported")})')
+    rescue = ('Save a recovery image to separate healthy storage. Investigate unresolved '
+              'ranges on the image, inspect SMART/USB connection evidence, and replace '
+              'the drive if errors recur. Do not repeat writes automatically.')
+    if state == 'partial_repair_unresolved_data':
+        return RepairPresentation('Partial maintenance · unreadable data remains',
+            f'{evidence}. {attempts}. Some regions remain unresolved or untested; '
+            'rewriting readable bytes did not reconstruct unreadable data.', rescue,
+            'PARTIAL · NOT REPAIRED',True)
+    if state == 'completed_targeted_refresh':
+        return RepairPresentation('Targeted rewrite verified · drive health NOT certified',
+            f'{evidence}. {attempts}. A readback match does not demonstrate '
+            'that marginal media is reliable or recover missing files.',
+            'Back up immediately, run a manufacturer-supported long test when safe, '
+            'and compare SMART trends before considering reuse.',
+            'REWRITE VERIFIED · MONITOR',False)
+    if state in {'repair_postverify_failed','repair_postverify_unavailable','repair_health_deteriorated'}:
+        return RepairPresentation('Repair result not independently verified',
+            f'{evidence}. {attempts}. Media condition or required readback evidence '
+            'does not support a successful repair claim.',rescue,
+            'UNVERIFIED · ATTENTION',True)
+    if state == 'completed_no_refresh_needed':
+        return RepairPresentation('No eligible regions rewritten',
+            f'{attempts}. This operation made no media-repair claim.',
+            'Review the scan and recover important data before further drive testing.',
+            'NO PHYSICAL REPAIR',bool(attempted))
+    return RepairPresentation('Repair interrupted · outcome incomplete',
+        f'{evidence}. {attempts}. Do not assume the last transaction or any '
+        'unvisited regions were verified.',rescue,'INCOMPLETE',True)
+
+
+def drive_inspection_text(device: dict, report: dict | None = None,
+                          *, error: str = '') -> str:
+    """Show inventory facts even if a Windows USB IOCTL is unavailable.
+
+    Inventory fields are advisory; suffixes (not raw serial numbers) are
+    displayed. This never infers write access, recording type or disk health.
+    """
+    device = device or {}
+    report = report if isinstance(report,dict) else {}
+    def field(value):
+        return str(value if value is not None else 'unknown').replace('\n',' ').replace('\r',' ')[:180]
+    details = [
+        'IDENTIFIED DURING DRIVE DISCOVERY (read-only)',
+        f'Model: {field(device.get("model"))}',
+        f'Capacity (bytes): {field(device.get("size_bytes"))}',
+        f'Transport: {field(device.get("bus"))}',
+        f'Serial suffix: {field(device.get("serial_suffix"))}',
+        f'Logical sector size (inventory): {field(device.get("sector_size"))}',
+        '',
+        'OPTIONAL STORAGE-DRIVER PROBE',
+    ]
+    if not report:
+        details += ['Unavailable. Drive discovery may still be valid, but device '
+                    'capabilities and write eligibility remain unverified.']
+    else:
+        allowed = ('source','vendor','model','firmware_revision','bus','number',
+                   'physical_sector_bytes','logical_sector_bytes','optimal_io_bytes',
+                   'max_request_kib','rotational','zoned','size_bytes',
+                   'reported_solid_state','protocol','smart_status','geometry_note')
+        details += [f'{k.replace("_"," ").title()}: {field(report[k])}'
+                    for k in allowed if report.get(k) is not None]
+    if error:
+        details += ['',f'Probe message: {field(error)}']
+    details += ['', 'A USB bridge can hide SMART and the underlying SSD/HDD type.',
+                'This window never authorizes physical writes.',
+                'Read-only rescue remains an option; do not assume a failed '
+                'metadata probe means the drive is healthy or damaged.']
+    return '\n'.join(details)

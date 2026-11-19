@@ -67,8 +67,14 @@ class GuidedPlanningTests(unittest.TestCase):
     def test_smart_unknown_requires_separate_ack(self):
         self.assertEqual(plan_targeted_refresh(scan(), sector=512, chunk=1024,
                          hardware=True)['status'], 'blocked')
+        # Consent to unknown HEALTH cannot establish the underlying medium.
         self.assertEqual(plan_targeted_refresh(scan(), sector=512, chunk=1024,
-                         hardware=True, allow_unknown_health=True)['status'], 'candidates_found')
+                         hardware=True, allow_unknown_health=True)['status'], 'blocked')
+        # Only a separately established HDD type may reach the candidate stage.
+        snapshot = {'reported_medium': 'hdd', 'status': 'unknown'}
+        self.assertEqual(plan_targeted_refresh(scan(), sector=512, chunk=1024,
+                         hardware=True, smart=snapshot,
+                         allow_unknown_health=True)['status'], 'candidates_found')
 
     def test_smart_warning_still_blocks_with_unknown_override(self):
         snap = {'status':'failure_reported'}

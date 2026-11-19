@@ -166,7 +166,7 @@ class RamOnlyTests(unittest.TestCase):
               mock.patch.object(cli, '_validate_live_refresh_preflight') as preflight,
               mock.patch.object(cli, 'open_device_readonly', return_value=fixture),
               mock.patch.object(cli, 'open_device_readwrite', return_value=fixture),
-              mock.patch.object(cli, 'try_health_snapshot', return_value=None),
+              mock.patch.object(cli, 'try_health_snapshot', return_value={'reported_medium':'hdd', 'status':'smart_passed_limited', 'source':'smartctl'}),
               mock.patch.object(cli, 'scan_reader', return_value=report),
               contextlib.redirect_stdout(output)):
             args = ['care-external', '--device', disk.id,
