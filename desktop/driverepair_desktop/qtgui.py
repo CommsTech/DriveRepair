@@ -816,6 +816,23 @@ def launch():
             }
             self.job_box.currentIndexChanged.connect(self.choice_changed)
             workflow.addWidget(self.job_box)
+            self.maintenance_box=QComboBox()
+            self.maintenance_box.setToolTip(
+                'Statistical multi-sample recovery ladder for HDD maintenance. '
+                'Higher levels add settle delays and samples; deep/extreme may use '
+                'high-confidence sector majority. Fail-closed — never invents weak votes. '
+                'Not a SpinRite clone; SSD/USB unknown media gates are unchanged.'
+            )
+            for label, value in (
+                ('Maintenance level 1 · Quick (2 identical reads)', '1'),
+                ('Maintenance level 2 · Normal (3 samples + settle)', '2'),
+                ('Maintenance level 3 · Thorough (5 samples)', '3'),
+                ('Maintenance level 4 · Deep (sector majority ≥75%)', '4'),
+                ('Maintenance level 5 · Extreme (sector majority ≥80%)', '5'),
+            ):
+                self.maintenance_box.addItem(label, value)
+            self.maintenance_box.setCurrentIndex(1)  # Normal default for guided care
+            workflow.addWidget(self.maintenance_box)
             self.batch_button=QPushButton('Queue multiple drives for rescue  +')
             self.batch_button.setToolTip('Serial read-only imaging of multiple selected sources. Each destination is a unique NEW image on separate healthy storage.')
             self.batch_button.clicked.connect(self.queue_rescue)
@@ -1260,6 +1277,7 @@ def launch():
             self.device_box.setEnabled(not running)
             self.offline_devices.setEnabled(not running)
             self.job_box.setEnabled(not running)
+            self.maintenance_box.setEnabled(not running and kind in {'carequick','carefull','careresume'})
             self.browse.setEnabled(not running)
             self.batch_button.setEnabled(not running)
             self.boot_button.setEnabled(not running)
@@ -2119,7 +2137,9 @@ def launch():
                             'Save a small, private read-only scan checkpoint locally? '
                             'This stores offsets and observations, not recovered sector bytes.',
                             QMessageBox.Yes | QMessageBox.No)==QMessageBox.Yes
+                    maint=str(self.maintenance_box.currentData() or '2')
                     args=['care-external','--cooperative-stop-stdin','--device',dev,'--mode','full' if kind=='carefull' else 'quick',
+                          '--maintenance-level',maint,
                           *journal_args,'--auto-lock-volumes','--confirm-identity',d['identity_hint'],
                           '--ack-risk','--ack-destructive','--ack-no-backup','--ack-data-loss-risk',
                           '--ack-usb-bridge-risk','--ack-unvalidated-hardware',

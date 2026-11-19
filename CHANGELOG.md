@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — 2026-11-19 statistical sector recovery ladder (0.3.3b18)
+
+- Add fail-closed **statistical multi-sample recovery** with settle delays and a maintenance ladder (levels 1–5 / quick→extreme). Whole-buffer unanimous agreement remains preferred; **sector-granular majority** is allowed only at deep/extreme with high agreement thresholds. Weak votes never invent rewrite bytes.
+- Wire `--maintenance-level` through `refresh-*` and `care-*`, Qt HDD maintenance workflows (default Normal/2), guided investigation’s sector-size second chance, and deeper postverify sampling on levels 4–5.
+- Preserve all b16/b17 SSD / flash / unknown-USB write gates. This is **not** a SpinRite binary reverse-engineer or clone; see `docs/STATISTICAL_SECTOR_RECOVERY_B18.md`.
+- Synthetic tests cover unanimous recovery, weak-majority refusal, high-confidence sector majority, and refresh integration. Hardware qualification remains outstanding.
+
 ## Unreleased — 2026-11-19 USB SMART identification and truthful preflight (0.3.3b17)
 
 - Apply the **same physical-repair eligibility decision in every Qt build**, not only the guarded beta. The UI checks stable serial, SMART evidence and actual media suitability before launching a repair subprocess; a Seagate SMR model label alone does not authorize patient writes. When repair is ineligible, show **Rescue to image instead** rather than a clickable Start button that predictably fails after launch. The CLI/engine remains independently authoritative.

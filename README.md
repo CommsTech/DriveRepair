@@ -1,5 +1,9 @@
 # DriveRepair
 
+### 2026-11-19 statistical sector recovery (0.3.3b18)
+
+HDD maintenance now offers an explicit **maintenance level** ladder (1–5): more samples and settle delays on marginal media, with high-confidence sector majority only at deep/extreme. Weak statistical votes are refused. SSD/USB unknown-medium write gates are unchanged. This uses public maintenance concepts and DriveRepair’s own consistency rules — **not** a reverse-engineered SpinRite binary. See `docs/STATISTICAL_SECTOR_RECOVERY_B18.md`.
+
 ### 2026-11-19 partial-repair reporting and USB media safety
 
 Recent Windows traces showed 248 failed **read requests** during a SanDisk SDSSDH3 USB session. A subsequent journaled refresh reported rewritten and readback bytes, but the final operation remained **partial with unresolved data**. The Qt workstation now displays that status and the actual independent postverification result; 100% of planned *steps* is not a healthy-drive certificate. The engine now refuses HDD-style physical writes unless the underlying rotational HDD medium is independently established. A SanDisk SDSSDH3 model label is an advisory SSD classification even when SMART is hidden behind a USB adapter, not a write permit. The read-only device-details UI preserves inventory facts when the optional Windows query fails. See `docs/PARTIAL_REPAIR_TRUTH_AND_USB_IDENTITY_20261119.md`.
@@ -8,7 +12,7 @@ Recent Windows traces showed 248 failed **read requests** during a SanDisk SDSSD
 
 > 🌍 **Our mission: Reduce e-waste by extending hardware life.** When a drive "dies," there's usually still data to rescue and life to restore. DriveRepair gives you the surgical tools to breathe new life into storage that's been written off.
 
-> **Current source baseline: 0.3.3b14, with post-b14 beta hardening (unreleased). Not approved for unrestricted physical-drive repair.** The supplied source archive is an engineering build. Only the separately built `-public-beta.pyz` package has in-place image/physical-drive writes disabled by distribution policy. Do not distribute the engineering zipapp/wheel as a public safety-qualified release.
+> **Current source baseline: 0.3.3b18 (unreleased engineering). Not approved for unrestricted physical-drive repair.** The supplied source archive is an engineering build. Only the separately built `-public-beta.pyz` package has in-place image/physical-drive writes disabled by distribution policy. Do not distribute the engineering zipapp/wheel as a public safety-qualified release.
 
 ## E-Waste Mission
 
@@ -60,22 +64,22 @@ The desktop interface uses Python, optional PySide6 (Qt UI), and a Tk fallback. 
 
 ```sh
 python scripts/build_desktop.py --public-beta --no-wheel
-python dist/DriveRepair-0.3.3b17-public-beta.pyz gui
+python dist/DriveRepair-0.3.3b18-public-beta.pyz gui
 ```
 
 For a CLI image-only example, use a source **regular file** and an unused output path:
 
 ```sh
-python dist/DriveRepair-0.3.3b17-public-beta.pyz scan-image --image source.img --mode triage --json
-python dist/DriveRepair-0.3.3b17-public-beta.pyz rescue-image --image source.img --output recovered.img --json
-python dist/DriveRepair-0.3.3b17-public-beta.pyz rescue-status --output recovered.img --json
+python dist/DriveRepair-0.3.3b18-public-beta.pyz scan-image --image source.img --mode triage --json
+python dist/DriveRepair-0.3.3b18-public-beta.pyz rescue-image --image source.img --output recovered.img --json
+python dist/DriveRepair-0.3.3b18-public-beta.pyz rescue-status --output recovered.img --json
 ```
 
 For experimental **actual guided HDD repair** using a *separate*, explicitly restricted build, run:
 
 ```sh
 python scripts/build_desktop.py --repair-beta --no-wheel
-python dist/DriveRepair-0.3.3b17-repair-beta.pyz qt-gui
+python dist/DriveRepair-0.3.3b18-repair-beta.pyz qt-gui
 ```
 
 This build enables **guided `care-external` physical writes** (not unconditional write commands). It requires smartctl evidence of an HDD, separate disk-backed journal, fingerprint confirmation and exclusive locking; unknown/SSD/NVMe media are not rewrite targets. The GUI requests explicit data-loss and SMART-warning consent. This is for *sacrificial hardware testing*, not qualification for valuable media. See [repair-beta engineering and hardware handoff](docs/REPAIR_BETA_ENGINEERING_20261118.md).
