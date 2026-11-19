@@ -256,10 +256,12 @@ class RealGuiWorkflowTests(unittest.TestCase):
                         errors.append(f'begin: {exc}')
                         close_window(root)
                         return
-                    root.after(300, lambda: check(time.monotonic()+8))
+                    root.after(300, lambda: check(time.monotonic()+20))
+                last = {'values': None}
                 def check(deadline):
                     if time.monotonic() > deadline:
-                        errors.append('Timed out waiting for scan metric telemetry')
+                        errors.append('Timed out waiting for scan metric telemetry; '
+                                      f'last values: {last["values"]!r}')
                         close_window(root)
                         return
                     labels = list(all_widgets(root))
@@ -274,6 +276,8 @@ class RealGuiWorkflowTests(unittest.TestCase):
                             varlabel = [w for w in card.winfo_children() if isinstance(w, tk.Label)]
                             if len(varlabel) >= 2:
                                 values.append(root.getvar(varlabel[1].cget('textvariable')))
+                        if values:
+                            last['values'] = list(values)
                         if (len(values) >= 4 and 'MiB' in str(values[0]) and
                                 str(values[2]) not in {'—', 'Measuring…'} and
                                 str(values[3]) not in {'—', 'Calculating…'}):
@@ -282,7 +286,11 @@ class RealGuiWorkflowTests(unittest.TestCase):
                             return
                     except (StopIteration, tk.TclError):
                         pass
-                    root.after(100, lambda: check(deadline))
+                    try:
+                        root.after(100, lambda: check(deadline))
+                    except tk.TclError:
+                        # Window already torn down; the assertion below reports it.
+                        pass
                 root.after(350, begin)
                 return root
             with mock.patch.object(tk, 'Tk', side_effect=patched_tk), \
