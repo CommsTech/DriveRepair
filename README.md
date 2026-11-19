@@ -1,8 +1,23 @@
 # DriveRepair
 
-**Drive diagnostics, image-first rescue, selective file extraction, clone-only filesystem repair and experimental original-media maintenance.** Privacy-first and local by default.
+**Save drives. Save the planet.** Drive diagnostics, image-first rescue, selective file extraction, clone-only filesystem repair and experimental original-media maintenance. Privacy-first and local by default.
 
-> **Current source baseline: 0.3.3b13, with post-b13 beta hardening (unreleased). Not approved for unrestricted physical-drive repair.** The supplied source archive is an engineering build. Only the separately built `-public-beta.pyz` package has in-place image/physical-drive writes disabled by distribution policy. Do not distribute the engineering zipapp/wheel as a public safety-qualified release.
+> 🌍 **Our mission: Reduce e-waste by extending hardware life.** When a drive "dies," there's usually still data to rescue and life to restore. DriveRepair gives you the surgical tools to breathe new life into storage that's been written off.
+
+> **Current source baseline: 0.3.3b14, with post-b14 beta hardening (unreleased). Not approved for unrestricted physical-drive repair.** The supplied source archive is an engineering build. Only the separately built `-public-beta.pyz` package has in-place image/physical-drive writes disabled by distribution policy. Do not distribute the engineering zipapp/wheel as a public safety-qualified release.
+
+## E-Waste Mission
+
+**Why DriveRepair exists:** The electronics industry treats storage devices as disposable. When a drive starts failing, the default response is "replace it." But most failing drives still contain recoverable data and can be restored to functional service.
+
+DriveRepair exists to change that default. Our toolset is designed to:
+
+- **Rescue data** from failing drives before they're discarded
+- **Extend drive life** through surgical filesystem repair
+- **Verify health** so you know when a drive is truly done
+- **Clone before repair** to preserve the original state
+
+Every drive saved is one less piece of e-waste. Every successful repair is a small victory for the planet.
 
 ## Create recovery USB — simplified workflow (unreleased)
 

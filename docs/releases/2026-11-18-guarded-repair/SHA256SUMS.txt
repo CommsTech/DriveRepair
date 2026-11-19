@@ -1,2 +1,0 @@
-93d5b1899c6c35412e981ad9bb9d6c1e16cf5191027dc988801130f51df5d28b  DriveRepair_2026-11-18_Guarded_Repair.patch
-9e7a6d74c38dba63ff1bc91b2d57605a3ae9f8e720991daa3dccce96cba7d3c9  DriveRepair_2026-11-18_Guarded_Repair_Source.zip

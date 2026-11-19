@@ -1,2 +1,0 @@
-45e314fca0fdaa1ac40cbfc4dc9383af45726a6c52ceaa5cd9356f42e9cea5d9  DriveRepair_0.3.3b14_Media_Aware.patch
-12801d4b5ea3340ea1bf40c7904e664cdcc79e726e4345c7ee724d33cfc52d28  DriveRepair_0.3.3b14_Media_Aware_Source.zip

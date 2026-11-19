@@ -1,2 +1,0 @@
-bbff30464c3869e061937c5defe39b18546d434754a99aa238b838a42aa94af2  DriveRepair_2026-11-18_USB_Flashing.patch
-cbc3bf6eaf7dfac1fc27dda470cf85232edbd0e1b8d1540b972035739ed33727  DriveRepair_2026-11-18_USB_Flashing_Source.zip
