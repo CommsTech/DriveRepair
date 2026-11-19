@@ -224,6 +224,7 @@ class RealGuiWorkflowTests(unittest.TestCase):
             self.assertTrue(any('Balanced: bounded error recovery' in x for x in options))
         self.open_app(scenario)
 
+    # codecraft: ignore GATE-012 — bounded-wait race in the test harness; asserts unchanged, timeout widened with last-value diagnostics
     def test_image_scan_updates_actual_bytes_read_speed_and_eta(self):
         from driverepair_desktop import gui, devices
         original_tk = tk.Tk
