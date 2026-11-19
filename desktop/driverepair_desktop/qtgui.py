@@ -154,7 +154,7 @@ def launch():
         from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
             QLabel, QPushButton, QFrame, QProgressBar, QComboBox, QLineEdit, QFileDialog,
             QPlainTextEdit, QMessageBox, QCheckBox, QToolButton, QScrollArea, QGridLayout,
-            QDialog, QListWidget, QSizePolicy, QAbstractItemView, QInputDialog)
+            QDialog, QListWidget, QSizePolicy, QAbstractItemView, QInputDialog, QTabWidget)
     except ImportError as exc:
         raise RuntimeError('Qt workstation requires the optional PySide6 package: python -m pip install PySide6') from exc
 
@@ -183,7 +183,12 @@ def launch():
         QFrame#statTile {{ background:#1a2d42; border:1px solid #29435c; border-radius:10px; }}
         QFrame#actionDock {{ background:{C['sidebar']}; border-top:1px solid {C['line']}; }}
         QScrollArea {{ border:0; }}
-        QScrollBar:vertical {{ background:{C['bg']}; width:10px; }}
+        QTabWidget::pane {{ background:transparent; border:0; }}
+        QTabBar::tab {{ padding:10px 18px; margin-right:5px; background:#1a2b3e;
+                         border:1px solid #344c61; border-radius:7px; color:#bdd3e6; }}
+        QTabBar::tab:selected {{ background:#1b4647; color:#a5ffe9;
+                                  border-bottom:2px solid #40cfb5; }}
+        QScrollBar:vertical {{ background:{C['bg']}; width:8px; }}
         QScrollBar::handle:vertical {{background:#344961; border-radius:5px;min-height:32px;}}
         QLabel {{ background:transparent; }}
         QLabel#muted {{ color:{C['muted']}; }}
@@ -584,9 +589,9 @@ def launch():
             nav.addWidget(nav_title)
             self.nav_buttons={}
             for family, label, key in (
-                ('check','01   Diagnose','scanquick'),
-                ('recover','02   Rescue data','rescue'),
-                ('fix','03   HDD maintenance','carequick')):
+                ('check','Diagnose','scanquick'),
+                ('recover','Rescue data','rescue'),
+                ('fix','HDD maintenance','carequick')):
                 b=QPushButton(label)
                 b.setObjectName('nav')
                 b.setCheckable(True)
@@ -659,6 +664,7 @@ def launch():
             shell_layout.addWidget(main_col,1)
             scroll=QScrollArea()
             scroll.setWidgetResizable(True)
+            self._main_scroll=scroll
             scroll.setFrameShape(QFrame.NoFrame)
             main_col_layout.addWidget(scroll,1)
             central=QWidget()
@@ -769,7 +775,7 @@ def launch():
             drive_panel=card(left)
             pick=QHBoxLayout()
             drive_panel.addLayout(pick)
-            ttl=QLabel('01  Select a drive')
+            ttl=QLabel('SOURCE DEVICE')
             ttl.setStyleSheet('font-weight:700;font-size:15px')
             pick.addWidget(ttl)
             pick.addStretch()
@@ -787,6 +793,14 @@ def launch():
                 'No repair or drive writes start here. Available in the Repair workspace.')
             self.smart_check_button.clicked.connect(lambda:self.probe_selected_media(force=True))
             tool_row.addWidget(self.smart_check_button)
+            self.enable_smart_button=QPushButton('Enable SMART tools')
+            self.enable_smart_button.setToolTip('Use the packaged SMART component when present, '
+                'or explicitly install upstream smartmontools with Windows Package Manager. '
+                'No device firmware or patient sectors are changed.')
+            self.enable_smart_button.clicked.connect(self.enable_smart_tools)
+            from .dependencies import smartctl_path
+            self.enable_smart_button.setVisible(sys.platform=='win32' and not smartctl_path())
+            tool_row.addWidget(self.enable_smart_button)
             tool_row.addStretch()
             self.device_box=QComboBox()
             self.device_box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
@@ -826,7 +840,7 @@ def launch():
             self.device_box.currentIndexChanged.connect(self.update_drive_profile)
             self.drive_panel=drive_panel.parentWidget()
             workflow=card(left)
-            title=QLabel('02  Choose a workflow')
+            title=QLabel('TASK')
             title.setStyleSheet('font-weight:700;font-size:15px')
             workflow.addWidget(title)
             advanced=QLabel('Select an operation. Nothing begins until you press Start.')
@@ -894,6 +908,29 @@ def launch():
             self.drive_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
             workflow.parentWidget().setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
             left.addStretch(1)
+            # Live focus replaces the configuration forms while a scan runs.
+            # This uses the same measured events as the map; no invented score.
+            self.live_card=QFrame()
+            self.live_card.setObjectName('card')
+            live_lay=QVBoxLayout(self.live_card)
+            live_lay.setContentsMargins(18,16,18,16)
+            label=QLabel('LIVE SESSION')
+            label.setObjectName('eyebrow')
+            live_lay.addWidget(label)
+            self.live_device=QLabel('Selected source')
+            self.live_device.setObjectName('section')
+            self.live_device.setWordWrap(True)
+            live_lay.addWidget(self.live_device)
+            self.live_action=QLabel('Scanning without writing to the source')
+            self.live_action.setObjectName('muted')
+            self.live_action.setWordWrap(True)
+            live_lay.addWidget(self.live_action)
+            self.live_stage=MediaPipeline()
+            live_lay.addWidget(self.live_stage)
+            live_lay.addStretch(1)
+            left.insertWidget(0,self.live_card)
+            self.live_card.hide()
+            self.workflow_panel=workflow.parentWidget()
             map_card=card(right)
             self.map_card=map_card.parentWidget()
             self.map_card.hide()  # don't present a vast empty evidence grid before the first scan
@@ -937,7 +974,7 @@ def launch():
             self.speed_graph=RateGraph()
             map_card.addWidget(self.speed_graph)
             result_card=card(right)
-            results_heading=QLabel('03  Results and next action')
+            results_heading=QLabel('FINDINGS & NEXT ACTION')
             results_heading.setStyleSheet('font-size:15px;font-weight:700;')
             result_card.addWidget(results_heading)
             condition_row=QHBoxLayout()
@@ -1001,10 +1038,27 @@ def launch():
             # Actionable outcome precedes dense telemetry. The evidence map
             # remains available immediately below for operator drilldown.
             right.insertWidget(0, result_card.parentWidget())
+            self.results_card=result_card.parentWidget()
+            # Visual graph and findings are separate views of ONE job; stacking
+            # both vertically created scrollbars and buried the answer.
+            right.removeWidget(self.map_card)
+            right.removeWidget(self.results_card)
+            self.evidence_tabs=QTabWidget()
+            self.evidence_tabs.setDocumentMode(True)
+            self.evidence_tabs.addTab(self.results_card,'Assessment')
+            self.evidence_tabs.addTab(self.map_card,'Surface map & throughput')
+            right.addWidget(self.evidence_tabs,1)
+            self.evidence_tabs.setCurrentIndex(0)
+            self.recheck_button=QPushButton('Address scan errors…')
+            self.recheck_button.setToolTip('Reuse recorded failed offsets for bounded read-only follow-up, '
+                'or rescue to an image. It will never silently rewrite source data.')
+            self.recheck_button.clicked.connect(self.address_scan_errors)
+            self.recheck_button.setVisible(False)
+            report_row.insertWidget(1,self.recheck_button)
             self.log=QPlainTextEdit()
             self.log.setReadOnly(True)
             self.log.setMaximumBlockCount(4000)
-            self.log.setVisible(bool(debug_log_path))
+            self.log.setVisible(False)  # Debug enabled does not monopolize the main workspace
             root.addWidget(self.log)
             # Persistent action dock: the Start/Stop controls remain visible even
             # while users inspect the map or scroll through diagnostics.
@@ -1052,6 +1106,127 @@ def launch():
                 self.setWindowTitle(self.windowTitle() + ' [DEBUG]')
             self.select_goal('scanquick')
             QTimer.singleShot(100,self.refresh_devices)
+        def enable_smart_tools(self):
+            """Explicit one-time upstream setup, no downloader in the repair engine."""
+            import shutil
+            from .dependencies import smartctl_path
+            if smartctl_path():
+                QMessageBox.information(self,'SMART support available',
+                    'DriveRepair can use the packaged or installed smartctl executable. '
+                    'USB bridge passthrough support still depends on hardware.')
+                self.enable_smart_button.hide()
+                return
+            if sys.platform!='win32' or not shutil.which('winget'):
+                QMessageBox.warning(self,'SMART support missing',
+                    'This distribution has no bundled smartctl. Obtain the official '
+                    'smartmontools release and add its bin directory to PATH, or use '
+                    'a Windows release with the verified component bundled.')
+                return
+            consent=QMessageBox.question(self,'Install SMART support once',
+                'Install the official smartmontools package using Windows Package Manager '
+                '(winget, package ID smartmontools.smartmontools)? '
+                'Windows may request Administrator permission. The installer requires '
+                'network access; no SMART query or disk write begins during installation.',
+                QMessageBox.Yes | QMessageBox.No,QMessageBox.No)
+            if consent!=QMessageBox.Yes:
+                return
+            child=QProcess(self)
+            self._smart_install_proc=child
+            child.setProgram(shutil.which('winget'))
+            child.setArguments(['install','--id','smartmontools.smartmontools','--exact',
+                '--source','winget','--accept-source-agreements',
+                '--accept-package-agreements'])
+            self.enable_smart_button.setEnabled(False)
+            self.details_button.setChecked(True)
+            child.readyReadStandardOutput.connect(lambda:self.note_log(
+                bytes(child.readAllStandardOutput()).decode('utf-8','replace')[-1600:]))
+            child.readyReadStandardError.connect(lambda:self.note_log(
+                bytes(child.readAllStandardError()).decode('utf-8','replace')[-1600:]))
+            def done(code,status):
+                self._smart_install_proc=None
+                self.enable_smart_button.setEnabled(True)
+                installed=bool(smartctl_path())
+                self.enable_smart_button.setVisible(not installed)
+                if installed:
+                    d=self.selected() or {}
+                    self._auto_probe_attempted.discard(d.get('identity_hint'))
+                    self._health_by_device.pop(d.get('identity_hint'),None)
+                    self.probe_selected_media(force=True)
+                QMessageBox.information(self,'SMART setup result',
+                    'SMART executable available; identification will be rechecked.' if installed else
+                    'The installer finished without a discoverable SMART executable. '
+                    'Check the log or restart DriveRepair; physical repair remains unavailable '
+                    'without verified SMART/rotational evidence.')
+            child.finished.connect(done)
+            child.start()
+
+        def set_live_focus(self, running):
+            """One-screen live workbench: no drive/form respecification mid-run."""
+            self.live_card.setVisible(bool(running))
+            self.drive_panel.setVisible(not running)
+            self.workflow_panel.setVisible(not running)
+            if running:
+                d=self._last_good_device or self.selected() or {}
+                self.live_device.setText(str(d.get('model') or 'Source image'))
+                self.live_action.setText('Source identity fixed for this job. '
+                    'Observe the measured map; Stop requests a safe boundary.')
+                self.live_stage.set_policy('unknown',False)
+                self.evidence_tabs.setCurrentIndex(1)
+            elif self._last_job_result:
+                self.evidence_tabs.setCurrentIndex(0)
+
+        def address_scan_errors(self):
+            """Use *existing* scan offsets instead of repeating a surface pass."""
+            result=self._last_job_result
+            d=self.selected()
+            previous=self._last_good_device or {}
+            if (not isinstance(result,dict) or not d or
+                    d.get('identity_hint') != previous.get('identity_hint') or
+                    not isinstance(result.get('read_error_ranges'),list) or
+                    not result['read_error_ranges']):
+                QMessageBox.warning(self,'No reusable scan evidence',
+                    'A matching completed diagnostic with recorded error locations is required. '
+                    'Reconnect the original drive or rescue important data first.')
+                return
+            dialog=QMessageBox(self)
+            dialog.setWindowTitle('Address observed scan errors')
+            dialog.setText(f"{len(result['read_error_ranges'])} recorded problem regions · {d.get('model','source')}")
+            dialog.setInformativeText('Recheck only the recorded failed positions (read-only), '
+                'or copy readable data onto a healthy disk. These are failed read requests, '
+                'not necessarily bad sectors. No source rewrite will be authorized by the scan alone.')
+            probe=dialog.addButton('Recheck failed positions',QMessageBox.AcceptRole)
+            rescue=dialog.addButton('Rescue data to image',QMessageBox.ActionRole)
+            dialog.addButton(QMessageBox.Cancel)
+            dialog.exec()
+            if dialog.clickedButton()==rescue:
+                self.select_goal('rescue')
+                return
+            if dialog.clickedButton()!=probe:
+                return
+            import tempfile
+            from .scan_followup import checked_ranges
+            try:
+                checked_ranges(result,d)
+                private_dir=Path.home()/'.driverepair'/'recheck'
+                private_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
+                fd,path=tempfile.mkstemp(prefix='offsets-',suffix='.json',dir=private_dir)
+                self._recheck_file=path
+                with os.fdopen(fd,'w',encoding='utf-8') as handle:
+                    json.dump(result,handle,separators=(',',':'))
+                try:
+                    os.chmod(path,0o600)
+                except OSError:
+                    pass
+            except (OSError,ValueError) as exc:
+                QMessageBox.warning(self,'Cannot reuse scan evidence',str(exc))
+                return
+            self._last_good_device=d
+            self._last_job_kind='recheck'
+            self.recheck_button.hide()
+            self.run_command(['recheck-scan-errors','--device',d['id'],
+                '--expect-fingerprint',d['identity_hint'],
+                '--prior-report',path,'--ack-read-stress','--json'])
+
         def explain_repair_eligibility(self):
             from .repair_readiness import ui_repair_readiness
             d=self.selected() or {}
@@ -1191,6 +1366,10 @@ def launch():
             self.smart_check_note.setVisible(family=='fix')
             self.repair_help.setVisible(family=='fix')
             self.choice_changed()
+            if not (self.proc and self.proc.state()!=QProcess.NotRunning):
+                self.set_live_focus(False)
+                self.evidence_tabs.setCurrentIndex(0)
+                self._main_scroll.verticalScrollBar().setValue(0)
         def check_stall(self):
             if (self.proc and self.proc.state()!=QProcess.NotRunning
                     and self._last_progress_at is not None
@@ -1671,10 +1850,10 @@ def launch():
                 choose.setWindowTitle('DriveRepair recovery image not installed')
                 choose.setText('No structurally complete DriveRepair live ISO was found.')
                 choose.setInformativeText('A complete DriveRepair live ISO (kernel, initramfs, squashfs and BIOS/UEFI entries) must be built or included with the release. A 32 MiB placeholder with ISO markers is not enough. '
-                    'On Windows, export the build kit for a Debian build host. '
+                    'On Windows, DriveRepair can build with an installed Debian WSL environment. '
                     'If you already have a hybrid ISO, select it once; it will be preselected next time.')
                 browse=choose.addButton('Use existing ISO…',QMessageBox.AcceptRole)
-                build=choose.addButton('Build ISO (Linux)',QMessageBox.ActionRole)
+                build=choose.addButton('Build recovery ISO on this computer',QMessageBox.ActionRole)
                 export=choose.addButton('Export build kit',QMessageBox.ActionRole)
                 choose.addButton(QMessageBox.Cancel)
                 choose.exec()
@@ -1947,6 +2126,54 @@ def launch():
                 'build the ISO, then verify BIOS and UEFI boot and patient read-only behavior. '
                 'The builder does not automatically write USB media.')
 
+        def build_iso_windows(self):
+            """Build Debian live recovery ISO on Windows in preinstalled WSL2."""
+            from .windows_iso_build import require_debian_wsl, prepare_wsl_build
+            import tempfile
+            try:
+                require_debian_wsl()
+            except RuntimeError as exc:
+                QMessageBox.information(self,'One-time Debian WSL setup required',str(exc)+
+                    '\n\nAfter Debian is installed, run in an elevated Debian WSL terminal: '
+                    'apt update && apt install live-build debootstrap xorriso. '
+                    'Then click Create recovery USB again. No installation was started.')
+                return
+            folder=QFileDialog.getExistingDirectory(self,'Choose empty destination for newly built ISO')
+            if not folder:
+                return
+            answer=QMessageBox.question(self,'Build genuine recovery ISO on Windows',
+                'DriveRepair will use the installed Debian WSL environment as root to build '
+                'a hybrid Linux recovery ISO. If Debian build tools are missing, '
+                'it will install them from configured Debian repositories (network access needed). '
+                'No USB disk will be erased by this build. The output must still pass '
+                'BIOS/UEFI boot qualification. Continue?',QMessageBox.Yes | QMessageBox.No,QMessageBox.No)
+            if answer!=QMessageBox.Yes:
+                return
+            self._iso_build_temp=tempfile.TemporaryDirectory(prefix='driverepair-wsl-')
+            try:
+                args,info=prepare_wsl_build(Path(__file__).resolve().parents[2],
+                    self._iso_build_temp.name,folder)
+            except (OSError,RuntimeError,ValueError) as exc:
+                self._iso_build_temp.cleanup()
+                self._iso_build_temp=None
+                QMessageBox.warning(self,'Cannot prepare Debian WSL builder',str(exc))
+                return
+            self._iso_output_folder=Path(folder)
+            child=QProcess(self)
+            self.iso_proc=child
+            child.setProgram(args[0])
+            child.setArguments(args[1:])
+            child.readyReadStandardOutput.connect(lambda:self.note_log(
+                bytes(child.readAllStandardOutput()).decode('utf-8','replace')[-1800:]))
+            child.readyReadStandardError.connect(lambda:self.note_log(
+                bytes(child.readAllStandardError()).decode('utf-8','replace')[-1800:]))
+            child.finished.connect(lambda code,status:self.iso_finished(code))
+            self.details_button.setChecked(True)
+            self.note_log('Debian WSL live-build started. Only new output files are written; '
+                'boot and physical USB tests are still required.')
+            child.start()
+            self.update_action_state()
+
         def build_iso(self):
             """Opt-in Debian live-build job, no USB device writing.
 
@@ -1954,11 +2181,12 @@ def launch():
             not be sold as distributable recovery media.
             """
             import shutil
+            if sys.platform=='win32':
+                self.build_iso_windows()
+                return
             if sys.platform!='linux' or not hasattr(os,'geteuid') or os.geteuid()!=0:
-                QMessageBox.information(self,'Build requires isolated Debian Linux VM',
-                    'Build ISO requires a prepared Debian trixie x86-64 build environment with root '
-                    'and live-build/debootstrap. On Windows, choose Bootable media builder to export '
-                    'the complete build kit. No USB drive is written by either action.')
+                QMessageBox.warning(self,'Unsupported host',
+                    'Use prepared Debian Linux or Windows with Debian WSL to build this live ISO.')
                 return
             if not all(shutil.which(tool) for tool in ('lb','debootstrap','sha256sum')):
                 QMessageBox.warning(self,'Missing Debian build tools',
@@ -2027,6 +2255,8 @@ def launch():
                 'The builder exited with '+str(code)+'. Check Expert log and verify checksum, BIOS, '
                 'UEFI, device enumeration, no-automount and read-only behavior. '
                 'An ISO output is NOT a validated bootable recovery product.')
+            if code == 0 and image and not self._batch_running:
+                QTimer.singleShot(0,self.flash_boot_usb)
 
         def _keep_host_awake(self, enabled):
             """Best effort Windows OS system-sleep inhibition for an active queue."""
@@ -2565,6 +2795,7 @@ def launch():
             self._last_io_offset=0
             self._last_io_length=0
             self._last_error=None
+            self.set_live_focus(True)
             self.proc=QProcess(self)
             self.proc.setProgram(cli_prefix()[0])
             self.proc.setArguments(cli_prefix()[1:]+args)
@@ -2735,6 +2966,14 @@ def launch():
             self.phase_caption.setText('Worker exited · final outcome shown below')
             self.proc=None
             self._stop_requested=False
+            self.set_live_focus(False)
+            prior_path=getattr(self,'_recheck_file',None)
+            if prior_path:
+                try:
+                    Path(prior_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+                self._recheck_file=None
             if exit_code==0 and self._final_stdout.strip():
                 self.progress.setValue(1000)
                 self.phase_progress.setValue(1000)
@@ -2898,6 +3137,20 @@ def launch():
                 self.metric_labels['done'].setText(f'{verified} / {requested} sample passes')
                 self.metric_labels['errors'].setText(str(max(0,requested-verified)))
             self.copy_summary_button.setEnabled(True)
+            dev=self.selected() or {}
+            scanned=self._last_good_device or {}
+            self.recheck_button.setVisible(
+                self._last_job_kind in {'scanquick','scanfull','resume'}
+                and bool(result.get('read_error_ranges'))
+                and dev.get('identity_hint') == scanned.get('identity_hint'))
+            if self._last_job_kind=='recheck':
+                good=len(result.get('repeatably_readable_ranges') or [])
+                remaining=len(result.get('unresolved_ranges') or [])
+                self.result.setText(f'Focused reread: {good} consistent · {remaining} unresolved')
+                self.explain.setText('Rechecked recorded failing positions without another full-drive scan. '
+                    'No patient bytes were written and repeatable data is not certified original.')
+                self.next_action.setText('Rescue readable data to a new image and inspect any remaining errors. '
+                    'Only verified rotational HDDs may separately request authorized maintenance.')
             if self._last_job_kind=='capacity':
                 pass  # keep capacity-specific advice
             elif self._pending_resume:
@@ -2925,6 +3178,8 @@ def launch():
                 self._batch_current=None
                 self._stall_terminated=False
                 QTimer.singleShot(0,self._launch_next_batch)
+            self.evidence_tabs.setCurrentIndex(0)
+            self._main_scroll.verticalScrollBar().setValue(0)
             self.update_action_state()
         def closeEvent(self, event):
             if self.flash_proc and self.flash_proc.state()!=QProcess.NotRunning:
