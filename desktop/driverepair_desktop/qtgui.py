@@ -758,7 +758,7 @@ def launch():
             self._has_job_evidence=False
             self.metric_headers={}
             self.metric_tiles={}
-            for metric_index,(key,title) in enumerate([('done','CURRENT PHASE'),('read','DATA READ'),('rate','RECENT SPEED'),('avg','JOB AVERAGE'),('errors','READ ERRORS'),('eta','TIME LEFT')]):
+            for metric_index,(key,title) in enumerate([('done','CURRENT PHASE'),('read','READ ATTEMPTED'),('rate','RECENT SPEED'),('avg','JOB AVERAGE'),('errors','READ ERRORS'),('eta','TIME LEFT')]):
                 tile=QFrame()
                 tile.setObjectName('statTile')
                 area=QVBoxLayout(tile)
@@ -3035,10 +3035,6 @@ def launch():
                 except OSError:
                     pass
                 self._recheck_file=None
-            if exit_code==0 and self._final_stdout.strip():
-                self.progress.setValue(1000)
-                self.phase_progress.setValue(1000)
-                self.overall_label.setText('100% of planned job · review findings')
             try:
                 result=json.loads(self._final_stdout)
             except (ValueError,TypeError):
@@ -3047,6 +3043,12 @@ def launch():
                     self.note_log(self._final_stdout[-3000:])
             if not isinstance(result,dict):
                 result={}
+            from .diagnostic_outcome import classify_scan_outcome
+            scan_outcome = classify_scan_outcome(result, exit_code, self._last_job_kind)
+            if (scan_outcome and scan_outcome.complete) or (exit_code==0 and self._final_stdout.strip()):
+                self.progress.setValue(1000)
+                self.phase_progress.setValue(1000)
+                self.overall_label.setText('100% of selected job · review findings')
             self._last_job_result=result if result else None
             self.detailed_report_button.setEnabled(bool(result))
             condition_report = result.get('condition_comparison') or {}
@@ -3083,6 +3085,11 @@ def launch():
                 self.explain.setText('The requested stop has ended the child process. '
                     'Previously observed errors are retained in the log; unscanned ranges remain unknown. '
                     'A forced stop does not prove the pending Windows read completed.')
+            elif scan_outcome and scan_outcome.complete and exit_code!=0:
+                self.status.setText(scan_outcome.headline)
+                self.result.setText(scan_outcome.headline)
+                self.explain.setText(scan_outcome.summary)
+                self.next_action.setText(scan_outcome.recommendation)
             elif exit_code==0:
                 coverage=result.get('surface_coverage_pct')
                 if coverage is None and isinstance(result.get('scan'), dict):
@@ -3212,7 +3219,9 @@ def launch():
                     'No patient bytes were written and repeatable data is not certified original.')
                 self.next_action.setText('Rescue readable data to a new image and inspect any remaining errors. '
                     'Only verified rotational HDDs may separately request authorized maintenance.')
-            if self._last_job_kind=='capacity':
+            if scan_outcome and scan_outcome.complete and exit_code!=0:
+                self.next_action.setText(scan_outcome.recommendation)
+            elif self._last_job_kind=='capacity':
                 pass  # keep capacity-specific advice
             elif self._pending_resume:
                 self.next_action.setText('Reconnect the exact same drive for the saved read-only scan. Verify its identity first.')

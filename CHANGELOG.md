@@ -78,6 +78,15 @@ Full disposition, including deliberately deferred work, is in
 - 12 new tests (7 offscreen Qt, 5 presentation) cover these behaviours; Qt tests
   skip cleanly on hosts without PySide6.
 
+## 0.3.3b22 — 2026-11-19: SMART bridge fallback and actionable scan results
+
+- Correct successful ATA/SAT fallback parsing for USB bridges that reject the initial query and only respond to an alternate supported bridge mode.
+- Use the selected SAT bridge mode for subsequent *read-only* SMART self-test/error log requests; avoid falling back to a failed autodetection path.
+- Treat completed read-only diagnostics with recorded read errors as **scan completed with findings**, even when the CLI's nonzero exit code signals those errors. Keep interrupted jobs distinct.
+- Preserve the post-scan **Address scan errors** recommendation; it uses recorded failed positions and never automatically writes to the source disk.
+- De-duplicate exact failed read ranges and enforce a strict maximum for follow-up work to avoid unnecessary repeated reads.
+- Added synthetic regression tests. This is not a new physical repair engine, a bundled Windows smartctl binary, or a qualified boot ISO.
+
 ## 0.3.3b21 — 2026-11-19: live evidence, focused follow-up and Windows boot building
 
 - Qt layout: remove numbered sidebar items, provide separate **Assessment** and **Surface map & throughput** tabs to reduce stacked scrolling; hide drive/workflow setup forms during active jobs and restore them at completion.

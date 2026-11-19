@@ -46,7 +46,7 @@ def _usable_ata_view(raw: dict | None) -> bool:
 
 
 def _smart_logs(run: Callable[..., subprocess.CompletedProcess], executable: str,
-                path: str, deadline: float) -> dict:
+                path: str, deadline: float, *, device_type: str | None = None) -> dict:
     """Read-only self-test and error log summary; never starts a test.
 
     These logs add no device wear: smartctl only reads the controller's
@@ -59,8 +59,14 @@ def _smart_logs(run: Callable[..., subprocess.CompletedProcess], executable: str
             out[label] = {'available': False, 'reason': 'probe budget exhausted'}
             continue
         try:
-            proc = run([executable, '--json', '-l', flag, path],
-                       capture_output=True,
+            # USB bridges that require explicit SAT also require the same mode
+            # for log reads. Dropping -d makes an otherwise successful probe
+            # fall back to the bridge's broken autodetection path.
+            command = [executable, '--json', '-l', flag]
+            if device_type:
+                command.extend(['-d', device_type])
+            command.append(path)
+            proc = run(command, capture_output=True,
                        timeout=min(SMART_LOG_TIMEOUT_SECONDS, remaining),
                        check=False)
             raw = _decode_json(proc)
@@ -124,6 +130,7 @@ def health_snapshot(device: Device,
         parsed_ok = False
         raw = {}
     source = 'smartctl_auto'
+    accepted_device_type = None
     device_protocol = str((raw.get('device') or {}).get('protocol') or '').lower()
     failure_reported = bool(proc.returncode & (0x08 | 0x10)) or (raw.get('smart_status') or {}).get('passed') is False
     # Do not conceal an existing SMART media failure with a second, potentially
@@ -159,13 +166,15 @@ def health_snapshot(device: Device,
                     # The result must positively identify an ATA device and
                     # report physical rotation. A mere model name is not evidence.
                     proc, raw = sat, sat_raw
+                    parsed_ok = True  # The selected passthrough response was parsed and validated.
+                    accepted_device_type = device_type
                     source = ('smartctl_sat_passthrough' if device_type == 'sat'
                               else f'smartctl_{device_type}_passthrough')
                     break
             except (FileNotFoundError, subprocess.TimeoutExpired, ValueError,
                     UnicodeError, AttributeError, OSError):
                 continue
-    if not parsed_ok and source != 'smartctl_sat_passthrough':
+    if not parsed_ok:
         raise RuntimeError('SMART query returned invalid JSON; '
                            'USB SAT passthrough was unavailable or inconclusive')
     # CLI command, open/identity and SMART command failures invalidate the snapshot.
@@ -220,7 +229,8 @@ def health_snapshot(device: Device,
         smart_logs = {'available': False,
                       'reason': 'skipped: NVMe health log already reports error counters'}
     else:
-        smart_logs = _smart_logs(run, cmd[0], device.path, deadline)
+        smart_logs = _smart_logs(run, cmd[0], device.path, deadline,
+                                 device_type=accepted_device_type)
     result = {
         'status': status,
         'source': source,

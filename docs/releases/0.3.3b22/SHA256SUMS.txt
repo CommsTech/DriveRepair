@@ -1,0 +1,2 @@
+2538a80564dff575a74d226784e0524cefb1329296c680ecad840de3207531f8  DriveRepair_0.3.3b22_USB_SMART_Scan_Results.patch
+19521bdf3c44918d4e8ed4023f4f312b16ce7596b191b2c9f2cbc10fb9e95464  DriveRepair_0.3.3b22_Complete_Source.zip
