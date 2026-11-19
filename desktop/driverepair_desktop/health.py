@@ -26,7 +26,7 @@ EXTRA_PROBE_TIMEOUT_SECONDS = 5
 SMART_LOG_TIMEOUT_SECONDS = 5
 ATA_ATTRIBUTE_LIMIT = 64
 SMART_LOG_ENTRY_LIMIT = 5
-PROBE_BUDGET_SECONDS = 25.0
+PROBE_BUDGET_SECONDS = 18.0
 
 
 def _decode_json(proc) -> dict | None:
@@ -306,7 +306,7 @@ def windows_storage_health(device: Device,
     try:
         proc = run(
             ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-            capture_output=True, timeout=25, check=False,
+            capture_output=True, timeout=10, check=False,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
@@ -353,13 +353,51 @@ def windows_storage_health(device: Device,
     }
 
 
+def supplement_inconclusive_smart(device: Device, snapshot: dict) -> dict:
+    """Use native Windows identification when a SMART reply lacks media type.
+
+    Never replace actual SMART warning/error evidence with a healthier-looking
+    driver claim. Even a corroborated HDD still has UNKNOWN health in this
+    scenario and requires separate explicit unknown-health risk acceptance.
+    """
+    if (str(snapshot.get('reported_medium') or '').lower() not in {'unknown', ''}
+            or media_from_smart(snapshot) in {'WARN', 'FAIL'}
+            or device.bus.lower() not in {'usb', 'thunderbolt', 'firewire'}):
+        return snapshot
+    from .native_media import windows_native_snapshot
+    native = windows_native_snapshot(device)
+    if not native or native.get('native_hdd_corrob') is not True:
+        return snapshot
+    native['smart_unavailable_reason'] = 'SMART reply did not establish physical rotational medium'
+    native['notes'] += ' Inconclusive SMART data was not treated as a health pass.'
+    return native
+
+
 def try_health_snapshot(device: Device,
                         run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> dict | None:
     """Best-effort SMART probe, then Windows storage health fallback."""
     try:
-        return health_snapshot(device, run=run)
-    except RuntimeError:
-        return windows_storage_health(device, run=run)
+        smart = health_snapshot(device, run=run)
+        return supplement_inconclusive_smart(device, smart)
+    except RuntimeError as exc:
+        # A failed SMART/SAT query is NOT the end of device identification.
+        # Independently query the Windows storage stack in a bounded child.
+        # It is never interpreted as a passed SMART/health assessment.
+        from .native_media import windows_native_snapshot
+        native = windows_native_snapshot(device)
+        if native is not None:
+            native['smart_unavailable_reason'] = str(exc)
+            # A Windows HealthStatus failure/warning may be imperfect through
+            # USB, but it must not be suppressed by an optimistic media hint.
+            coarse = windows_storage_health(device, run=run)
+            if coarse and coarse.get('status') in {'failure_reported','windows_health_warning'}:
+                native['status'] = coarse['status']
+                native['windows_storage'] = coarse.get('windows_storage')
+            return native
+        coarse = windows_storage_health(device, run=run)
+        if coarse is not None:
+            coarse['smart_unavailable_reason'] = str(exc)
+        return coarse
 
 
 def media_from_smart(snapshot: dict | None) -> str:

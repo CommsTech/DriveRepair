@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "catalog_updated": "2026-11-19",
+  "description": "Manufacturer-backed model classification; never write authorization or an individual-health assessment",
+  "models": [
+    {
+      "manufacturer": "Seagate",
+      "model": "ST1000LM048",
+      "match": "exact",
+      "medium": "hdd",
+      "recording": "smr",
+      "rpm": 5400,
+      "capacity_gb": 1000,
+      "source_url": "https://www.seagate.com/www-content/datasheets/pdfs/barracuda-2-5-DS1907-3-2005US-en_US.pdf",
+      "source_type": "manufacturer_datasheet"
+    },
+    {
+      "manufacturer": "Seagate",
+      "model": "ST500LM030",
+      "match": "exact",
+      "medium": "hdd",
+      "recording": "smr",
+      "rpm": 5400,
+      "capacity_gb": 500,
+      "source_url": "https://www.seagate.com/www-content/datasheets/pdfs/barracuda-2-5-DS1907-3-2005US-en_US.pdf",
+      "source_type": "manufacturer_datasheet"
+    },
+    {
+      "manufacturer": "Seagate",
+      "model": "ST500LM034",
+      "match": "exact",
+      "medium": "hdd",
+      "recording": "smr",
+      "rpm": 7200,
+      "capacity_gb": 500,
+      "source_url": "https://www.seagate.com/www-content/datasheets/pdfs/barracuda-2-5-DS1907-3-2005US-en_US.pdf",
+      "source_type": "manufacturer_datasheet"
+    },
+    {
+      "manufacturer": "SanDisk",
+      "model": "SDSSDH3",
+      "match": "family_prefix",
+      "medium": "ssd",
+      "recording": null,
+      "source_url": "https://www.sandisk.com/products/ssd/internal-ssd/sandisk-ultra-3d-sata-iii-ssd",
+      "source_type": "manufacturer_product_specification"
+    }
+  ]
+}

@@ -94,14 +94,22 @@ def readiness_next_action(device: dict | None, operation: str,
     if _flash_profile(device, snapshot) is not None:
         return {'ready': False, 'action': 'rescue',
                 'label': 'Rescue data to an image', 'reason': reason}
-    if not snapshot or str(snapshot.get('source') or '') == 'windows_storage_healthstatus':
+    # Start with a read-only identity query even when smartctl is absent:
+    # the health command now independently queries Windows storage properties.
+    if not snapshot:
+        return {'ready': False, 'action': 'probe',
+                'label': 'Identify drive with SMART or Windows', 'reason': reason}
+    source = str(snapshot.get('source') or '')
+    if source in {'windows_storage_healthstatus', 'windows_native_unverified'}:
+        detail = str(snapshot.get('smart_unavailable_reason') or '').strip()
         if not smartctl_available:
             return {'ready': False, 'action': 'setup',
-                    'label': 'Enable SMART identification',
-                    'reason': (str((snapshot or {}).get('smart_unavailable_reason') or '') + ' · ' + reason).strip(' ·')}
-        detail = str((snapshot or {}).get('smart_unavailable_reason') or '').strip()
-        return {'ready': False, 'action': 'probe',
-                'label': 'Check drive SMART and identity',
+                    'label': 'Enable SMART for additional evidence',
+                    'reason': (detail+' · '+reason) if detail else reason}
+        # Avoid re-polling a bridge already shown incapable of producing the
+        # needed evidence. Continue to rescue, or change hardware/adapter.
+        return {'ready': False, 'action': 'rescue',
+                'label': 'Rescue to image (identity not verified)',
                 'reason': (detail+' · '+reason) if detail else reason}
     # A completed SMART report with missing physical-media evidence is not
     # repaired by polling the same unreliable bridge indefinitely.

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.3.3b24 — 2026-11-19: Windows-native identification when SMART fails
+
+- Added a versioned, offline, source-attributed drive model catalog (`data/drive_models.json`) with four manufacturer-supported entries. Media-profile matching reads the catalog; drive-model specifications guide read policy only, never physical-write authorization. Added non-matching-model and source-provenance tests.
+
+
+- **A failed smartctl/SAT query is no longer the end of identification.** The `health` command
+  automatically attempts read-only `IOCTL_STORAGE_QUERY_PROPERTY` and disk-size queries in
+  an isolated, nine-second Windows child process. These include reported seek penalty,
+  TRIM support, model/serial suffix, transport and size. A device which omits any required
+  field remains unverified; the app does not infer mechanical media from USB alone.
+- **Conservative native HDD corroboration:** the manufacturer-style HDD part number must
+  match the independent Windows device descriptor, exact size and reported serial suffix
+  must match inventory, and the driver must report seek penalty with no TRIM. If the bridge
+  contradicts itself or an SSD/flash model is selected, HDD refresh remains denied.
+  These observations can still be synthesized by a USB bridge, so they are *not*
+  a guarantee of physical media and do not certify any health status.
+- **Unknown-health laboratory path (guarded beta only):** a corroborated HDD may proceed
+  through the existing exclusive volume lock, full identity recheck, independently
+  journaled bounded repair and readback flow **only if** the user additionally approves
+  the `--ack-unknown-health` risk after acknowledging possible data loss. No unattended
+  writes are authorized by the native media query alone. Critical failures/warnings still
+  veto automatic confidence. A separate known-good data copy is strongly recommended.
+- The Qt readiness action now *first probes* alternative Windows media properties even
+  when SMART is missing. Missing evidence is explained; it no longer automatically sends
+  everyone to smartctl installation. When native evidence is insufficient, Qt offers
+  approved SMART setup (when absent) or image rescue instead of endlessly retrying.
+- **Windows recovery USB setup** now offers an explicitly approved action to start Debian
+  WSL installation. Administrator permission, Internet, Debian first-run setup and reboot
+  can still be necessary; this does not itself create, flash, or prove a bootable ISO.
+- Added tests for driver descriptor validation, misleading bridge flags, model/serial/size
+  mismatches, SSD rejection, native-probe timeouts, explicit unknown-health authorization,
+  and bounded repair-batch policy. These are synthetic tests, not a Windows hardware pass.
+
 ## Unreleased — 2026-11-19 known-SSD readiness stops SMART retry loops
 
 - Known SSD/NVMe/flash model families (for example SanDisk ``SDSSDH3``) now route

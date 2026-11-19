@@ -1,0 +1,1197 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 1623eb9..32e7bdc 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,38 @@
+ # Changelog
+ 
++## 0.3.3b24 — 2026-11-19: Windows-native identification when SMART fails
++
++- Added a versioned, offline, source-attributed drive model catalog (`data/drive_models.json`) with four manufacturer-supported entries. Media-profile matching reads the catalog; drive-model specifications guide read policy only, never physical-write authorization. Added non-matching-model and source-provenance tests.
++
++
++- **A failed smartctl/SAT query is no longer the end of identification.** The `health` command
++  automatically attempts read-only `IOCTL_STORAGE_QUERY_PROPERTY` and disk-size queries in
++  an isolated, nine-second Windows child process. These include reported seek penalty,
++  TRIM support, model/serial suffix, transport and size. A device which omits any required
++  field remains unverified; the app does not infer mechanical media from USB alone.
++- **Conservative native HDD corroboration:** the manufacturer-style HDD part number must
++  match the independent Windows device descriptor, exact size and reported serial suffix
++  must match inventory, and the driver must report seek penalty with no TRIM. If the bridge
++  contradicts itself or an SSD/flash model is selected, HDD refresh remains denied.
++  These observations can still be synthesized by a USB bridge, so they are *not*
++  a guarantee of physical media and do not certify any health status.
++- **Unknown-health laboratory path (guarded beta only):** a corroborated HDD may proceed
++  through the existing exclusive volume lock, full identity recheck, independently
++  journaled bounded repair and readback flow **only if** the user additionally approves
++  the `--ack-unknown-health` risk after acknowledging possible data loss. No unattended
++  writes are authorized by the native media query alone. Critical failures/warnings still
++  veto automatic confidence. A separate known-good data copy is strongly recommended.
++- The Qt readiness action now *first probes* alternative Windows media properties even
++  when SMART is missing. Missing evidence is explained; it no longer automatically sends
++  everyone to smartctl installation. When native evidence is insufficient, Qt offers
++  approved SMART setup (when absent) or image rescue instead of endlessly retrying.
++- **Windows recovery USB setup** now offers an explicitly approved action to start Debian
++  WSL installation. Administrator permission, Internet, Debian first-run setup and reboot
++  can still be necessary; this does not itself create, flash, or prove a bootable ISO.
++- Added tests for driver descriptor validation, misleading bridge flags, model/serial/size
++  mismatches, SSD rejection, native-probe timeouts, explicit unknown-health authorization,
++  and bounded repair-batch policy. These are synthetic tests, not a Windows hardware pass.
++
+ ## Unreleased — 2026-11-19 known-SSD readiness stops SMART retry loops
+ 
+ - Known SSD/NVMe/flash model families (for example SanDisk ``SDSSDH3``) now route
+diff --git a/README.md b/README.md
+index 37d9acd..838bf2d 100644
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,9 @@
+ 
+ **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
+ 
+-> **Release status:** `0.3.3b23` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
++> **Release status:** `0.3.3b24` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
++
++**Drive models:** The bundled [offline model catalog](docs/DRIVE_MODEL_CATALOG.md) currently documents four vendor-backed model entries (three Seagate SMR models and one SanDisk SSD family). It guides scanning; it is not a comprehensive database or authorization to rewrite a disk.
+ 
+ The Qt workstation now selects an **automatic, bounded HDD investigation level** from available media and error evidence; it never uses a plan to bypass media-write safety. Expert CLI overrides remain for controlled laboratory work. Read [`docs/CAPACITY_AUTHENTICITY.md`](docs/CAPACITY_AUTHENTICITY.md) for the separate USB capacity-integrity test. See also `docs/STATISTICAL_SECTOR_RECOVERY_B18.md` for the level policies.
+ 
+@@ -20,6 +22,32 @@ The Qt workstation now selects an **automatic, bounded HDD investigation level**
+ 
+ **Designed for:** experienced technicians who need evidence, drive owners who want a guided recovery route, and developers testing recovery against synthetic or sacrificial disks. Raw-media repair is currently **engineering/beta only**.
+ 
++### When USB SMART information is unavailable (Windows)
++
++DriveRepair now automatically tries **two independent read-only identification paths**:
++SMART/ATA SAT pass-through, followed by **Windows-native storage properties** if SMART
++fails or is not installed. The native query asks Windows for the disk descriptor, reported
++seek penalty, TRIM capability, size, and serial suffix. This can sometimes identify an
++external mechanical HDD behind a bridge that blocks SMART, but **USB adapters can hide or
++misreport these fields**. Generic flash drives, SSDs, missing serials, conflicting sizes,
++and unknown model families are not treated as safe candidates for magnetic-sector rewriting.
++
++An HDD that passes this second identification path is **not declared healthy**. The guarded
++beta can offer a separate, explicitly acknowledged **unknown-health lab repair** using a
++small durable journal and verified rewrites on a disposable or already-backed-up drive.
++The choice must still pass disk identity, exclusive lock, write-safety and batch checks;
++no writes start automatically. Critical Windows health warnings still stop the candidate
++path. If identification remains incomplete, select **Rescue data** and save a copy to a
++separate healthy drive instead. A full SMART pass still supplies stronger health evidence.
++
++Use **Hardware diagnostics → Inspect storage** for read-only low-level information. Seek
++penalty alone is not evidence of HDD health and does not authorize patient writes.
++
++**Windows recovery USB preparation:** the first-time Debian WSL prerequisite is now offered
++as an explicitly approved setup action. It may need Administrator access, Internet, a
++restart and first-run Debian setup. After building a genuine live ISO, independently test
++its BIOS and UEFI boot; a successful USB byte-verify alone does not establish bootability.
++
+ ### New: USB capacity authenticity and detailed reports
+ 
+ Use **Diagnose → Verify USB capacity** only on a **disposable, fully backed-up USB device**, never on a drive containing irreplaceable data. The test selects 144 distributed 4 KiB spots by default, saves each original region in a durable journal on **another physical drive**, temporarily writes random data, reads it back, and restores/independently verifies the original. A dishonest USB controller can overwrite unrelated positions, so even the write/restore design is **not data-safe** and a passing result **does not certify full capacity**. This is optional and not part of normal read-only diagnosis.
+@@ -87,22 +115,22 @@ On Windows PowerShell, run these same commands using `py` if Python is installed
+ 
+ ```bash
+ python scripts/build_desktop.py --public-beta --no-wheel
+-python dist/DriveRepair-0.3.3b23-public-beta.pyz gui
++python dist/DriveRepair-0.3.3b24-public-beta.pyz gui
+ ```
+ 
+ Install optional `PySide6` in that Python environment if you want the new Qt workstation. The **public-beta** package blocks physical in-place writes. The separate **repair-beta** package may attempt the guided, HDD-only write workflow on sacrificial hardware with all safeguards enabled:
+ 
+ ```bash
+ python scripts/build_desktop.py --repair-beta --no-wheel
+-python dist/DriveRepair-0.3.3b23-repair-beta.pyz qt-gui
++python dist/DriveRepair-0.3.3b24-repair-beta.pyz qt-gui
+ ```
+ 
+ For a CLI image-only example, use a source **regular file** and an unused output path:
+ 
+ ```bash
+-python dist/DriveRepair-0.3.3b23-public-beta.pyz scan-image --image source.img --mode triage --json
+-python dist/DriveRepair-0.3.3b23-public-beta.pyz rescue-image --image source.img --output recovered.img --json
+-python dist/DriveRepair-0.3.3b23-public-beta.pyz rescue-status --output recovered.img --json
++python dist/DriveRepair-0.3.3b24-public-beta.pyz scan-image --image source.img --mode triage --json
++python dist/DriveRepair-0.3.3b24-public-beta.pyz rescue-image --image source.img --output recovered.img --json
++python dist/DriveRepair-0.3.3b24-public-beta.pyz rescue-status --output recovered.img --json
+ ```
+ 
+ A repair-beta build is **not** a recommendation to write to a failing or valuable patient. See [hardware testing requirements](docs/USB_REPAIR_PREFLIGHT_B17.md) and [release gates](docs/RELEASE_STATUS.md).
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index ff4570a..b218949 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b23"
++__version__ = "0.3.3b24"
+diff --git a/desktop/driverepair_desktop/cli.py b/desktop/driverepair_desktop/cli.py
+index d6d4998..6fe3b5f 100644
+--- a/desktop/driverepair_desktop/cli.py
++++ b/desktop/driverepair_desktop/cli.py
+@@ -745,28 +745,31 @@ def _run_extras(args) -> int:
+         latest = select_external_device(args.device)
+         if latest.fingerprint != selected.fingerprint:
+             raise RuntimeError('Patient device changed before SMART query')
++        # Preserve the health command's original fallback hooks for CLI/API
++        # compatibility. Use an independent native Windows media query before
++        # falling back to coarse Storage HealthStatus when SMART has failed.
+         try:
+-            result = health_snapshot(selected)
++            from .health import supplement_inconclusive_smart
++            result = supplement_inconclusive_smart(selected, health_snapshot(selected))
+         except RuntimeError as exc:
+-            # Missing smartctl / unknown SMART must stay UNKNOWN — never invent a pass.
+-            # On Windows the OS may still offer a coarse HealthStatus, which is
+-            # explicitly weaker than SMART and never satisfies repair gating.
+-            fallback = windows_storage_health(selected)
+-            if fallback is not None:
+-                fallback['smart_unavailable_reason'] = str(exc)
+-                fallback['notes'] = (
+-                    'SMART query unavailable (' + str(exc) + '). Showing Windows '
+-                    'HealthStatus only, which is not SMART attributes and does not '
+-                    'authorize repair. No self-test or write was performed.')
+-                result = fallback
++            from .native_media import windows_native_snapshot
++            native = windows_native_snapshot(selected)
++            coarse = windows_storage_health(selected)
++            if native is not None:
++                native['smart_unavailable_reason'] = str(exc)
++                if coarse and coarse.get('status') in {'failure_reported', 'windows_health_warning'}:
++                    native['status'] = coarse['status']
++                    native['windows_storage'] = coarse.get('windows_storage')
++                result = native
++            elif coarse is not None:
++                coarse['smart_unavailable_reason'] = str(exc)
++                coarse.setdefault('notes', 'Windows HealthStatus only; not SMART attributes or a write permit.')
++                result = coarse
+             else:
+-                result = {
+-                    'status': 'unknown',
+-                    'device': selected.public(),
+-                    'reason': str(exc),
+-                    'notes': 'SMART unavailable. Install smartmontools (smartctl) for hardware counters. '
+-                             'Unknown is not a clean bill of health.',
+-                }
++                result = {'status': 'unknown', 'device': selected.public(),
++                          'reason': str(exc),
++                          'notes': 'SMART and native storage-property queries unavailable; '
++                                   'no media health claim or physical writes authorized.'}
+     elif args.command == 'rescue-image' and args.engine == 'rust':
+         # The native engine is opt-in until independent OS builds and crash
+         # recovery tests are complete. Never quietly switch journal formats.
+diff --git a/desktop/driverepair_desktop/data/drive_models.json b/desktop/driverepair_desktop/data/drive_models.json
+new file mode 100644
+index 0000000..b0e57af
+--- /dev/null
++++ b/desktop/driverepair_desktop/data/drive_models.json
+@@ -0,0 +1,49 @@
++{
++  "schema_version": 1,
++  "catalog_updated": "2026-11-19",
++  "description": "Manufacturer-backed model classification; never write authorization or an individual-health assessment",
++  "models": [
++    {
++      "manufacturer": "Seagate",
++      "model": "ST1000LM048",
++      "match": "exact",
++      "medium": "hdd",
++      "recording": "smr",
++      "rpm": 5400,
++      "capacity_gb": 1000,
++      "source_url": "https://www.seagate.com/www-content/datasheets/pdfs/barracuda-2-5-DS1907-3-2005US-en_US.pdf",
++      "source_type": "manufacturer_datasheet"
++    },
++    {
++      "manufacturer": "Seagate",
++      "model": "ST500LM030",
++      "match": "exact",
++      "medium": "hdd",
++      "recording": "smr",
++      "rpm": 5400,
++      "capacity_gb": 500,
++      "source_url": "https://www.seagate.com/www-content/datasheets/pdfs/barracuda-2-5-DS1907-3-2005US-en_US.pdf",
++      "source_type": "manufacturer_datasheet"
++    },
++    {
++      "manufacturer": "Seagate",
++      "model": "ST500LM034",
++      "match": "exact",
++      "medium": "hdd",
++      "recording": "smr",
++      "rpm": 7200,
++      "capacity_gb": 500,
++      "source_url": "https://www.seagate.com/www-content/datasheets/pdfs/barracuda-2-5-DS1907-3-2005US-en_US.pdf",
++      "source_type": "manufacturer_datasheet"
++    },
++    {
++      "manufacturer": "SanDisk",
++      "model": "SDSSDH3",
++      "match": "family_prefix",
++      "medium": "ssd",
++      "recording": null,
++      "source_url": "https://www.sandisk.com/products/ssd/internal-ssd/sandisk-ultra-3d-sata-iii-ssd",
++      "source_type": "manufacturer_product_specification"
++    }
++  ]
++}
+diff --git a/desktop/driverepair_desktop/drive_model_catalog.py b/desktop/driverepair_desktop/drive_model_catalog.py
+new file mode 100644
+index 0000000..76f1a93
+--- /dev/null
++++ b/desktop/driverepair_desktop/drive_model_catalog.py
+@@ -0,0 +1,56 @@
++"""Curated, offline, source-attributed storage model catalog.
++
++Vendor specifications guide read strategies, not patient write permissions. No
++network lookups, untrusted automatic updates, or guesses from adjacent models.
++"""
++from __future__ import annotations
++
++from functools import lru_cache
++from importlib import resources
++import json
++import re
++
++
++@lru_cache(maxsize=1)
++def catalog_entries() -> tuple[dict, ...]:
++    payload = json.loads(resources.files('driverepair_desktop').joinpath('data/drive_models.json').read_text(encoding='utf-8'))
++    if payload.get('schema_version') != 1 or not isinstance(payload.get('models'), list):
++        raise ValueError('Unsupported or corrupt DriveRepair drive model catalog')
++    entries = []
++    seen = set()
++    for record in payload['models']:
++        model = record.get('model')
++        mode = record.get('match')
++        if (not isinstance(model, str) or not re.fullmatch(r'[A-Z0-9-]{4,64}', model)
++                or mode not in {'exact', 'family_prefix'}
++                or record.get('medium') not in {'hdd', 'ssd', 'nvme', 'flash'}
++                or record.get('recording') not in {None, 'smr', 'cmr'}
++                or not isinstance(record.get('source_url'), str)
++                or not record['source_url'].startswith('https://')):
++            raise ValueError('Invalid or unattributed drive model catalog record')
++        key = (model, mode)
++        if key in seen:
++            raise ValueError('Duplicate model catalog entry')
++        seen.add(key)
++        entries.append(record)
++    return tuple(entries)
++
++
++def match_catalog_models(model_name: str) -> tuple[dict, ...]:
++    """Match complete OEM model tokens, allowing a vendor prefix and suffix.
++
++    A family match is an advisory storage category, not a serial attestation.
++    The library does not infer the medium of a different model from a prefix.
++    """
++    raw = model_name.upper().strip()
++    normalized = re.sub(r'(?<=[A-Z0-9])\s+(?=[0-9])', '', raw)
++    matches = []
++    for row in catalog_entries():
++        part = re.escape(row['model'])
++        if row['match'] == 'exact':
++            pattern = rf'(?<![A-Z0-9]){part}(?![A-Z0-9])'
++        else:
++            pattern = rf'(?<![A-Z0-9]){part}(?=[-\s]|$)'
++        if re.search(pattern, normalized if row['match'] == 'exact' else raw):
++            matches.append(row)
++    return tuple(matches)
+diff --git a/desktop/driverepair_desktop/health.py b/desktop/driverepair_desktop/health.py
+index 907f0af..2eb9687 100644
+--- a/desktop/driverepair_desktop/health.py
++++ b/desktop/driverepair_desktop/health.py
+@@ -26,7 +26,7 @@ EXTRA_PROBE_TIMEOUT_SECONDS = 5
+ SMART_LOG_TIMEOUT_SECONDS = 5
+ ATA_ATTRIBUTE_LIMIT = 64
+ SMART_LOG_ENTRY_LIMIT = 5
+-PROBE_BUDGET_SECONDS = 25.0
++PROBE_BUDGET_SECONDS = 18.0
+ 
+ 
+ def _decode_json(proc) -> dict | None:
+@@ -306,7 +306,7 @@ def windows_storage_health(device: Device,
+     try:
+         proc = run(
+             ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+-            capture_output=True, timeout=25, check=False,
++            capture_output=True, timeout=10, check=False,
+         )
+     except (FileNotFoundError, subprocess.TimeoutExpired):
+         return None
+@@ -353,13 +353,51 @@ def windows_storage_health(device: Device,
+     }
+ 
+ 
++def supplement_inconclusive_smart(device: Device, snapshot: dict) -> dict:
++    """Use native Windows identification when a SMART reply lacks media type.
++
++    Never replace actual SMART warning/error evidence with a healthier-looking
++    driver claim. Even a corroborated HDD still has UNKNOWN health in this
++    scenario and requires separate explicit unknown-health risk acceptance.
++    """
++    if (str(snapshot.get('reported_medium') or '').lower() not in {'unknown', ''}
++            or media_from_smart(snapshot) in {'WARN', 'FAIL'}
++            or device.bus.lower() not in {'usb', 'thunderbolt', 'firewire'}):
++        return snapshot
++    from .native_media import windows_native_snapshot
++    native = windows_native_snapshot(device)
++    if not native or native.get('native_hdd_corrob') is not True:
++        return snapshot
++    native['smart_unavailable_reason'] = 'SMART reply did not establish physical rotational medium'
++    native['notes'] += ' Inconclusive SMART data was not treated as a health pass.'
++    return native
++
++
+ def try_health_snapshot(device: Device,
+                         run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> dict | None:
+     """Best-effort SMART probe, then Windows storage health fallback."""
+     try:
+-        return health_snapshot(device, run=run)
+-    except RuntimeError:
+-        return windows_storage_health(device, run=run)
++        smart = health_snapshot(device, run=run)
++        return supplement_inconclusive_smart(device, smart)
++    except RuntimeError as exc:
++        # A failed SMART/SAT query is NOT the end of device identification.
++        # Independently query the Windows storage stack in a bounded child.
++        # It is never interpreted as a passed SMART/health assessment.
++        from .native_media import windows_native_snapshot
++        native = windows_native_snapshot(device)
++        if native is not None:
++            native['smart_unavailable_reason'] = str(exc)
++            # A Windows HealthStatus failure/warning may be imperfect through
++            # USB, but it must not be suppressed by an optimistic media hint.
++            coarse = windows_storage_health(device, run=run)
++            if coarse and coarse.get('status') in {'failure_reported','windows_health_warning'}:
++                native['status'] = coarse['status']
++                native['windows_storage'] = coarse.get('windows_storage')
++            return native
++        coarse = windows_storage_health(device, run=run)
++        if coarse is not None:
++            coarse['smart_unavailable_reason'] = str(exc)
++        return coarse
+ 
+ 
+ def media_from_smart(snapshot: dict | None) -> str:
+diff --git a/desktop/driverepair_desktop/media_profiles.py b/desktop/driverepair_desktop/media_profiles.py
+index 61917ed..5fde747 100644
+--- a/desktop/driverepair_desktop/media_profiles.py
++++ b/desktop/driverepair_desktop/media_profiles.py
+@@ -10,14 +10,14 @@ import re
+ 
+ MIB = 1024 * 1024
+ 
+-# Manufacturer datasheet, BarraCuda 2.5 DS1907: ST1000LM048 = SMR.
+-# Never extrapolate model families to all Seagate drives.
+-KNOWN_SMR_MODELS = frozenset({'ST1000LM048', 'ST500LM030', 'ST500LM034'})
+-# SanDisk published Ultra 3D SATA SSD SKU SDSSDH3-500G (sandisk.com).
+-# Model-family recognition is ADVISORY for rescue profiles, not an attestation
+-# that the USB bridge exposes the actual patient or a write authorization.
+-KNOWN_SSD_MODEL_FAMILIES = frozenset({'SDSSDH3'})
++from .drive_model_catalog import catalog_entries, match_catalog_models
+ 
++# Retain these published constants for existing callers; all model records and
++# provenance now live in the versioned offline model catalog.
++KNOWN_SMR_MODELS = frozenset(row['model'] for row in catalog_entries()
++                             if row['recording'] == 'smr' and row['match'] == 'exact')
++KNOWN_SSD_MODEL_FAMILIES = frozenset(row['model'] for row in catalog_entries()
++                                    if row['medium'] == 'ssd' and row['match'] == 'family_prefix')
+ 
+ @dataclass(frozen=True)
+ class MediaProfile:
+@@ -44,14 +44,10 @@ def identify_profile(*, model: str = '', bus: str = '', media_type: str = '',
+     """
+     if sector <= 0 or sector & (sector - 1):
+         raise ValueError('Invalid logical sector size')
+-    # Match only a complete OEM part number (possibly after a vendor prefix),
+-    # never a model family or an arbitrary longer suffix. Whitespace within a
+-    # printed part number is tolerated, but firmware suffixes need boundaries.
+-    model_id = re.sub(r'(?<=[A-Z0-9])\s+(?=[0-9])', '', model.upper().strip())
+-    known_smr = any(re.search(rf'(?<![A-Z0-9]){part}(?![A-Z0-9])', model_id)
+-                    for part in KNOWN_SMR_MODELS)
+-    known_ssd_model = any(re.search(rf'(?<![A-Z0-9]){part}(?![A-Z0-9])', model.upper())
+-                          for part in KNOWN_SSD_MODEL_FAMILIES)
++    # Match against documented OEM models only; do not infer adjacent SKUs.
++    catalog_matches = match_catalog_models(model)
++    known_smr = any(row['recording'] == 'smr' for row in catalog_matches)
++    known_ssd_model = any(row['medium'] == 'ssd' for row in catalog_matches)
+     bus_id = bus.strip().lower()
+     recording_id = recording.strip().lower()
+     medium = media_type.strip().lower()
+diff --git a/desktop/driverepair_desktop/native_media.py b/desktop/driverepair_desktop/native_media.py
+new file mode 100644
+index 0000000..c9a3c04
+--- /dev/null
++++ b/desktop/driverepair_desktop/native_media.py
+@@ -0,0 +1,122 @@
++"""Corroborated native Windows media identification when SMART is unavailable.
++
++Never substitutes for a SMART health test. The native disk query runs in a
++bounded child process: an unresponsive USB IOCTL must not wedge the GUI.
++Media identity only qualifies a *candidate* for an expressly acknowledged
++unknown-health guarded HDD workflow. All preexisting OS write gates remain.
++"""
++from __future__ import annotations
++
++import json
++import re
++import subprocess
++import sys
++
++from .devices import Device
++from .media_profiles import identify_profile
++
++NATIVE_SOURCE = 'windows_native_corrob_hdd'
++
++
++def _model_tokens(model: str) -> str:
++    return re.sub(r'[^A-Z0-9]', '', model.upper())
++
++
++def interpret_native_evidence(device: Device, native: dict) -> dict:
++    """Assess independent reported geometry/media flags; never infer health.
++
++    A stable serial match, exact size, OEM model match and both mechanical
++    properties are required for the guarded native-HDD candidate path.
++    A generic USB/flash bridge or unknown model remains read-only.
++    """
++    factors = []
++    model = _model_tokens(device.model)
++    native_model = _model_tokens(str(native.get('model') or ''))
++    profile = identify_profile(model=device.model, bus=device.bus,
++                               sector=device.sector_size)
++    # A few common whole-disk OEM part-number formats. This supports
++    # non-SMR HDD families *without* guessing their CMR/SMR recording type.
++    # It is never used by itself: the separate driver flags, exact capacity,
++    # actual descriptor model, and serial must also agree.
++    oem_hdd_pattern = bool(re.search(
++        r'(?:ST\d{3,5}[A-Z]{1,3}\d{2,4}|WD\d{2,4}[A-Z0-9]{5,9}|'
++        r'MQ\d{2}[A-Z]{2,4}\d{2,4})', model))
++    model_is_hdd_candidate = (profile.kind in {'smr', 'cmr', 'hdd_unknown_recording'}
++                               or (oem_hdd_pattern and profile.kind == 'unknown'))
++    size_matches = (type(native.get('size_bytes')) is int and
++                    native['size_bytes'] == device.size_bytes)
++    if size_matches:
++        factors.append('exact logical drive size')
++    suffix = str(native.get('serial_suffix') or '')
++    serial_matches = (len(device.serial.strip()) >= 4 and
++                      len(suffix) >= 7 and
++                      suffix.endswith(device.serial[-4:]))
++    if serial_matches:
++        factors.append('reported serial suffix matches inventory')
++    # Confirm actual model token was returned by the Windows device descriptor,
++    # not simply copied from the model database. Never rely on "USB device".
++    model_matches = (model_is_hdd_candidate
++                     and len(native_model) >= 8 and len(model) >= 8
++                     and (native_model in model or model in native_model
++                          or any(token in native_model for token in
++                                 ('ST1000LM048', 'ST500LM030', 'ST500LM034')
++                                 if token in model)))
++    if model_matches:
++        factors.append('OEM HDD model corroborated by device descriptor')
++    seek = native.get('incurs_seek_penalty') is True
++    trim_absent = native.get('trim_enabled') is False
++    if seek:
++        factors.append('Windows driver reports mechanical seek penalty')
++    if trim_absent:
++        factors.append('Windows driver reports no TRIM support')
++    bus_matches = (str(native.get('bus') or '').lower() == device.bus.lower()
++                   and device.bus.lower() in {'usb', '1394', 'firewire', 'thunderbolt'})
++    # USB is a bus, not proof; comparison defends against mixing two disk handles.
++    if bus_matches:
++        factors.append('reported transport matches inventory')
++    qualified = all((size_matches, serial_matches, model_matches,
++                     seek, trim_absent, bus_matches))
++    if native.get('trim_enabled') is True or native.get('incurs_seek_penalty') is False:
++        medium = 'ssd' if native.get('trim_enabled') is True else 'unknown'
++    else:
++        medium = 'hdd' if qualified else 'unknown'
++    return {
++        'source': NATIVE_SOURCE if qualified else 'windows_native_unverified',
++        'status': 'unknown', 'reported_medium': medium,
++        'native_hdd_corrob': qualified, 'native_factors': factors,
++        'native_media_properties': {
++            'incurs_seek_penalty': native.get('incurs_seek_penalty'),
++            'trim_enabled': native.get('trim_enabled'),
++            'bus': native.get('bus'),
++        },
++        'smartctl_exit_status': None, 'smart_status_passed': None,
++        'temperature_c': None, 'ata_selected_raw_attributes': [], 'nvme': {},
++        'device': device.public(),
++        'notes': ('Windows native storage-property evidence; no SMART counters. '
++                  'A USB bridge can misreport media properties. '
++                  'Even a corroborated HDD is not declared healthy. '
++                  'Physical writes require independent identity/locking/journal '
++                  'checks and explicit acceptance of UNKNOWN health.'),
++    }
++
++
++def windows_native_snapshot(device: Device, *, runner=subprocess.run) -> dict | None:
++    if sys.platform != 'win32':
++        return None
++    match = re.fullmatch(r'windows:PhysicalDrive(\d+)', device.id)
++    if not match:
++        return None
++    try:
++        proc = runner([sys.executable, '-m', 'driverepair_desktop',
++                       'inspect-windows-disk', '--number', match.group(1)],
++                      capture_output=True, timeout=9, check=False)
++        if proc.returncode:
++            return None
++        raw = json.loads(proc.stdout.decode('utf-8-sig')
++                         if isinstance(proc.stdout, bytes) else proc.stdout)
++        if not isinstance(raw, dict):
++            return None
++        return interpret_native_evidence(device, raw)
++    except (FileNotFoundError, subprocess.TimeoutExpired, OSError,
++            ValueError, TypeError, UnicodeError):
++        return None
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+index 92eefe7..c4a3eb9 100644
+--- a/desktop/driverepair_desktop/qtgui.py
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -805,7 +805,7 @@ def launch():
+             self.refresh_button.clicked.connect(self.refresh_devices)
+             tool_row.addWidget(self.refresh_button)
+             self.smart_check_button=QPushButton('Check HDD eligibility')
+-            self.smart_check_button.setToolTip('Read-only SMART / SATA passthrough identification. '
++            self.smart_check_button.setToolTip('Read-only SMART / SAT and Windows-native storage identification. '
+                 'No repair or drive writes start here. Available in the Repair workspace.')
+             self.smart_check_button.clicked.connect(lambda:self.probe_selected_media(force=True))
+             tool_row.addWidget(self.smart_check_button)
+@@ -840,8 +840,8 @@ def launch():
+             self.device_note.setWordWrap(True)
+             self.device_note.setObjectName('muted')
+             drive_panel.addWidget(self.device_note)
+-            self.smart_check_note=QLabel('Repair eligibility requires verified HDD media and SMART health. '
+-                'If the USB adapter hides them, use read-only rescue or direct SATA.')
++            self.smart_check_note=QLabel('HDD identity uses SMART, then Windows native properties if SMART fails. '
++                'Unknown health requires separate, explicit risk approval; no writes are automatic.')
+             self.smart_check_note.setObjectName('muted')
+             self.smart_check_note.setWordWrap(True)
+             self.smart_check_note.hide()  # repair-specific guidance belongs in repair workspace
+@@ -855,7 +855,7 @@ def launch():
+             # This does not bypass the CLI's independent physical-write checks.
+             self.repair_next=QPushButton('Check drive readiness')
+             self.repair_next.setAccessibleName('Next step for HDD repair eligibility')
+-            self.repair_next.setToolTip('Read-only SMART check, optional approved tool setup, or rescue. Never authorizes an HDD write.')
++            self.repair_next.setToolTip('Check SMART, Windows-native disk evidence, or rescue; identity is not a write permit.')
+             self.repair_next.clicked.connect(self.resolve_repair_next)
+             self.repair_next.hide()
+             drive_panel.addWidget(self.repair_next)
+@@ -1330,6 +1330,10 @@ def launch():
+                     bus=str(d.get('bus') or ''), sector=int(d.get('sector_size') or 512),
+                     snapshot=snap)
+                 title=profile.kind.upper().replace('_',' ') + ' · ' + profile.evidence
++                if snap.get('source') == 'windows_native_corrob_hdd':
++                    title += ' · Windows native HDD identity corroborated; SMART health UNKNOWN'
++                elif snap.get('source') == 'windows_native_unverified':
++                    title += ' · Windows native evidence inconclusive'
+                 if profile.workload == 'surveillance':
+                     title+=' · NVR / surveillance workload (NOT a recording type)'
+                 self.profile_note.setText('Detected: ' + title + '\nSuggested: ' + profile.recovery_method)
+@@ -1341,7 +1345,8 @@ def launch():
+                         mode='full' if self.job_box.currentData()=='carefull' else 'quick')
+                     self.auto_plan_note.setText(f'Automatic plan · {plan.title}. {plan.explanation}')
+                 self.profile_note.setToolTip('Classification: '+profile.confidence+'. '+
+-                    'USB is a transport, not a physical medium. '+profile.maintenance_note+
++                    'USB is a transport, not a physical medium. '+
++                    '; '.join(str(x) for x in snap.get('native_factors',[]))+'. '+profile.maintenance_note+
+                     '\nRecommendation: '+decision.label+'; '+'; '.join(decision.reasons))
+             except (ValueError,TypeError):
+                 self.profile_note.setText('Unverified drive geometry — read-only rescue recommended.')
+@@ -1366,9 +1371,9 @@ def launch():
+                                          key in self._auto_probe_attempted)):
+                 return
+             if force:
+-                self.smart_check_note.setText('Checking USB SMART / ATA identity read-only… '
++                self.smart_check_note.setText('Identifying USB media using SMART and Windows properties (read-only)… '
+                     'the drive is not being repaired or rewritten.')
+-            self.repair_next.setText('Checking drive SMART…')
++            self.repair_next.setText('Identifying drive…')
+             self.repair_next.setEnabled(False)
+             self._auto_probe_attempted.add(key)
+             self._auto_probe_hint=key
+@@ -1381,9 +1386,9 @@ def launch():
+             self.update_action_state()
+             def bound_probe(c=child):
+                 if c.state()!=QProcess.NotRunning:
+-                    self.note_log('SMART identification timed out; preserving unknown media. No writes attempted.')
++                    self.note_log('Hardware identification timed out; preserving unknown media. No writes attempted.')
+                     c.kill()
+-            QTimer.singleShot(22000,bound_probe)
++            QTimer.singleShot(42000,bound_probe)
+ 
+         def media_probe_done(self, child, key, code):
+             if child is not self._auto_probe_proc:
+@@ -1411,19 +1416,19 @@ def launch():
+             else:
+                 self._smart_probe_failures[key]=(raw_stderr or 'SMART probe produced no valid health evidence.')[-500:]
+             if self._smart_probe_failures.get(key):
+-                self.note_log('Read-only SMART identification unavailable: '+self._smart_probe_failures[key])
++                self.note_log('SMART unavailable; Windows-native media checks attempted: '+self._smart_probe_failures[key])
+             if self.selected() and self.selected().get('identity_hint') == key:
+                 current=self._health_by_device.get(key)
+                 from .repair_readiness import ui_repair_readiness
+                 permitted, explanation = ui_repair_readiness(self.selected(), 'carequick',
+                                                                snapshot=current)
+                 self.smart_check_note.setText(
+-                    'SMART/rotation check passed the UI eligibility stage; '
++                    'Drive identification passed the UI eligibility stage (health may still be unknown); '
+                     'device identity, locks and journal remain mandatory.' if permitted else
+                     'HDD repair is not authorized: '+explanation)
+                 if not permitted and self._smart_probe_failures.get(key):
+                     self.smart_check_note.setText(
+-                        'SMART identification incomplete: '+self._smart_probe_failures[key]+'\n'+explanation)
++                        'SMART unavailable; alternate Windows identification attempted: '+self._smart_probe_failures[key]+'\n'+explanation)
+                 self.update_drive_profile()
+             self.update_action_state()
+ 
+@@ -2235,10 +2240,46 @@ def launch():
+             try:
+                 require_debian_wsl()
+             except RuntimeError as exc:
+-                QMessageBox.information(self,'One-time Debian WSL setup required',str(exc)+
+-                    '\n\nAfter Debian is installed, run in an elevated Debian WSL terminal: '
+-                    'apt update && apt install live-build debootstrap xorriso. '
+-                    'Then click Create recovery USB again. No installation was started.')
++                # Offer a single explicitly approved setup action, not a dead-end
++                # error with command lines John Doe must copy by hand.
++                dialog=QMessageBox(self)
++                dialog.setWindowTitle('Recovery USB · one-time Windows setup')
++                dialog.setIcon(QMessageBox.Information)
++                dialog.setText('Debian WSL is needed to build a genuine Linux recovery ISO.')
++                dialog.setInformativeText(str(exc)+'\n\n'
++                    'DriveRepair can start Windows WSL setup after you approve. '
++                    'Windows may require Administrator access, internet, a reboot, '
++                    'and Debian first-run initialization. No USB will be erased. '
++                    'After setup, return here to build and flash the ISO.')
++                install=dialog.addButton('Install Debian WSL (approved)',QMessageBox.AcceptRole)
++                dialog.addButton('Cancel',QMessageBox.RejectRole)
++                dialog.exec()
++                if dialog.clickedButton()!=install:
++                    return
++                # OS component install is always an explicit user action.
++                # Keep the subprocess visible in the operator log and never
++                # assume a reboot-free, successful installation.
++                child=QProcess(self)
++                self._wsl_setup_proc=child
++                child.setProgram('wsl.exe')
++                child.setArguments(['--install','-d','Debian'])
++                child.readyReadStandardOutput.connect(lambda:self.note_log(
++                    bytes(child.readAllStandardOutput()).decode('utf-8','replace')[-1200:]))
++                child.readyReadStandardError.connect(lambda:self.note_log(
++                    bytes(child.readAllStandardError()).decode('utf-8','replace')[-1200:]))
++                def on_finish(code,status):
++                    self._wsl_setup_proc=None
++                    QMessageBox.information(self,'Windows recovery build prerequisites',
++                        ('Windows reported WSL setup completed. Restart if Windows requests it, '
++                         'initialize Debian on first launch, then choose Create recovery USB again.'
++                         if code==0 else
++                         'Windows could not complete WSL setup (exit '+str(code)+'). '
++                         'Administrator approval or an OS restart may be needed. '
++                         'See the Expert log; no USB was written.'))
++                child.finished.connect(on_finish)
++                child.errorOccurred.connect(lambda error:self.note_log(
++                    'Windows WSL setup could not start: '+child.errorString()))
++                child.start()
+                 return
+             folder=QFileDialog.getExistingDirectory(self,'Choose empty destination for newly built ISO')
+             if not folder:
+@@ -2846,9 +2887,26 @@ def launch():
+                           '--progress-jsonl','--json']
+                     if REPAIR_BETA_GUARDED:
+                         args += ['--max-regions','16']
++                        snap = self._health_by_device.get(d.get('identity_hint')) or {}
++                        if (snap.get('source') == 'windows_native_corrob_hdd'
++                                and snap.get('native_hdd_corrob') is True):
++                            native_risk=QMessageBox.warning(
++                                self,'Unknown media health — explicit authorization',
++                                'Windows independently reports an HDD-like device and matching '
++                                'identity, but the USB bridge did NOT provide SMART health. '
++                                'Seek penalty and TRIM flags can be misreported by USB bridges.\n\n'
++                                'Only proceed with a disposable or separately backed-up HDD. '
++                                'This can permanently destroy data or make the drive less reliable. '
++                                'No healthy-medium claim is possible.\n\n'
++                                'Do you explicitly accept UNKNOWN health for this SMALL, '
++                                'journaled HDD repair batch?',
++                                QMessageBox.Yes | QMessageBox.No,QMessageBox.No)
++                            if native_risk != QMessageBox.Yes:
++                                return
++                            args += ['--ack-unknown-health']
+                     else:
+-                        # Engineering builds can explicitly investigate unknown health;
+-                        # a guarded release requires full smartctl evidence.
++                        # Engineering-only unknown-health acknowledgement;
++                        # medium, serial and transport remain independently checked.
+                         args += ['--ack-unknown-health']
+                     if save_scan_map:
+                         args+=['--scan-checkpoint','auto']
+diff --git a/desktop/driverepair_desktop/release_policy.py b/desktop/driverepair_desktop/release_policy.py
+index 15c0e90..248aad8 100644
+--- a/desktop/driverepair_desktop/release_policy.py
++++ b/desktop/driverepair_desktop/release_policy.py
+@@ -64,7 +64,14 @@ def check_guarded_repair_preflight(args, snapshot: dict | None, device) -> dict:
+     if args.rewrite_neighbors or args.recording != 'auto':
+         raise PermissionError('Guarded repair cannot force recording geometry or neighboring writes')
+     if args.ack_unknown_health:
+-        raise PermissionError('Guarded repair does not accept unknown SMART health')
++        if not (isinstance(snapshot, dict) and
++                snapshot.get('source') == 'windows_native_corrob_hdd' and
++                snapshot.get('native_hdd_corrob') is True and
++                snapshot.get('status') == 'unknown'):
++            raise PermissionError('Unknown-health acknowledgement is reserved for corroborated native Windows HDD identity')
++    elif (isinstance(snapshot, dict) and
++          snapshot.get('source') == 'windows_native_corrob_hdd'):
++        raise PermissionError('Native HDD identification does not measure health. Explicit --ack-unknown-health is required after data rescue.')
+     if args.max_regions > 16 or args.max_regions < 1:
+         raise PermissionError('Guarded repair limits each batch to 16 verified regions')
+     if not args.auto_lock_volumes and __import__('sys').platform == 'win32':
+diff --git a/desktop/driverepair_desktop/repair_readiness.py b/desktop/driverepair_desktop/repair_readiness.py
+index 86d7840..2e57061 100644
+--- a/desktop/driverepair_desktop/repair_readiness.py
++++ b/desktop/driverepair_desktop/repair_readiness.py
+@@ -94,14 +94,22 @@ def readiness_next_action(device: dict | None, operation: str,
+     if _flash_profile(device, snapshot) is not None:
+         return {'ready': False, 'action': 'rescue',
+                 'label': 'Rescue data to an image', 'reason': reason}
+-    if not snapshot or str(snapshot.get('source') or '') == 'windows_storage_healthstatus':
++    # Start with a read-only identity query even when smartctl is absent:
++    # the health command now independently queries Windows storage properties.
++    if not snapshot:
++        return {'ready': False, 'action': 'probe',
++                'label': 'Identify drive with SMART or Windows', 'reason': reason}
++    source = str(snapshot.get('source') or '')
++    if source in {'windows_storage_healthstatus', 'windows_native_unverified'}:
++        detail = str(snapshot.get('smart_unavailable_reason') or '').strip()
+         if not smartctl_available:
+             return {'ready': False, 'action': 'setup',
+-                    'label': 'Enable SMART identification',
+-                    'reason': (str((snapshot or {}).get('smart_unavailable_reason') or '') + ' · ' + reason).strip(' ·')}
+-        detail = str((snapshot or {}).get('smart_unavailable_reason') or '').strip()
+-        return {'ready': False, 'action': 'probe',
+-                'label': 'Check drive SMART and identity',
++                    'label': 'Enable SMART for additional evidence',
++                    'reason': (detail+' · '+reason) if detail else reason}
++        # Avoid re-polling a bridge already shown incapable of producing the
++        # needed evidence. Continue to rescue, or change hardware/adapter.
++        return {'ready': False, 'action': 'rescue',
++                'label': 'Rescue to image (identity not verified)',
+                 'reason': (detail+' · '+reason) if detail else reason}
+     # A completed SMART report with missing physical-media evidence is not
+     # repaired by polling the same unreliable bridge indefinitely.
+diff --git a/desktop/driverepair_desktop/repair_strategy.py b/desktop/driverepair_desktop/repair_strategy.py
+index 7004f38..a52bc9e 100644
+--- a/desktop/driverepair_desktop/repair_strategy.py
++++ b/desktop/driverepair_desktop/repair_strategy.py
+@@ -94,9 +94,19 @@ def advise(*, model: str = '', bus: str = '', media_type: str = '',
+         return RepairAdvice('identify_rescue', 'Identify media first; rescue data', False,
+                             ('Underlying media cannot be verified through this device/bridge.',),
+                             profile.kind, 'unknown')
++    if (snap.get('source') == 'windows_native_corrob_hdd' and
++            snap.get('native_hdd_corrob') is True and state == 'UNKNOWN'):
++        # This is a *candidate* for the separately consented unknown-health
++        # workflow, not a SMART pass or a write permit. The engine requires
++        # --ack-unknown-health, exclusive access and the original-byte journal.
++        return RepairAdvice('hdd_native_unknown_health',
++                            'HDD identified by Windows; health unknown — explicit consent required',
++                            True, ('Windows reports mechanical seek penalty and no TRIM; model, serial and size corroborate.',
++                                   'The USB bridge may misreport. SMART health is UNKNOWN: rescue important data first and explicitly acknowledge unknown health.',),
++                            profile.kind, 'native_corrob_not_health')
+     if not snapshot or snap.get('source') == 'windows_storage_healthstatus' or state == 'UNKNOWN':
+-        return RepairAdvice('health_unknown', 'Obtain full SMART data before physical repair', False,
+-                            ('A coarse OS HealthStatus is not evidence of media condition; install smartmontools.',),
++        return RepairAdvice('health_unknown', 'Obtain full SMART or corroborated native HDD identification', False,
++                            ('Coarse HealthStatus is not a media-health assessment; no rotational write evidence.',),
+                             profile.kind, 'insufficient')
+     if state == 'WARN':
+         reasons.append('HDD SMART warning: rescue important files first; risk acceptance is separately required.')
+diff --git a/desktop/driverepair_desktop/windows_native.py b/desktop/driverepair_desktop/windows_native.py
+index 59a0933..b0b454c 100644
+--- a/desktop/driverepair_desktop/windows_native.py
++++ b/desktop/driverepair_desktop/windows_native.py
+@@ -13,6 +13,10 @@ import sys
+ 
+ IOCTL_STORAGE_QUERY_PROPERTY = 0x002D1400
+ IOCTL_DISK_GET_LENGTH_INFO = 0x0007405C
++# STORAGE_PROPERTY_ID: seek penalty (7), TRIM (8). Both are read-only
++# STORAGE_PROPERTY_QUERY requests; a USB bridge may mask or synthesize either.
++STORAGE_DEVICE_SEEK_PENALTY_PROPERTY = 7
++STORAGE_DEVICE_TRIM_PROPERTY = 8
+ # STORAGE_BUS_TYPE subset; keep labels aligned with devices.canonicalize_windows_external_bus.
+ BUS_NAMES = {
+     1: 'SCSI', 3: 'ATA', 4: '1394', 7: 'USB', 8: 'RAID', 10: 'SAS', 11: 'SATA',
+@@ -54,6 +58,22 @@ def decode_alignment(data: bytes) -> dict:
+     return {'logical_sector_bytes': logical, 'physical_sector_bytes': physical}
+ 
+ 
++
++def decode_boolean_property(data: bytes, *, property_name: str) -> bool:
++    """Parse DEVICE_SEEK_PENALTY_DESCRIPTOR or DEVICE_TRIM_DESCRIPTOR.
++
++    Header: ULONG Version, ULONG Size, BOOLEAN flag (offset 8). Never infer
++    a value from a truncated, mismatched or unsupported driver response.
++    """
++    if len(data) < 9:
++        raise ValueError(f'Truncated {property_name} descriptor')
++    version, size = struct.unpack_from('<II', data, 0)
++    if version < 9 or size < 9 or size > len(data):
++        raise ValueError(f'Invalid {property_name} descriptor header')
++    if data[8] not in (0, 1):
++        raise ValueError(f'Invalid {property_name} descriptor flag')
++    return bool(data[8])
++
+ def probe_physicaldrive(number: int) -> dict:
+     """Read device/adapter capabilities only; never open with write access."""
+     if sys.platform != 'win32':
+@@ -88,6 +108,18 @@ def probe_physicaldrive(number: int) -> dict:
+             info.update(decode_alignment(query(IOCTL_STORAGE_QUERY_PROPERTY,struct.pack('<II',6,0))))
+         except (OSError, ValueError):
+             info['geometry_note']='Driver did not expose storage alignment property'
++        # Both flags are hints from the Windows storage stack, not ATA IDENTIFY.
++        # On some USB adapters these queries fail, or describe the bridge.
++        for field, property_id in (
++            ('incurs_seek_penalty', STORAGE_DEVICE_SEEK_PENALTY_PROPERTY),
++            ('trim_enabled', STORAGE_DEVICE_TRIM_PROPERTY),
++        ):
++            try:
++                raw = query(IOCTL_STORAGE_QUERY_PROPERTY,
++                            struct.pack('<II', property_id, 0), limit=32)
++                info[field] = decode_boolean_property(raw, property_name=field)
++            except (OSError, ValueError):
++                info[field] = None
+         length=query(IOCTL_DISK_GET_LENGTH_INFO,limit=8)
+         if len(length)!=8:
+             raise ValueError('Invalid disk length response')
+@@ -96,7 +128,7 @@ def probe_physicaldrive(number: int) -> dict:
+         serial=info.pop('serial',None)
+         info['serial_suffix']='***'+serial[-4:] if serial else None
+         info['write_authorized']=False
+-        info['notes']='Read-only metadata. Does NOT prove IsBoot/IsSystem, identify platter type, or authorize raw writes.'
++        info['notes']='Read-only driver metadata. Seek penalty and TRIM can be USB-bridge claims; cannot alone prove media health, exclude system disks, or authorize raw writes.'
+         return info
+     finally:
+         kernel.CloseHandle(handle)
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index ce391a8..ab3a684 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b23"
++version = "0.3.3b24"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+@@ -35,3 +35,6 @@ build-backend = "setuptools.build_meta"
+ 
+ [tool.setuptools.packages.find]
+ include = ["driverepair_desktop*"]
++
++[tool.setuptools.package-data]
++driverepair_desktop = ["data/*.json"]
+diff --git a/desktop/tests/test_b23_readiness_actions.py b/desktop/tests/test_b23_readiness_actions.py
+index e1eaa3a..e03ebdc 100644
+--- a/desktop/tests/test_b23_readiness_actions.py
++++ b/desktop/tests/test_b23_readiness_actions.py
+@@ -15,9 +15,9 @@ class ReadinessNextActionTests(unittest.TestCase):
+     device = {'identity_hint':'123456789abc','serial_suffix':'***0001','bus':'usb',
+               'model':'ST1000LM048','sector_size':512}
+ 
+-    def test_missing_tool_routes_to_explicit_setup(self):
++    def test_missing_tool_first_queries_windows_native(self):
+         out=readiness_next_action(self.device,'carequick',smartctl_available=False)
+-        self.assertEqual(out['action'],'setup')
++        self.assertEqual(out['action'],'probe')
+         self.assertFalse(out['ready'])
+ 
+     def test_available_tool_routes_to_readonly_probe(self):
+@@ -28,7 +28,7 @@ class ReadinessNextActionTests(unittest.TestCase):
+         out=readiness_next_action(self.device,'carequick',
+             {'source':'windows_storage_healthstatus','status':'windows_health_limited',
+              'smart_unavailable_reason':'USB bridge rejected SAT'},smartctl_available=True)
+-        self.assertEqual(out['action'],'probe')
++        self.assertEqual(out['action'],'rescue')
+         self.assertIn('USB bridge rejected SAT',out['reason'])
+ 
+     def test_verified_hdd_still_requires_engine_gate(self):
+diff --git a/desktop/tests/test_b24_native_fallback.py b/desktop/tests/test_b24_native_fallback.py
+new file mode 100644
+index 0000000..03d39a9
+--- /dev/null
++++ b/desktop/tests/test_b24_native_fallback.py
+@@ -0,0 +1,154 @@
++"""Windows-independent synthetic assertions for SMART-free HDD identification.
++
++Never opens a physical disk or grants real write access.
++"""
++import json
++import struct
++import subprocess
++import unittest
++from unittest import mock
++
++from driverepair_desktop.devices import Device
++from driverepair_desktop.native_media import (
++    NATIVE_SOURCE, interpret_native_evidence, windows_native_snapshot,
++)
++from driverepair_desktop.repair_readiness import ui_repair_readiness
++from driverepair_desktop.repair_strategy import advise
++from driverepair_desktop.release_policy import check_guarded_repair_preflight
++from driverepair_desktop.windows_native import decode_boolean_property
++from driverepair_desktop import native_media, release_policy
++from argparse import Namespace
++
++
++def drive(model='ST1000LM048-2E7172', serial='disk-0001'):
++    return Device('windows:PhysicalDrive4', r'\\.\PhysicalDrive4',
++                  model, 1000204886016, 512, 'usb', serial)
++
++
++def native(**overrides):
++    info = dict(model='ST1000LM048-2E7172', bus='USB',
++                serial_suffix='***0001', size_bytes=1000204886016,
++                incurs_seek_penalty=True, trim_enabled=False)
++    info.update(overrides)
++    return info
++
++
++class NativeHddEvidenceTests(unittest.TestCase):
++    def test_strict_windows_descriptor_flag(self):
++        for value in (0, 1):
++            data=struct.pack('<II', 12, 12)+bytes([value, 0, 0, 0])
++            self.assertIs(decode_boolean_property(data, property_name='seek'), bool(value))
++        for bad in (b'', b'12345678', struct.pack('<II',12,120)+b'\1',
++                    struct.pack('<II',12,12)+b'\2\0\0\0'):
++            with self.assertRaises(ValueError):
++                decode_boolean_property(bad, property_name='trim')
++
++    def test_all_evidence_required_for_smr_hdd(self):
++        result=interpret_native_evidence(drive(),native())
++        self.assertTrue(result['native_hdd_corrob'])
++        self.assertEqual(result['reported_medium'],'hdd')
++        self.assertEqual(result['source'],NATIVE_SOURCE)
++        self.assertEqual(result['status'],'unknown')
++        self.assertIsNone(result['smart_status_passed'])
++        advice=advise(model=drive().model,bus='usb',snapshot=result)
++        self.assertTrue(advice.can_attempt_hdd_refresh)
++        self.assertIn('explicit consent',advice.label)
++
++    def test_bad_identity_and_driver_claims_do_not_authorize(self):
++        cases=[{'size_bytes':1000204886016-512},
++               {'serial_suffix':'***9999'},
++               {'serial_suffix':None},
++               {'model':'Generic USB-SSD Controller'},
++               {'incurs_seek_penalty':False},
++               {'incurs_seek_penalty':None},
++               {'trim_enabled':True},
++               {'trim_enabled':None},
++               {'bus':'SATA'}]
++        for override in cases:
++            with self.subTest(override=override):
++                report=interpret_native_evidence(drive(),native(**override))
++                self.assertFalse(report['native_hdd_corrob'])
++                self.assertFalse(advise(model=drive().model,bus='usb',snapshot=report).can_attempt_hdd_refresh)
++
++    def test_generic_hdd_model_can_be_identified_without_assuming_cmr(self):
++        d=drive(model='ST1000DM010')
++        result=interpret_native_evidence(d,native(model='ST1000DM010'))
++        self.assertTrue(result['native_hdd_corrob'])
++        self.assertEqual(result['reported_medium'],'hdd')
++        # Only media identity is established. No assumed CMR/SMR or good health.
++        self.assertEqual(result['status'],'unknown')
++        self.assertTrue(advise(model=d.model,bus=d.bus,snapshot=result).can_attempt_hdd_refresh)
++
++    def test_known_ssd_is_not_hdd_even_if_driver_misreports(self):
++        report=interpret_native_evidence(drive(model='SanDisk SDSSDH3 500G'),native(model='SanDisk SDSSDH3 500G'))
++        self.assertFalse(report['native_hdd_corrob'])
++        self.assertFalse(advise(model='SanDisk SDSSDH3 500G',bus='usb',snapshot=report).can_attempt_hdd_refresh)
++
++    def test_known_model_cannot_substitute_for_native_confirmation(self):
++        report=interpret_native_evidence(drive(),native(trim_enabled=None))
++        self.assertEqual(report['reported_medium'],'unknown')
++
++    def test_incomplete_smart_does_not_hide_actual_warning(self):
++        from driverepair_desktop.health import supplement_inconclusive_smart
++        inconclusive={'status':'smart_passed_limited','reported_medium':'unknown',
++                      'ata_selected_raw_attributes':[], 'source':'smartctl_auto'}
++        with mock.patch('driverepair_desktop.native_media.windows_native_snapshot',
++                        return_value=interpret_native_evidence(drive(),native())):
++            improved=supplement_inconclusive_smart(drive(),inconclusive)
++            self.assertEqual(improved['source'],NATIVE_SOURCE)
++            self.assertEqual(improved['status'],'unknown')
++            warned={**inconclusive,'ata_selected_raw_attributes':[{'id':197,'raw_value':3}]}
++            self.assertIs(supplement_inconclusive_smart(drive(),warned),warned)
++
++    def test_native_probe_command_is_timeout_bounded(self):
++        device=drive()
++        commands=[]
++        def runner(args, **kwargs):
++            commands.append((args,kwargs))
++            return subprocess.CompletedProcess(args,0,stdout=json.dumps(native()).encode())
++        with mock.patch.object(native_media.sys,'platform','win32'):
++            result=windows_native_snapshot(device,runner=runner)
++        self.assertTrue(result['native_hdd_corrob'])
++        self.assertEqual(commands[0][1]['timeout'],9)
++        self.assertEqual(commands[0][0][-2:],['--number','4'])
++
++    def test_native_probe_timeout_and_foreign_platform(self):
++        with mock.patch.object(native_media.sys,'platform','linux'):
++            self.assertIsNone(windows_native_snapshot(drive()))
++        with mock.patch.object(native_media.sys,'platform','win32'):
++            self.assertIsNone(windows_native_snapshot(drive(),runner=mock.Mock(
++                side_effect=subprocess.TimeoutExpired('disk',9))))
++
++    def test_ui_candidate_still_requires_engine(self):
++        d=drive()
++        public=d.public()
++        report=interpret_native_evidence(d,native())
++        ok,why=ui_repair_readiness(public,'carequick',snapshot=report)
++        self.assertTrue(ok)
++        self.assertIn('engine',why.lower())
++
++    def test_guarded_requires_explicit_unknown_health_ack(self):
++        report=interpret_native_evidence(drive(),native())
++        args=Namespace(command='care-external',journal_backend='disk',journal='/healthy/journal',
++                       rewrite_neighbors=False,recording='auto',ack_unknown_health=False,
++                       max_regions=16,auto_lock_volumes=True,ack_media_warning=False)
++        with mock.patch.object(release_policy,'REPAIR_BETA_GUARDED',True):
++            with self.assertRaisesRegex(PermissionError,'ack-unknown-health'):
++                check_guarded_repair_preflight(args,report,drive())
++            args.ack_unknown_health=True
++            advice=check_guarded_repair_preflight(args,report,drive())
++            self.assertTrue(advice['can_attempt_hdd_refresh'])
++            args.max_regions=64
++            with self.assertRaisesRegex(PermissionError,'16'):
++                check_guarded_repair_preflight(args,report,drive())
++            args.max_regions=16
++            unsafe={**report,'status':'failure_reported'}
++            with self.assertRaises(PermissionError):
++                check_guarded_repair_preflight(args,unsafe,drive())
++            for item in ({**report,'native_hdd_corrob':False},
++                         {**report,'source':'windows_storage_healthstatus'}):
++                with self.assertRaises(PermissionError):
++                    check_guarded_repair_preflight(args,item,drive())
++
++
++if __name__=='__main__': unittest.main()
+diff --git a/desktop/tests/test_drive_model_catalog.py b/desktop/tests/test_drive_model_catalog.py
+new file mode 100644
+index 0000000..d199e91
+--- /dev/null
++++ b/desktop/tests/test_drive_model_catalog.py
+@@ -0,0 +1,27 @@
++"""Bundled model provenance, exactness, and safe policy defaults."""
++import unittest
++from driverepair_desktop.drive_model_catalog import catalog_entries, match_catalog_models
++from driverepair_desktop.media_profiles import identify_profile
++
++
++class DriveModelCatalogTests(unittest.TestCase):
++    def test_every_entry_has_manufacturer_and_source(self):
++        rows = catalog_entries()
++        self.assertGreaterEqual(len(rows), 4)
++        self.assertTrue(all(row['manufacturer'] and row['source_url'].startswith('https://') for row in rows))
++
++    def test_exact_seagate_and_nonmatching_models(self):
++        self.assertEqual(identify_profile(model='ST1000LM 048-2E7172', bus='usb').kind, 'smr')
++        self.assertEqual(identify_profile(model='ST1000LM0480', bus='usb').kind, 'unknown')
++        self.assertFalse(match_catalog_models('ST2000LM015'))
++
++    def test_sandisk_family_is_advisory_and_not_hdd(self):
++        self.assertEqual(identify_profile(model='SanDisk SDSSDH3 500G USB Device',bus='usb').kind,'ssd')
++        self.assertEqual(identify_profile(model='SDSSDH35',bus='usb').kind,'unknown')
++        self.assertEqual(identify_profile(model='SDSSDH3',bus='usb',media_type='hdd').kind,'unknown')
++
++    def test_same_bridge_not_construed_as_model(self):
++        self.assertEqual(identify_profile(model='Generic USB Device',bus='usb').kind,'unknown')
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/docs/DRIVE_MODEL_CATALOG.md b/docs/DRIVE_MODEL_CATALOG.md
+new file mode 100644
+index 0000000..1b09a29
+--- /dev/null
++++ b/docs/DRIVE_MODEL_CATALOG.md
+@@ -0,0 +1,16 @@
++# DriveRepair manufacturer model catalog
++
++DriveRepair ships an **offline, curated, source-attributed** database at `desktop/driverepair_desktop/data/drive_models.json`. Schema version 1 currently covers **four records**: three Seagate SMR part numbers and SanDisk Ultra 3D SSD model family. It is **not** comprehensive, does not phone home and does not update itself.
++
++## Evidence acquisition and safety
++
++1. Manufacturer specification or datasheet provides **nominal model properties** (SMR/CMR, device class, rated RPM and marketed capacity). Every catalog record retains its manufacturer source URL.
++2. Device discovery and direct OS protocol queries attempt to collect **live identity and capabilities**. SMART/ATA/SAT/NVMe logs, when available, provide per-device health observations. The USB bridge may hide or alter this information.
++3. Scan/recovery readings supply **observed errors, latency, repeatability and recovered bytes**. These must never be confused with model specifications.
++4. Catalog matching selects conservative **read strategy** only. A model match or recording-technology label is *not* an authorization to write a physical disk. Live identity confirmation, health/risk assessment, exclusive access, durable journal and explicit consent remain independent requirements.
++
++### Updating the catalog
++
++Contributions must include exact OEM model and variant matching rules, source URL, source date/revision if known, evidence scope and regression tests. Reject unverifiable crowdsourced recording claims and broad family extrapolation. Update records by reviewed release changes; never silently download internet data or treat the smartmontools `drivedb.h` SMART decoding presets as a manufacturer-verified recording-technology catalog.
++
++The catalog is stored as JSON within the application package, works offline and is included in both `.pyz` channels and the Python wheel.
+diff --git a/docs/SMART_FALLBACK_B24.md b/docs/SMART_FALLBACK_B24.md
+new file mode 100644
+index 0000000..8ca784f
+--- /dev/null
++++ b/docs/SMART_FALLBACK_B24.md
+@@ -0,0 +1,55 @@
++# DriveRepair 0.3.3b24 — Native Windows media fallback and safety QA
++
++## Purpose
++
++This upgrade adds an alternate **read-only identification source** when smartctl and USB
++SAT commands fail. Windows exposes device properties by `IOCTL_STORAGE_QUERY_PROPERTY`.
++The seek-penalty and TRIM descriptors are **driver/bridge claims**, not proof of full ATA
++IDENTIFY or SMART health. A positive read result does not prove reusable media.
++
++## Windows test matrix (NOT performed in this container)
++
++1. **Seagate ST1000LM048, USB-SAT compatible dock:** Compare smartctl rotation and the
++   Windows independent seek/TRIM values, descriptor model, serial and exact byte size.
++   Verify the displayed evidence source is SMART when it succeeds.
++2. **Same Seagate, SMART-incompatible dock:** Check whether Windows native properties
++   are available. Confirm all required factors agree; if any are absent, confirm the
++   engine refuses physical writes and offers rescue. If they corroborate, verify that
++   UI explicitly asks for acceptance of UNKNOWN health and that declining performs zero
++   writes. Do not assume USB bridges correctly report seek or TRIM.
++3. **SanDisk SDSSDH3 USB SSD:** HDD maintenance must remain blocked even if the USB
++   adapter erroneously advertises seek penalty or no TRIM.
++4. **Generic 4 GB USB flash device:** must not pass HDD readiness when the driver
++   reports questionable seek/TRIM values or generic media model.
++5. **Disconnect and reconnect:** ensure the inventory fingerprint, full media identity,
++   mounted volumes, journal path and exclusive access are rechecked before each write.
++6. **Windows HealthStatus failure/warning:** a warning must not be overwritten by an
++   optimistic native ID. Review counters with original vendor tools when possible.
++7. **Interrupt native query:** hardware timeout in a child must not freeze the Qt UI;
++   unknown remains unknown and no write is authorized.
++8. **Guarded beta tests only, disposable HDD with fully rescued data:** test a small
++   journaled batch and independently verify original bytes after closing writer;
++   inspect SMART if available after reconnect, and re-scan separately. Repeated errors
++   still indicate unreliable media; do not represent an improved life expectancy.
++9. **WSL setup:** on Windows without Debian, explicitly approve setup, verify installer
++   status, initial Debian configuration and restart guidance; build ISO; independently
++   boot-test UEFI and BIOS on test hardware; flash only disposable USB.
++
++## Evidence required for physical writes
++
++- A unique, stable physical device identity; OS whole-disk external and not system disk.
++- Either SMART rotational/HDD evidence with health observations, or strict corroboration
++  by native Windows device descriptor, seek penalty, no TRIM, matching size and serial,
++  plus recognized OEM HDD model patterns (still potentially spoofed by USB hardware).
++- If SMART health is unknown: owner gives separate explicit unknown-health approval;
++  critical health warnings still block the experimental pathway.
++- Independent journal on a separate healthy disk, true exclusive locks, consistent
++  source byte rereads and post-write readback with digest checks.
++- No SSD/NVMe/flash HDD-style refresh, no auto erasure, no claiming recovered unreadable
++  sectors, no automatic trust or lifespan claim.
++
++## Build limitations
++
++This update was synthetically tested on Linux. Windows DeviceIoControl responses, actual
++HDD rewrite, USB bridge error handling, WSL Debian installation, and recovery ISO BIOS/UEFI
++boot **must be validated by a Windows hardware-enabled operator**.

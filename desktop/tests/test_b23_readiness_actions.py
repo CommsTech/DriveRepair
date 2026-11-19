@@ -15,9 +15,9 @@ class ReadinessNextActionTests(unittest.TestCase):
     device = {'identity_hint':'123456789abc','serial_suffix':'***0001','bus':'usb',
               'model':'ST1000LM048','sector_size':512}
 
-    def test_missing_tool_routes_to_explicit_setup(self):
+    def test_missing_tool_first_queries_windows_native(self):
         out=readiness_next_action(self.device,'carequick',smartctl_available=False)
-        self.assertEqual(out['action'],'setup')
+        self.assertEqual(out['action'],'probe')
         self.assertFalse(out['ready'])
 
     def test_available_tool_routes_to_readonly_probe(self):
@@ -28,7 +28,7 @@ class ReadinessNextActionTests(unittest.TestCase):
         out=readiness_next_action(self.device,'carequick',
             {'source':'windows_storage_healthstatus','status':'windows_health_limited',
              'smart_unavailable_reason':'USB bridge rejected SAT'},smartctl_available=True)
-        self.assertEqual(out['action'],'probe')
+        self.assertEqual(out['action'],'rescue')
         self.assertIn('USB bridge rejected SAT',out['reason'])
 
     def test_verified_hdd_still_requires_engine_gate(self):
