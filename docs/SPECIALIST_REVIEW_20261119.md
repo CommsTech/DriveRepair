@@ -64,6 +64,11 @@ Next step for these enclosures is a parameterised or vendor passthrough type
 (`sat,12`, `usbjmicron,0`, `sntjmicron`) once an elevated probe is approved, or
 direct SATA. The probe script records every type's exit code and message.
 
+After the CLI fallback change, all three drives report `windows_health_limited`
+(source `windows_storage_healthstatus`) instead of a bare UNKNOWN, verified
+unelevated through the app's own `health` command. That is a coarse OS view,
+explicitly not SMART, and it does not satisfy repair gating.
+
 Coverage is a **24-sample spot check** (~0.005 % of each large drive), not a
 health or capacity certificate. SMART is UNKNOWN on this host (no smartmontools).
 
