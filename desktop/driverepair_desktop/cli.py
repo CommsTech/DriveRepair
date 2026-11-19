@@ -123,6 +123,9 @@ def parser() -> argparse.ArgumentParser:
     win_probe = sub.add_parser('inspect-windows-disk', help='READ-ONLY: native Win32 disk properties without PowerShell (NOT write authority)')
     win_probe.add_argument('--number', type=int, required=True)
     win_probe.add_argument('--json', action='store_true')
+    ata_probe = sub.add_parser('inspect-windows-ata', help='READ-ONLY: ATA IDENTIFY through a compatible Windows SAT bridge; health remains unknown')
+    ata_probe.add_argument('--number', type=int, required=True)
+    ata_probe.add_argument('--json', action='store_true')
     all_disks = sub.add_parser("list-all-linux", help="READ-ONLY: show internal and external Linux whole disks for offline recovery")
     all_disks.add_argument("--json", action="store_true")
     planning = sub.add_parser("plan-system-recovery", help="READ-ONLY: validate offline internal disk and destination before rescue")
@@ -1711,6 +1714,16 @@ def _run_care(args) -> int:
                     assert_stable_identity(selected, select_external_device(args.device))
                 except (RuntimeError, ValueError):
                     assert_stable_identity(selected, verify_windows_patient_still_present(selected))
+                # An ATA IDENTIFY snapshot can establish physical HDD identity
+                # without SMART. Re-query the actual patient immediately before
+                # RW access: a replaced dock/patient must never inherit stale
+                # ATA identification from the earlier scan.
+                if (snapshot and snapshot.get('source') == 'windows_ata_identify_hdd'):
+                    from .ata_identity import windows_ata_snapshot
+                    fresh_ata = windows_ata_snapshot(selected)
+                    if (fresh_ata is None or not fresh_ata.get('ata_identify_corrob')
+                            or fresh_ata.get('rotation_rate') != snapshot.get('rotation_rate')):
+                        raise RuntimeError('ATA IDENTIFY prewrite recheck failed; no patient writes')
                 writer = open_device_readwrite(
                     selected, **({'auto_lock_volumes': True}
                                  if getattr(args, 'auto_lock_volumes', False) else {}))
@@ -1952,6 +1965,10 @@ def run(argv: list[str] | None = None) -> int:
         if args.command == 'inspect-storage':
             from .host_capabilities import inspect_readonly
             print(json.dumps(inspect_readonly(args.device),indent=2))
+            return 0
+        if args.command == 'inspect-windows-ata':
+            from .ata_identity import inspect_windows_sat
+            print(json.dumps(inspect_windows_sat(args.number), indent=2))
             return 0
         if args.command == 'inspect-windows-disk':
             from .windows_native import probe_physicaldrive

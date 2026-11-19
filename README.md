@@ -2,7 +2,7 @@
 
 **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
 
-> **Release status:** `0.3.3b24` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+> **Release status:** `0.3.3b27` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
 
 **Drive models:** The bundled [offline model catalog](docs/DRIVE_MODEL_CATALOG.md) currently documents four vendor-backed model entries (three Seagate SMR models and one SanDisk SSD family). It guides scanning; it is not a comprehensive database or authorization to rewrite a disk.
 
@@ -43,7 +43,7 @@ qualification gap on some USB adapters, not a software repair success.
 ### When USB SMART information is unavailable (Windows)
 
 DriveRepair now automatically tries **two independent read-only identification paths**:
-SMART/ATA SAT pass-through, followed by **Windows-native storage properties** if SMART
+SMART/ATA SAT pass-through, followed by **Windows-native storage properties** and a bounded read-only **ATA IDENTIFY** attempt through compatible SAT USB bridges if SMART
 fails or is not installed. The native query asks Windows for the disk descriptor, reported
 seek penalty, TRIM capability, size, and serial suffix. This can sometimes identify an
 external mechanical HDD behind a bridge that blocks SMART, but **USB adapters can hide or

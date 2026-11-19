@@ -94,14 +94,14 @@ def advise(*, model: str = '', bus: str = '', media_type: str = '',
         return RepairAdvice('identify_rescue', 'Identify media first; rescue data', False,
                             ('Underlying media cannot be verified through this device/bridge.',),
                             profile.kind, 'unknown')
-    if (snap.get('source') == 'windows_native_corrob_hdd' and
+    if (snap.get('source') in {'windows_native_corrob_hdd', 'windows_ata_identify_hdd'} and
             snap.get('native_hdd_corrob') is True and state == 'UNKNOWN'):
         # This is a *candidate* for the separately consented unknown-health
         # workflow, not a SMART pass or a write permit. The engine requires
         # --ack-unknown-health, exclusive access and the original-byte journal.
         return RepairAdvice('hdd_native_unknown_health',
                             'HDD identified by Windows; health unknown — explicit consent required',
-                            True, ('Windows reports mechanical seek penalty and no TRIM; model, serial and size corroborate.',
+                            True, ('Read-only Windows or ATA IDENTIFY evidence corroborates HDD model, identity and size.',
                                    'The USB bridge may misreport. SMART health is UNKNOWN: rescue important data first and explicitly acknowledge unknown health.',),
                             profile.kind, 'native_corrob_not_health')
     if not snapshot or snap.get('source') == 'windows_storage_healthstatus' or state == 'UNKNOWN':
