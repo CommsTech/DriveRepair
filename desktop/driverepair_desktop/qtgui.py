@@ -145,8 +145,8 @@ def _qt_debug_log_path() -> Path | None:
 
 def launch():
     try:
-        from PySide6.QtCore import Qt, QProcess, QTimer, QRectF, QPointF
-        from PySide6.QtGui import QColor, QFont, QPainter, QKeySequence, QShortcut, QPen, QPainterPath, QLinearGradient
+        from PySide6.QtCore import Qt, QProcess, QTimer, QRectF, QPointF, QSettings, QUrl
+        from PySide6.QtGui import QColor, QFont, QPainter, QKeySequence, QShortcut, QPen, QPainterPath, QLinearGradient, QDesktopServices
         from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
             QLabel, QPushButton, QFrame, QProgressBar, QComboBox, QLineEdit, QFileDialog,
             QPlainTextEdit, QMessageBox, QCheckBox, QToolButton, QScrollArea, QGridLayout,
@@ -200,6 +200,8 @@ def launch():
         QPushButton#primary {{ background:#269b90; color:#ffffff; border:1px solid #42beae; font-weight:750; }}
         QPushButton#primary:hover {{ background:#2cb8a4; }}
         QPushButton#danger {{ background:#57343e; border:1px solid #93525c; }}
+        QPushButton#sponsor {{ color:#d5e3f5; background:#16263a; border:1px solid #3d5673; text-align:left; }}
+        QPushButton#sponsor:hover {{ border:1px solid {C['accent']}; }}
         QComboBox,QLineEdit {{ background:{C['panel2']}; border:1px solid {C['line']}; padding:10px; border-radius:7px; }}
         QComboBox QAbstractItemView {{ background:{C['panel']}; color:{C['text']}; selection-background-color:#24584f; }}
         QProgressBar {{ height:8px; background:{C['panel2']}; border:0; border-radius:4px; }}
@@ -544,25 +546,33 @@ def launch():
             self.legacy.setObjectName('nav')
             self.legacy.clicked.connect(self.open_legacy)
             nav.addWidget(self.legacy)
-            self.boot_button=QPushButton('Export ISO build kit')
-            self.boot_button.setObjectName('nav')
-            self.boot_button.setToolTip('Export a complete Linux live-ISO build kit; boot testing is required.')
-            self.boot_button.clicked.connect(self.export_boot_kit)
-            nav.addWidget(self.boot_button)
-            self.iso_button=QPushButton('Build live ISO (Linux)')
-            self.iso_button.setObjectName('nav')
-            self.iso_button.setToolTip('Build an UNVERIFIED ISO on a prepared Debian x86-64 root session; never writes USB disks.')
-            self.iso_button.clicked.connect(self.build_iso)
-            nav.addWidget(self.iso_button)
-            self.usb_flash_button=QPushButton('Flash bootable USB')
+            self._media_settings=QSettings('DriveRepair', 'RecoveryWorkstation')
+            # The primary route is one USB creator, not three equally prominent tools.
+            self.usb_flash_button=QPushButton('Create recovery USB')
             self.usb_flash_button.setObjectName('nav')
-            self.usb_flash_button.setToolTip('DESTROYS all data on a selected USB drive. Requires a hybrid ISO and verifies written bytes; boot tests are still required.')
+            self.usb_flash_button.setToolTip('Automatically selects an existing local DriveRepair ISO when available. Only a confirmed sacrificial USB is erased.')
             self.usb_flash_button.clicked.connect(self.flash_boot_usb)
             nav.addWidget(self.usb_flash_button)
+            self.boot_button=QPushButton('Export ISO build kit')
+            self.boot_button.setObjectName('nav')
+            self.boot_button.setToolTip('Advanced: export Debian build instructions; the ZIP itself is NOT bootable.')
+            self.boot_button.clicked.connect(self.export_boot_kit)
+            self.iso_button=QPushButton('Build live ISO (Linux)')
+            self.iso_button.setObjectName('nav')
+            self.iso_button.setToolTip('Advanced: build an UNVERIFIED hybrid ISO on a Debian build machine.')
+            self.iso_button.clicked.connect(self.build_iso)
+            # Keep the expert actions accessible inside the creator rather than
+            # consuming the navigation with build-kit/ISO/flash distinctions.
+            self.sponsor_button=QPushButton('♡  Support DriveRepair')
+            self.sponsor_button.setObjectName('sponsor')
+            self.sponsor_button.setToolTip('Opens the same GitHub Sponsors profile as Repository Detective. No telemetry or network request until clicked.')
+            self.sponsor_button.clicked.connect(lambda:QDesktopServices.openUrl(QUrl('https://github.com/sponsors/CommsTech')))
+
             self.flash_proc=None
             self.iso_proc=None
             self._iso_build_temp=None
             nav.addStretch()
+            nav.addWidget(self.sponsor_button)
             channel=QLabel('IMAGE-FIRST PUBLIC BETA' if PUBLIC_BETA_IMAGE_ONLY
                            else 'GUIDED HDD REPAIR BETA' if REPAIR_BETA_GUARDED
                            else 'EXPERIMENTAL ENGINEERING')
@@ -1083,6 +1093,12 @@ def launch():
             enabled, advice=can_start(kind, device_selected=bool(self.selected()),
                 image_exists=bool(self.dest.text().strip() and Path(self.dest.text().strip()).is_file()),
                 running=running, public_beta=PUBLIC_BETA_IMAGE_ONLY)
+            if enabled and kind in {'carequick','carefull','careresume'}:
+                from .repair_readiness import ui_repair_readiness
+                ready, reason = ui_repair_readiness(self.selected(),kind)
+                if not ready:
+                    enabled=False
+                    advice=reason
             if self._pending_resume:
                 enabled=False
                 advice='Waiting for verified USB reconnect. Cancel reconnect to choose another operation.'
@@ -1170,13 +1186,44 @@ def launch():
                     'Finish the current operation before preparing USB recovery media.')
                 return
             from .usb_flash import inspect_hybrid_iso
+            from .recovery_media_catalog import find_local_recovery_iso
             from .devices import list_external_devices
-            iso,_=QFileDialog.getOpenFileName(self,'Select a HYBRID recovery ISO',
-                                              '','Hybrid ISO images (*.iso)')
-            if not iso:
-                return
+            image=find_local_recovery_iso(preferred=str(self._media_settings.value('last_iso') or ''))
+            if image is None:
+                # A source checkout/zipapp contains the ISO BUILD RECIPE but not
+                # a boot-tested OS image. Never silently substitute a random ISO.
+                choose=QMessageBox(self)
+                choose.setWindowTitle('DriveRepair recovery image not installed')
+                choose.setText('No local DriveRepair live ISO was found.')
+                choose.setInformativeText('A real bootable ISO must be built or included with the release first. '
+                    'On Windows, export the build kit for a Debian build host. '
+                    'If you already have a hybrid ISO, select it once; it will be preselected next time.')
+                browse=choose.addButton('Use existing ISO…',QMessageBox.AcceptRole)
+                build=choose.addButton('Build ISO (Linux)',QMessageBox.ActionRole)
+                export=choose.addButton('Export build kit',QMessageBox.ActionRole)
+                choose.addButton(QMessageBox.Cancel)
+                choose.exec()
+                choice=choose.clickedButton()
+                if choice == build:
+                    self.build_iso()
+                    return
+                if choice == export:
+                    self.export_boot_kit()
+                    return
+                if choice != browse:
+                    return
+                iso,_=QFileDialog.getOpenFileName(self,'Select ISO-hybrid image (not build-kit ZIP)',
+                    '','Hybrid ISO images (*.iso)')
+                if not iso:
+                    return
+                try:
+                    image=inspect_hybrid_iso(iso)
+                except (OSError,ValueError) as exc:
+                    QMessageBox.warning(self,'Invalid ISO',str(exc))
+                    return
+                self._media_settings.setValue('last_iso',image['path'])
             try:
-                image=inspect_hybrid_iso(iso)
+
                 targets=[d for d in list_external_devices() if d.bus.lower()=='usb'
                          and d.serial.strip() and d.size_bytes>=image['bytes']]
                 if not targets:
@@ -1206,7 +1253,7 @@ def launch():
             dlg.setWindowTitle('Create DriveRepair USB recovery media')
             dlg.setMinimumWidth(560)
             lay=QVBoxLayout(dlg)
-            title=QLabel('Flash hybrid ISO to USB')
+            title=QLabel('Create DriveRepair recovery USB')
             title.setObjectName('heading')
             lay.addWidget(title)
             caption=QLabel('This ERASES THE ENTIRE SELECTED USB DRIVE — all partitions and files. '
@@ -1214,7 +1261,42 @@ def launch():
                 'Never choose a recovery patient or a USB disk holding the ISO.')
             caption.setWordWrap(True)
             lay.addWidget(caption)
-            lay.addWidget(QLabel('ISO image: '+Path(iso).name+'  ·  '+display_size(image['bytes'])))
+            image_label=QLabel('RECOVERY IMAGE READY  ·  '+Path(image['path']).name+'  ·  '+display_size(image['bytes']))
+            image_label.setObjectName('section')
+            image_label.setWordWrap(True)
+            lay.addWidget(image_label)
+            source_note=QLabel('Local image auto-selected. ISO markers checked; BIOS/UEFI boot unverified. '
+                'To change the image, close this wizard and use the ISO selection override below.')
+            source_note.setObjectName('muted')
+            source_note.setWordWrap(True)
+            lay.addWidget(source_note)
+            other=QPushButton('Choose a different ISO…')
+            lay.addWidget(other)
+            def change_image():
+                new_path,_=QFileDialog.getOpenFileName(dlg,'Select different hybrid ISO', '', 'Hybrid ISO images (*.iso)')
+                if not new_path:
+                    return
+                try:
+                    new_image=inspect_hybrid_iso(new_path)
+                except (OSError,ValueError) as exc:
+                    QMessageBox.warning(dlg,'Invalid ISO',str(exc))
+                    return
+                if new_image['bytes']>max(x.size_bytes for x in targets):
+                    QMessageBox.warning(dlg,'ISO too large','No discovered USB target can contain this image.')
+                    return
+                image.update(new_image)
+                self._media_settings.setValue('last_iso',new_image['path'])
+                image_label.setText('RECOVERY IMAGE READY  ·  '+Path(image['path']).name+'  ·  '+display_size(image['bytes']))
+                # On a new image size, all target choices must be reevaluated.
+                target_box.clear()
+                target_box.addItem('Choose a USB drive (nothing selected)',None)
+                for disk in targets:
+                    if disk.size_bytes >= image['bytes']:
+                        target_box.addItem(f'{disk.model}  ·  {display_size(disk.size_bytes)}  ·  '
+                            f'{disk.id}  ·  serial …{disk.serial[-4:]}',disk.id)
+                typed.clear()
+                update_confirm()
+            other.clicked.connect(change_image)
             lay.addWidget(QLabel('1 · Select the sacrificial USB device'))
             target_box=QComboBox()
             target_box.addItem('Choose a USB drive (nothing selected)',None)
@@ -1414,6 +1496,7 @@ def launch():
                 QMessageBox.Yes | QMessageBox.No,QMessageBox.No)
             if approval!=QMessageBox.Yes:
                 return
+            self._iso_output_folder=Path(folder)
             self.iso_proc=QProcess(self)
             self.iso_proc.setProgram('bash')
             self.iso_proc.setArguments([str(script),str(Path(folder).resolve())])
@@ -1428,6 +1511,12 @@ def launch():
             self.iso_proc.start()
 
         def iso_finished(self,code):
+            if code == 0:
+                from .recovery_media_catalog import find_local_recovery_iso
+                image=find_local_recovery_iso(search_roots=[getattr(self,'_iso_output_folder',Path.cwd())])
+                if image:
+                    self._media_settings.setValue('last_iso',image['path'])
+                    self.note_log('New local live image available to Create recovery USB: '+Path(image['path']).name)
             self.note_log('ISO builder exited with status '+str(code)+
                 '. Both BIOS and UEFI boot tests are required before distribution.')
             self.iso_proc=None
@@ -1671,6 +1760,12 @@ def launch():
                     'Select Check for a read-only scan, or Recover to a NEW image.')
                 return
             d=self.selected()
+            if kind in {'carequick','carefull','careresume'}:
+                from .repair_readiness import ui_repair_readiness
+                ready, reason = ui_repair_readiness(d,kind)
+                if not ready:
+                    QMessageBox.warning(self,'Drive is not eligible for physical writes',reason)
+                    return
             if kind in {'rescue','rescueimage'}:
                 if kind == 'rescue' and not d:
                     QMessageBox.warning(self,'Choose an external drive','Select the SOURCE drive to rescue first.')

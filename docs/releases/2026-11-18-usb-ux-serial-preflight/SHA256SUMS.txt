@@ -1,0 +1,2 @@
+6bc1288fab024d141ec3b7e9515ce1b1dae0491e4e1751a4a306e891fb7f3fb1  DriveRepair_2026-11-18_USB_UX_Serial_Preflight.patch
+8abdd5dec1c017fef9a205946c0d11199d09add239e544853e9822813858ffc0  DriveRepair_2026-11-18_USB_UX_Source.zip
