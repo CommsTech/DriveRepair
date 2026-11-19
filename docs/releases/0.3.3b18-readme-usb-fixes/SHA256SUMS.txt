@@ -1,0 +1,2 @@
+58def6178b48738cd9a69ee7d21c02179226b366d645eadd19df1c70929b5338  DriveRepair_0.3.3b18_README_USB_Repair_Fixes.patch
+9b6d81a27ad4b0a566b135c5d4e46c94b3175be7af4112f143dbe7d62cc4ae64  DriveRepair_0.3.3b18_Complete_Source.zip

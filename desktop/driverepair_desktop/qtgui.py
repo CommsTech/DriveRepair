@@ -764,6 +764,11 @@ def launch():
             self.refresh_button=QPushButton('Refresh')
             self.refresh_button.clicked.connect(self.refresh_devices)
             tool_row.addWidget(self.refresh_button)
+            self.smart_check_button=QPushButton('Check HDD eligibility')
+            self.smart_check_button.setToolTip('Read-only SMART / SATA passthrough identification. '
+                'No repair or drive writes start here. Available in the Repair workspace.')
+            self.smart_check_button.clicked.connect(lambda:self.probe_selected_media(force=True))
+            tool_row.addWidget(self.smart_check_button)
             tool_row.addStretch()
             self.device_box=QComboBox()
             self.device_box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
@@ -782,6 +787,11 @@ def launch():
             self.device_note.setWordWrap(True)
             self.device_note.setObjectName('muted')
             drive_panel.addWidget(self.device_note)
+            self.smart_check_note=QLabel('HDD repair needs valid rotation and SMART evidence. '
+                'If the USB adapter hides them, use read-only rescue or direct SATA.')
+            self.smart_check_note.setObjectName('muted')
+            self.smart_check_note.setWordWrap(True)
+            drive_panel.addWidget(self.smart_check_note)
             self.profile_note=QLabel('Identifying media…')
             self.profile_note.setWordWrap(True)
             self.profile_note.setObjectName('muted')
@@ -1055,7 +1065,7 @@ def launch():
                 self._auto_probe_timer.start()
             self.update_action_state()
 
-        def probe_selected_media(self):
+        def probe_selected_media(self, *, force=False):
             """Time-bounded SMART identification on an idle source, never a write gate.
 
             The CLI subprocess is isolated so an unresponsive bridge cannot hang
@@ -1066,8 +1076,12 @@ def launch():
                     or (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning)):
                 return
             key=d.get('identity_hint')
-            if not key or key in self._health_by_device or key in self._auto_probe_attempted:
+            if not key or (not force and (key in self._health_by_device or
+                                         key in self._auto_probe_attempted)):
                 return
+            if force:
+                self.smart_check_note.setText('Checking USB SMART / ATA identity read-only… '
+                    'the drive is not being repaired or rewritten.')
             self._auto_probe_attempted.add(key)
             self._auto_probe_hint=key
             child=QProcess(self)
@@ -1076,6 +1090,7 @@ def launch():
             child.setArguments(cli_prefix()[1:]+['health','--device',d['id'],'--json'])
             child.finished.connect(lambda code,_status,c=child,k=key:self.media_probe_done(c,k,code))
             child.start()
+            self.update_action_state()
             def bound_probe(c=child):
                 if c.state()!=QProcess.NotRunning:
                     self.note_log('SMART identification timed out; preserving unknown media. No writes attempted.')
@@ -1094,7 +1109,16 @@ def launch():
                 if isinstance(report,dict) and report.get('status'):
                     self._health_by_device[key]=report
             if self.selected() and self.selected().get('identity_hint') == key:
+                current=self._health_by_device.get(key)
+                from .repair_readiness import ui_repair_readiness
+                permitted, explanation = ui_repair_readiness(self.selected(), 'carequick',
+                                                               snapshot=current)
+                self.smart_check_note.setText(
+                    'SMART/rotation check passed the UI eligibility stage; '
+                    'device identity, locks and journal remain mandatory.' if permitted else
+                    'HDD repair is not authorized: '+explanation)
                 self.update_drive_profile()
+            self.update_action_state()
 
         def select_goal(self, goal):
             if self.proc and self.proc.state()!=QProcess.NotRunning:
@@ -1180,6 +1204,8 @@ def launch():
             self.auto_pause.setVisible(kind in {'scanquick','scanfull','resume'})
             self.batch_button.setVisible(kind == 'rescue')
             self.batch_status.setVisible(kind == 'rescue')
+            self.smart_check_button.setVisible(kind in {'carequick','carefull','careresume'})
+            self.smart_check_note.setVisible(kind in {'carequick','carefull','careresume'})
             self.offline_devices.setVisible(sys.platform=='linux' and kind == 'rescue')
             if kind != 'rescue' and self.offline_devices.isChecked():
                 self.offline_devices.blockSignals(True)
@@ -1291,6 +1317,8 @@ def launch():
                 button.setEnabled(not running and (family != 'fix' or not PUBLIC_BETA_IMAGE_ONLY))
             self.refresh_button.setEnabled(not running)
             self.inspect_button.setEnabled(not running)
+            self.smart_check_button.setEnabled(not running and bool(self.selected()) and
+                not (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning))
 
         def copy_summary(self):
             device=(None if self._last_job_kind == 'rescueimage' else
@@ -1449,6 +1477,18 @@ def launch():
             source_note.setObjectName('muted')
             source_note.setWordWrap(True)
             lay.addWidget(source_note)
+            separation=QLabel('THIS TOOL CREATES BOOT MEDIA; it does not image or back up a patient drive. '
+                'For data recovery, choose Rescue data in the main window.')
+            separation.setObjectName('muted')
+            separation.setWordWrap(True)
+            lay.addWidget(separation)
+            rescue_navigation=QPushButton('I want to image a disk instead → Rescue data')
+            lay.addWidget(rescue_navigation)
+            def switch_to_rescue():
+                if not (self.flash_proc and self.flash_proc.state()!=QProcess.NotRunning):
+                    dlg.accept()
+                    self.select_goal('rescue')
+            rescue_navigation.clicked.connect(switch_to_rescue)
             other=QPushButton('Choose a different ISO…')
             lay.addWidget(other)
             def change_image():
@@ -1489,11 +1529,11 @@ def launch():
             typed=QLineEdit()
             typed.setPlaceholderText('ERASE windows:PhysicalDriveN or ERASE linux:/dev/sdX')
             lay.addWidget(typed)
-            ack=QCheckBox('I understand ALL DATA on the selected USB will be irreversibly overwritten.')
+            ack=QCheckBox('REQUIRED: I authorize erasing every partition and file on this USB drive.')
             ack.setChecked(False)
             ack.setToolTip('Permanently overwrites all partitions and files on the selected USB device')
             lay.addWidget(ack)
-            state=QLabel('Ready for selection — nothing has been written.')
+            state=QLabel('Step 1/3: Select a disposable USB drive. Nothing has been written.')
             state.setWordWrap(True)
             lay.addWidget(state)
             bar=QProgressBar()
@@ -1501,7 +1541,7 @@ def launch():
             bar.setValue(0)
             lay.addWidget(bar)
             row=QHBoxLayout()
-            flash=QPushButton('Erase USB, write and verify')
+            flash=QPushButton('Flash USB · erase and verify')
             flash.setObjectName('danger')
             flash.setEnabled(False)
             stop=QPushButton('Request safe stop')
@@ -1524,8 +1564,17 @@ def launch():
                 active['id']=did
                 active['fingerprint']=dev.fingerprint[:12] if dev else None
                 expected.setText('ERASE '+did if did else 'Select a USB target to view confirmation')
-                flash.setEnabled(bool(dev and ack.isChecked() and typed.text()==f'ERASE {did}'
-                                  and not (self.flash_proc and self.flash_proc.state()!=QProcess.NotRunning)))
+                from .usb_flash import flash_confirmation_state
+                ready, instruction=flash_confirmation_state(
+                    device_selected=bool(dev), typed_confirmation=typed.text(),
+                    expected_confirmation='ERASE '+did if did else '',
+                    acknowledge_data_loss=ack.isChecked(),
+                    worker_running=bool(self.flash_proc and self.flash_proc.state()!=QProcess.NotRunning))
+                flash.setEnabled(ready)
+                if not (self.flash_proc and self.flash_proc.state()!=QProcess.NotRunning):
+                    state.setText(instruction + (' Nothing has been written.' if not ready else
+                        ' A final confirmation is still required.'))
+                flash.setToolTip(instruction)
             target_box.currentIndexChanged.connect(update_confirm)
             typed.textChanged.connect(update_confirm)
             ack.toggled.connect(update_confirm)
