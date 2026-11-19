@@ -83,6 +83,26 @@ try {
         & $python -m driverepair_desktop health --device $device --json *> $target
         $summary += [pscustomobject]@{ Device = $device; File = $target }
     }
+
+    # Diagnostic: which bridge device types does smartctl actually accept here?
+    # Read-only queries; the result file explains UNKNOWN health on USB docks.
+    $probeLines = @()
+    foreach ($device in $devices) {
+        $rawPath = '\\.\' + (($device -split ':')[-1])
+        foreach ($type in @('auto', 'sat', 'sntjmicron', 'sntasmedia', 'sntrealtek', 'usbjmicron')) {
+            $arguments = @('--json', '--all')
+            if ($type -ne 'auto') { $arguments += @('-d', $type) }
+            $arguments += $rawPath
+            $out = & $smartctl @arguments 2>&1 | Out-String
+            $code = $LASTEXITCODE
+            $message = (($out | Select-String -Pattern '"string"' | Select-Object -First 1).Line)
+            if (-not $message) { $message = 'no message' }
+            $probeLines += "$device $type exit=$code $($message.Trim())"
+        }
+    }
+    $probeLines | Out-File (Join-Path $OutputDir 'smartctl_probe.txt') -Encoding utf8
+    $probeLines | Write-Host
+
     $summary | Format-Table -AutoSize | Out-String | Write-Host
     "completed $(Get-Date -Format o)" | Out-File (Join-Path $OutputDir '_complete.txt') -Encoding utf8
 } finally {
