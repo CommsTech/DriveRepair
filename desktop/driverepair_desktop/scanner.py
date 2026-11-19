@@ -71,6 +71,10 @@ class WindowsReader:
         # GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, OPEN_EXISTING.
         self.handle = self.kernel.CreateFileW(device.path, 0x80000000, 0x3,
                                               None, 3, 0, None)
+        # USB bridge and controller drivers sometimes block long synchronous
+        # reads indefinitely. Limit EACH kernel ReadFile (not the logical scan
+        # window) to 1 MiB; this cannot make a hung driver cancellable.
+        self.max_transfer = 1024 * 1024
         if self.handle == ctypes.c_void_p(-1).value or self.handle is None:
             error = ctypes.get_last_error()
             if error == 5:  # ERROR_ACCESS_DENIED
@@ -83,13 +87,29 @@ class WindowsReader:
 
     def read_at(self, offset: int, count: int) -> bytes:
         from ctypes import wintypes
-        if not self.kernel.SetFilePointerEx(self.handle, ctypes.c_longlong(offset), None, 0):
-            raise ctypes.WinError(ctypes.get_last_error())
-        buffer = ctypes.create_string_buffer(count)
-        received = wintypes.DWORD(0)
-        if not self.kernel.ReadFile(self.handle, buffer, count, ctypes.byref(received), None):
-            raise ctypes.WinError(ctypes.get_last_error())
-        return buffer.raw[:received.value]
+        if offset < 0 or count < 0:
+            raise ValueError('Invalid physical read position or size')
+        if not count:
+            return b''
+        pieces = []
+        total = 0
+        max_transfer = max(1, min(int(self.max_transfer), 1024 * 1024))
+        while total < count:
+            requested = min(max_transfer, count - total)
+            if not self.kernel.SetFilePointerEx(self.handle, ctypes.c_longlong(offset + total), None, 0):
+                raise ctypes.WinError(ctypes.get_last_error())
+            buffer = ctypes.create_string_buffer(requested)
+            received = wintypes.DWORD(0)
+            if not self.kernel.ReadFile(self.handle, buffer, requested, ctypes.byref(received), None):
+                raise ctypes.WinError(ctypes.get_last_error())
+            actual = int(received.value)
+            if actual > requested:
+                raise OSError('Windows ReadFile returned an impossible length')
+            pieces.append(buffer.raw[:actual])
+            total += actual
+            if actual < requested:  # caller must treat the short result as incomplete
+                break
+        return b''.join(pieces)
 
     def close(self) -> None:
         if self.handle is not None:

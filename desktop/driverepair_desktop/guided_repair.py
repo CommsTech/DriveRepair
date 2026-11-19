@@ -15,7 +15,8 @@ from .health import media_from_smart, transport_from_smart
 
 
 def tuned_scan(*, size: int, sector: int, mode: str, bus: str = "",
-               model: str = "", media_type: str = "", recording: str = "") -> dict:
+               model: str = "", media_type: str = "", recording: str = "",
+               protocol: str = "") -> dict:
     """Media-aware read settings; quick mode samples >=10% of the disk.
 
     The quick scan intentionally takes meaningful time on multi-TB devices:
@@ -26,7 +27,7 @@ def tuned_scan(*, size: int, sector: int, mode: str, bus: str = "",
     if mode not in {'quick', 'full'} or size <= 0 or sector <= 0 or size % sector:
         raise ValueError('Invalid assisted scan request')
     profile = identify_profile(model=model, bus=bus, media_type=media_type,
-                               recording=recording, sector=sector)
+                               recording=recording, sector=sector, protocol=protocol)
     if mode == 'quick':
         quick_chunk = profile.quick_chunk
         # Bound the progress queue for multi-TB scans without accepting a
@@ -37,16 +38,19 @@ def tuned_scan(*, size: int, sector: int, mode: str, bus: str = "",
         return {'mode': 'triage', 'chunk': quick_chunk,
                 'samples': plan['samples'], 'max_errors': 10000,
                 'requested_coverage_pct': 10.0, 'profile': profile.kind,
-                'profile_evidence': profile.evidence, 'media_note': profile.maintenance_note}
+                'profile_evidence': profile.evidence, 'media_note': profile.maintenance_note,
+                'workload': profile.workload, 'recovery_method': profile.recovery_method}
     return {'mode': 'full', 'chunk': profile.full_start_chunk, 'samples': 128,
             'max_errors': 10000, 'max_chunk': profile.full_max_chunk,
             'min_chunk': profile.read_min_chunk, 'profile': profile.kind,
-            'profile_evidence': profile.evidence, 'media_note': profile.maintenance_note}
+            'profile_evidence': profile.evidence, 'media_note': profile.maintenance_note,
+                'workload': profile.workload, 'recovery_method': profile.recovery_method}
 
 
 def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
                               max_reads: int = 96, max_regions: int = 16,
-                              progress=None, max_elapsed_seconds: float = 20.0) -> dict:
+                              progress=None, max_elapsed_seconds: float = 20.0,
+                              max_probe_bytes: int = 64 * 1024) -> dict:
     """Try to re-read error chunks, splitting down to logical sectors.
 
     Every candidate must match in TWO reads. This establishes repeatability,
@@ -54,7 +58,8 @@ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
     to avoid hammering failing media. Does not perform ANY writes.
     """
     import time
-    if sector <= 0 or max_reads < 2 or max_regions < 1 or max_elapsed_seconds <= 0:
+    if (sector <= 0 or max_reads < 2 or max_regions < 1 or max_elapsed_seconds <= 0
+            or max_probe_bytes < sector or max_probe_bytes % sector):
         raise ValueError('Invalid retry budget or sector size')
     started = time.monotonic()
     pending = deque()
@@ -69,6 +74,13 @@ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
     device_unstable = False
     while pending and reads < max_reads and time.monotonic() - started < max_elapsed_seconds:
         off, length = pending.popleft()
+        # Lazily split large suspect extents without expanding a terabyte-sized
+        # failed range into millions of queued objects. No wide read is sent to
+        # the USB kernel before this split; the time budget is cooperative only.
+        if length > max_probe_bytes:
+            pending.appendleft((off + max_probe_bytes, length - max_probe_bytes))
+            pending.appendleft((off, max_probe_bytes))
+            continue
         good = False
         try:
             # Charge BEFORE the call: a failed OS/USB read costs a real I/O
@@ -254,6 +266,16 @@ def plan_targeted_refresh(scan: dict, *, sector: int, chunk: int,
     if not 1 <= max_regions <= 256:
         raise ValueError("Region budget must be 1–256")
     if hardware:
+        # The journaled hardware writer is for rotational HDD regions only.
+        # Even engineering builds must not reinterpret flash translation-layer
+        # behavior as magnetic weak-sector refresh. Never turn NVMe/SSD/flash
+        # health counters into candidate physical rewrites.
+        if smart:
+            physical = str(smart.get('reported_medium') or '').lower()
+            protocol = str(smart.get('device_protocol') or '').lower()
+            if physical in {'ssd', 'nvme', 'solid state', 'solid-state', 'flash',
+                            'flash drive', 'usb flash', 'sd card', 'mmc'} or 'nvme' in protocol:
+                reasons.append('Nonrotational flash/NVMe media: do not attempt generic in-place HDD refresh; rescue and use controller health tests')
         medium = media_from_smart(smart)
         transport = transport_from_smart(smart)
         if medium == 'FAIL':

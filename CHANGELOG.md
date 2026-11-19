@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — 2026-11-18 evidence-driven media strategies and compact workbench (0.3.3b14)
+
+- Tighten media classification using SMART/USB-NVMe protocol, confirmed rotation, exact-model SMR entries and explicit removable-flash evidence; NVR denotes surveillance workload, not a recording technology. Contradictory evidence stays unknown.
+- Refuse generic HDD rewrite candidates for identified flash/SSD/NVMe in all builds; require SMART rotational evidence in the guarded HDD path. Preserve journal, independent identity, consent and verification gates.
+- Probe SMART once per selected device using a bounded isolated Qt subprocess, with fingerprint-keyed caching; do not repeatedly hammer an unresponsive USB enclosure. Scan JSON includes media strategy provenance.
+- Split Windows physical ReadFile requests to at most 1 MiB while preserving logically larger scan windows and 10% quick sampling. Lazily split suspect read ranges into at most 64 KiB per investigation request without allocating massive pending lists. These do not guarantee cancellation of kernel I/O.
+- Compact the workbench KPI/progress layout, eliminate oversized blank drive/workflow cards, and add a vector media-policy decision ribbon. Native Qt hardware/visual testing remains outstanding. See `docs/MEDIA_AWARE_WORKSTATION_B14.md`.
+- No artificial neural restoration, hardware lifespan prediction, Windows driver fix, compiled Rust raw backend, or qualified boot image is claimed.
+
 ## Unreleased — 2026-11-18 recovery USB first-run UX, sponsor link and repair preflight
 
 - Consolidate the primary Qt sidebar to **Create recovery USB**. Select an existing local DriveRepair hybrid ISO automatically (previously selected first, then application `images/`, local `dist-live/` and other DriveRepair-named images); keep a manual override. No automatic internet fetch and no fallback to an unrelated image.

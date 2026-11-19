@@ -183,17 +183,17 @@ def launch():
         QScrollBar::handle:vertical {{background:#344961; border-radius:5px;min-height:32px;}}
         QLabel {{ background:transparent; }}
         QLabel#muted {{ color:{C['muted']}; }}
-        QLabel#heading {{ font-size:27px; font-weight:750; }}
-        QLabel#metric {{ font-size:23px; font-weight:700; color:#f6fcff; }}
+        QLabel#heading {{ font-size:24px; font-weight:750; }}
+        QLabel#metric {{ font-size:20px; font-weight:700; color:#f6fcff; }}
         QLabel#eyebrow {{ color:{C['muted']}; font-size:11px; font-weight:700; }}
         QLabel#section {{ font-size:16px; font-weight:700; }}
         QLabel#riskTag {{ color:{C['accent']}; background:#183b40; border:1px solid #285e60; border-radius:7px; padding:6px 10px; font-weight:700; }}
         QLabel#warningTag {{ color:{C['orange']}; background:#3b3028; border:1px solid #755239; border-radius:7px; padding:6px 10px; font-weight:700; }}
-        QPushButton {{ background:{C['panel2']}; border:1px solid {C['line']}; padding:10px 15px; border-radius:7px; font-weight:650; }}
+        QPushButton {{ background:{C['panel2']}; border:1px solid {C['line']}; padding:8px 12px; border-radius:7px; font-weight:650; }}
         QPushButton:hover {{ border:1px solid {C['accent']}; background:#24384b; }}
         QPushButton:focus, QComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus {{ border:2px solid {C['accent']}; }}
         QPushButton:disabled {{ color:#8394a6; background:#1a2636; border-color:#2a3545; }}
-        QPushButton#nav {{ text-align:left; padding:13px 17px; background:transparent; border:1px solid transparent; border-radius:7px; }}
+        QPushButton#nav {{ text-align:left; padding:10px 13px; background:transparent; border:1px solid transparent; border-radius:7px; }}
         QPushButton#nav:hover {{ background:#1c3042; }}
         QPushButton#nav:checked {{ background:#204344; color:#95ffea; border-left:3px solid {C['accent']}; }}
         QPushButton#goal:checked {{ background:#204344; border:2px solid {C['accent']}; color:white; }}
@@ -213,7 +213,7 @@ def launch():
         pane = QFrame()
         pane.setObjectName('card')
         lay = QVBoxLayout(pane)
-        lay.setContentsMargins(18,16,18,16)
+        lay.setContentsMargins(15,12,15,12)
         lay.setSpacing(gap)
         parent_layout.addWidget(pane)
         return lay
@@ -454,11 +454,54 @@ def launch():
             painter.drawText(QRectF(x,y+76,diameter,30),Qt.AlignCenter,self.caption)
             painter.end()
 
+    class MediaPipeline(QWidget):
+        """Compact vector workflow: classification, protected rescue, verification.
+
+        These are decision stages, not a fabricated scan progress indicator.
+        """
+        def __init__(self):
+            super().__init__()
+            self.kind = 'unknown'
+            self.eligible = False
+            self.setMinimumHeight(58)
+            self.setMaximumHeight(64)
+            self.setToolTip('Media policy is advisory. Device identity, SMART and exclusive access are checked by the engine before physical writes.')
+
+        def set_policy(self, kind, eligible=False):
+            self.kind = str(kind or 'unknown').lower()
+            self.eligible = bool(eligible)
+            self.update()
+
+        def paintEvent(self, _event):
+            painter=QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing)
+            labels=('IDENTIFY MEDIA', 'IMAGE / RESCUE',
+                    'TARGETED HDD' if self.eligible else 'VERIFY / REPORT')
+            colors=('#7892b3','#40cfb5', '#e6b669' if self.eligible else '#7892b3')
+            gap=8.0
+            width=max(10.0,(self.width()-2*gap)/3)
+            for index,(title,color) in enumerate(zip(labels,colors)):
+                x=index*(width+gap)
+                rect=QRectF(x,6,width,40)
+                painter.setPen(QPen(QColor('#34506a'),1))
+                painter.setBrush(QColor('#1a2c40'))
+                painter.drawRoundedRect(rect,7,7)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(color))
+                painter.drawRoundedRect(QRectF(x+7,15,4,22),2,2)
+                painter.setPen(QColor('#f0f7fc'))
+                font=painter.font()
+                font.setPixelSize(10)
+                font.setBold(True)
+                painter.setFont(font)
+                painter.drawText(QRectF(x+17,9,width-22,32), Qt.AlignVCenter | Qt.AlignLeft, title)
+            painter.end()
+
     class Workstation(QMainWindow):
         def __init__(self):
             super().__init__()
             self.setWindowTitle('DriveRepair | Recovery Workstation')
-            self.resize(1390,920)
+            self.resize(1410,860)
             self.setMinimumSize(920,640)
             self._pending = None
             self._mode = None
@@ -485,6 +528,14 @@ def launch():
             self._batch_sleep_prevented=False
             self._manufacturer_rated_hours={}
             self._last_health_snapshot=None
+            self._health_by_device={}  # keyed by fingerprint; prevents cross-disk inference
+            self._auto_probe_proc=None
+            self._auto_probe_hint=None
+            self._auto_probe_attempted=set()
+            self._auto_probe_timer=QTimer(self)
+            self._auto_probe_timer.setSingleShot(True)
+            self._auto_probe_timer.setInterval(900)
+            self._auto_probe_timer.timeout.connect(self.probe_selected_media)
             self._stall_terminated=False
             self._rescue_started_at=None
             self._rescue_sample=None
@@ -505,17 +556,17 @@ def launch():
             self.setCentralWidget(shell)
             sidebar=QFrame()
             sidebar.setObjectName('sidebar')
-            sidebar.setFixedWidth(228)
+            sidebar.setFixedWidth(214)
             nav=QVBoxLayout(sidebar)
-            nav.setContentsMargins(17,25,17,20)
-            nav.setSpacing(12)
+            nav.setContentsMargins(13,19,13,15)
+            nav.setSpacing(7)
             mark=QLabel('DR  /  DRIVE REPAIR')
             mark.setStyleSheet(f'font-weight:800; letter-spacing:1px; color:{C["accent"]}; font-size:15px;')
             nav.addWidget(mark)
             edition=QLabel('RECOVERY WORKSTATION')
             edition.setObjectName('eyebrow')
             nav.addWidget(edition)
-            nav.addSpacing(36)
+            nav.addSpacing(18)
             nav_title=QLabel('WORKSPACES')
             nav_title.setObjectName('eyebrow')
             nav.addWidget(nav_title)
@@ -523,7 +574,7 @@ def launch():
             for family, label, key in (
                 ('check','01   Diagnose','scanquick'),
                 ('recover','02   Rescue data','rescue'),
-                ('fix','03   Repair regions','carequick')):
+                ('fix','03   Targeted HDD repair','carequick')):
                 b=QPushButton(label)
                 b.setObjectName('nav')
                 b.setCheckable(True)
@@ -535,7 +586,7 @@ def launch():
                     b.clicked.connect(lambda _,k=key:self.select_goal(k))
                 nav.addWidget(b)
                 self.nav_buttons[family]=b
-            nav.addSpacing(28)
+            nav.addSpacing(16)
             nav.addWidget(QLabel('TOOLS'))
             self.details_button=QPushButton('Expert log')
             self.details_button.setCheckable(True)
@@ -596,8 +647,8 @@ def launch():
             central=QWidget()
             scroll.setWidget(central)
             root=QVBoxLayout(central)
-            root.setContentsMargins(24,21,24,20)
-            root.setSpacing(15)
+            root.setContentsMargins(18,15,18,14)
+            root.setSpacing(10)
             header=QHBoxLayout()
             root.addLayout(header)
             brand=QVBoxLayout()
@@ -622,13 +673,13 @@ def launch():
             hero = card(root)
             status_row=QHBoxLayout()
             hero.addLayout(status_row)
-            self.status=QLabel('Choose a recovery goal')
+            self.status=QLabel('Ready to inspect a drive')
             self.status.setObjectName('heading')
             self.status.setWordWrap(True)
             status_row.addWidget(self.status)
             status_row.addWidget(help_icon('Each phase reports only evidence actually observed. A readable block is not proof of correct files, and rewriting data does not restore physical lifespan.'))
             status_row.addStretch()
-            self.help=QLabel('1. Identify the correct drive    2. Choose a safe workflow    3. Review the outcome. Nothing runs automatically.')
+            self.help=QLabel('Select a drive → review its media strategy → run a safe operation.')
             self.help.setWordWrap(True)
             self.help.setObjectName('muted')
             self.help.setTextFormat(Qt.PlainText)
@@ -648,7 +699,7 @@ def launch():
             hero.addWidget(self.phase_progress)
             total_row=QHBoxLayout()
             hero.addLayout(total_row)
-            self.total_caption=QLabel('Estimated whole-job progress · staged estimate, not disk coverage')
+            self.total_caption=QLabel('Estimated guided-workflow progress · not media coverage')
             self.total_caption.setObjectName('muted')
             total_row.addWidget(self.total_caption)
             total_row.addStretch()
@@ -657,16 +708,17 @@ def launch():
             hero.addWidget(self.progress)
             metrics=QGridLayout()
             metrics.setHorizontalSpacing(10)
-            metrics.setVerticalSpacing(10)
+            metrics.setVerticalSpacing(4)
             hero.addLayout(metrics)
             self.metric_labels={}
             self.metric_headers={}
+            self.metric_tiles={}
             for metric_index,(key,title) in enumerate([('done','CURRENT PHASE'),('read','DATA READ'),('rate','RECENT SPEED'),('avg','JOB AVERAGE'),('errors','READ ERRORS'),('eta','TIME LEFT')]):
                 tile=QFrame()
                 tile.setObjectName('statTile')
                 area=QVBoxLayout(tile)
-                area.setContentsMargins(13,10,13,10)
-                area.setSpacing(4)
+                area.setContentsMargins(11,7,11,7)
+                area.setSpacing(2)
                 m=QLabel(title)
                 m.setObjectName('eyebrow')
                 descriptions={'done':'Percent of planned scan work. Quick Scan samples 10% of the drive; this is not full-device coverage.',
@@ -681,7 +733,11 @@ def launch():
                 v=QLabel('—')
                 v.setObjectName('metric')
                 area.addWidget(v)
-                metrics.addWidget(tile, metric_index//3, metric_index%3)
+                # Five high-value metrics; job-average remains available in the tooltip.
+                metrics.addWidget(tile, 0, {'done':0,'read':1,'rate':2,'errors':3,'eta':4,'avg':5}[key])
+                if key == 'avg':
+                    tile.hide()
+                self.metric_tiles[key]=tile
                 self.metric_labels[key]=v
             body=QHBoxLayout()
             root.addLayout(body,1)
@@ -721,11 +777,13 @@ def launch():
             self.device_note.setWordWrap(True)
             self.device_note.setObjectName('muted')
             drive_panel.addWidget(self.device_note)
-            self.profile_note=QLabel('Drive strategy: awaiting device identification')
+            self.profile_note=QLabel('Identifying media…')
             self.profile_note.setWordWrap(True)
             self.profile_note.setObjectName('muted')
             self.profile_note.setTextFormat(Qt.PlainText)
             drive_panel.addWidget(self.profile_note)
+            self.media_pipeline=MediaPipeline()
+            drive_panel.addWidget(self.media_pipeline)
             self.device_box.currentIndexChanged.connect(self.update_drive_profile)
             self.drive_panel=drive_panel.parentWidget()
             workflow=card(left)
@@ -741,9 +799,9 @@ def launch():
             self.job_box.setMinimumContentsLength(14)
             self.job_box.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
             self._jobs={
-                'fix':[('Quick targeted repair (experimental)','carequick'),
-                       ('Full scan + targeted repair (experimental)','carefull'),
-                       ('Resume an interrupted journaled repair','careresume')],
+                'fix':[('Targeted HDD region repair','carequick'),
+                       ('Full scan + targeted HDD repair','carefull'),
+                       ('Resume journaled repair','careresume')],
                 'recover':[('Rescue selected external drive to NEW image','rescue'),
                            ('Recover from existing disk image','rescueimage')],
                 'check':[('Check disk health (read-only)','health'),
@@ -785,6 +843,10 @@ def launch():
             workflow.addWidget(self.opts)
             right=QVBoxLayout()
             body.addLayout(right,3)
+            # Qt must not stretch the left forms into tall, mostly-empty cards.
+            self.drive_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+            workflow.parentWidget().setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+            left.addStretch(1)
             map_card=card(right)
             map_head=QHBoxLayout()
             map_card.addLayout(map_head)
@@ -927,19 +989,78 @@ def launch():
         def update_drive_profile(self, _index=None):
             d=self.selected()
             if not d:
-                self.profile_note.setText('Drive strategy: waiting for a selected device')
+                self.profile_note.setText('Choose a drive to determine the recovery strategy.')
+                self.media_pipeline.set_policy('unknown',False)
+                self._auto_probe_timer.stop()
                 return
             from .media_profiles import identify_profile
+            from .repair_strategy import advise
+            key=d.get('identity_hint')
+            snap=self._health_by_device.get(key) or {}
             try:
                 profile=identify_profile(model=str(d.get('model') or ''),
-                    bus=str(d.get('bus') or ''), sector=int(d.get('sector_size') or 512))
-                self.profile_note.setText(
-                    f'Drive strategy: {profile.kind.upper()} · {profile.evidence}. '
-                    f'{profile.maintenance_note}')
-                self.profile_note.setToolTip('Advisory profile only. USB bridges may obscure physical media. '
-                    'No profile authorizes write or certifies health.')
+                    bus=str(d.get('bus') or ''), sector=int(d.get('sector_size') or 512),
+                    media_type=str(snap.get('reported_medium') or ''),
+                    protocol=str(snap.get('device_protocol') or ''))
+                decision=advise(model=str(d.get('model') or ''),
+                    bus=str(d.get('bus') or ''), sector=int(d.get('sector_size') or 512),
+                    snapshot=snap)
+                title=profile.kind.upper().replace('_',' ') + ' · ' + profile.evidence
+                if profile.workload == 'surveillance':
+                    title+=' · NVR / surveillance workload (NOT a recording type)'
+                self.profile_note.setText(title + '\n' + profile.recovery_method)
+                self.media_pipeline.set_policy(profile.kind,decision.can_attempt_hdd_refresh)
+                self.profile_note.setToolTip('Classification: '+profile.confidence+'. '+
+                    'USB is a transport, not a physical medium. '+profile.maintenance_note+
+                    '\nRecommendation: '+decision.label+'; '+'; '.join(decision.reasons))
             except (ValueError,TypeError):
-                self.profile_note.setText('Drive strategy: unverified geometry — read-only until resolved')
+                self.profile_note.setText('Unverified drive geometry — read-only rescue recommended.')
+                self.media_pipeline.set_policy('unknown',False)
+            if (not snap and key not in self._auto_probe_attempted
+                    and not (self.proc and self.proc.state()!=QProcess.NotRunning)):
+                self._auto_probe_timer.start()
+            self.update_action_state()
+
+        def probe_selected_media(self):
+            """Time-bounded SMART identification on an idle source, never a write gate.
+
+            The CLI subprocess is isolated so an unresponsive bridge cannot hang
+            the Qt event loop; if it fails, the profile remains UNKNOWN.
+            """
+            d=self.selected()
+            if (not d or self._batch_running or (self.proc and self.proc.state()!=QProcess.NotRunning)
+                    or (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning)):
+                return
+            key=d.get('identity_hint')
+            if not key or key in self._health_by_device or key in self._auto_probe_attempted:
+                return
+            self._auto_probe_attempted.add(key)
+            self._auto_probe_hint=key
+            child=QProcess(self)
+            self._auto_probe_proc=child
+            child.setProgram(cli_prefix()[0])
+            child.setArguments(cli_prefix()[1:]+['health','--device',d['id'],'--json'])
+            child.finished.connect(lambda code,_status,c=child,k=key:self.media_probe_done(c,k,code))
+            child.start()
+            def bound_probe(c=child):
+                if c.state()!=QProcess.NotRunning:
+                    self.note_log('SMART identification timed out; preserving unknown media. No writes attempted.')
+                    c.kill()
+            QTimer.singleShot(12000,bound_probe)
+
+        def media_probe_done(self, child, key, code):
+            if child is not self._auto_probe_proc:
+                return
+            self._auto_probe_proc=None
+            if code == 0:
+                try:
+                    report=json.loads(bytes(child.readAllStandardOutput()).decode('utf-8','replace'))
+                except (ValueError,UnicodeError):
+                    report=None
+                if isinstance(report,dict) and report.get('status'):
+                    self._health_by_device[key]=report
+            if self.selected() and self.selected().get('identity_hint') == key:
+                self.update_drive_profile()
 
         def select_goal(self, goal):
             if self.proc and self.proc.state()!=QProcess.NotRunning:
@@ -1036,6 +1157,9 @@ def launch():
                    'rescueimage':'Copy data from an existing source image to a different NEW image. Neither source is overwritten.',
                    'resume':'Rechecks identity before continuing the saved read-only scan position.'}
             self.opts.setText(hints.get(kind,''))
+            guided = kind in {'carequick','carefull','careresume'}
+            for widget in (self.total_caption,self.overall_label,self.progress):
+                widget.setVisible(guided)
             impact, impact_detail=operation_impact(kind)
             self.operation_impact.setObjectName('warningTag' if kind in {'carequick','carefull','careresume'} else 'riskTag')
             self.operation_impact.setText(impact)
@@ -1099,6 +1223,19 @@ def launch():
                 if not ready:
                     enabled=False
                     advice=reason
+                elif REPAIR_BETA_GUARDED:
+                    from .repair_strategy import advise
+                    dev=self.selected() or {}
+                    snap=self._health_by_device.get(dev.get('identity_hint'))
+                    if not snap:
+                        enabled=False
+                        advice='Checking SMART media type before physical repair. If unavailable, rescue data instead.'
+                    else:
+                        decision=advise(model=dev.get('model',''),bus=dev.get('bus',''),
+                            sector=int(dev.get('sector_size') or 512),snapshot=snap)
+                        if not decision.can_attempt_hdd_refresh:
+                            enabled=False
+                            advice='Read-only only: '+decision.label+'. '+'; '.join(decision.reasons)
             if self._pending_resume:
                 enabled=False
                 advice='Waiting for verified USB reconnect. Cancel reconnect to choose another operation.'
@@ -1749,6 +1886,9 @@ def launch():
             lines.append(str(info.get('notes') or 'Unverified host metadata'))
             QMessageBox.information(self,'Drive details (read-only)','\n'.join(lines)[:4000])
         def start_job(self):
+            self._auto_probe_timer.stop()
+            if self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning:
+                self._auto_probe_proc.kill()  # bounded read-only SMART probe; do not compete with recovery
             self._pending_resume=None
             self._reconnect_timer.stop()
             if self.proc and self.proc.state()!=QProcess.NotRunning:
@@ -1825,14 +1965,24 @@ def launch():
                           '--progress-jsonl','--cooperative-stop-stdin','--json']
                     if kind=='scanquick':
                         from .guided_repair import tuned_scan
+                        snap=self._health_by_device.get(d.get('identity_hint')) or {}
                         plan=tuned_scan(size=int(d['size_bytes']),sector=int(d['sector_size']),
                                         mode='quick',bus=str(d.get('bus') or ''),
-                                        model=str(d.get('model') or ''))
+                                        model=str(d.get('model') or ''),
+                                        media_type=str(snap.get('reported_medium') or ''),
+                                        protocol=str(snap.get('device_protocol') or ''))
                         args+=['--chunk-mib',str(plan['chunk']//(1024*1024)),
                                '--samples',str(plan['samples']),'--max-errors','10000',
                                '--compare-suspects','--randomize-samples']
                     if kind in ('scanfull','resume'):
-                        args+=['--ack-risk']
+                        snap=self._health_by_device.get(d.get('identity_hint')) or {}
+                        from .guided_repair import tuned_scan
+                        plan=tuned_scan(size=int(d['size_bytes']),sector=int(d['sector_size']),
+                                        mode='full',bus=str(d.get('bus') or ''),
+                                        model=str(d.get('model') or ''),
+                                        media_type=str(snap.get('reported_medium') or ''),
+                                        protocol=str(snap.get('device_protocol') or ''))
+                        args+=['--chunk-mib',str(plan['chunk']//(1024*1024)),'--ack-risk']
                     if kind=='resume':
                         args+=['--resume-scan']
                 else:
@@ -2150,6 +2300,15 @@ def launch():
             if not isinstance(result,dict):
                 result={}
             condition_report = result.get('condition_comparison') or {}
+            key=(self._last_good_device or {}).get('identity_hint')
+            if key and isinstance(result,dict):
+                report=result.get('health_after') if isinstance(result.get('health_after'),dict) else result
+                if isinstance(report.get('ata_selected_raw_attributes'),list) or isinstance(report.get('nvme'),dict):
+                    self._health_by_device[key]=report
+                    # During completion, the selected drive may have changed;
+                    # only render observations under a matching fingerprint.
+                    if self.selected() and self.selected().get('identity_hint') == key:
+                        QTimer.singleShot(0,self.update_drive_profile)
             if isinstance(result.get('health_after'),dict):
                 self._last_health_snapshot=result['health_after']
             elif isinstance(result.get('ata_selected_raw_attributes'),list) or isinstance(result.get('nvme'),dict):
