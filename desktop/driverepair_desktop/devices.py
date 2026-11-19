@@ -12,6 +12,7 @@ import plistlib
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable
 
@@ -219,7 +220,7 @@ def _windows_devices_from_get_disk(run: Callable[..., bytes], number: int | None
               "Size,LogicalSectorSize,BusType,IsBoot,IsSystem,IsOffline,Location | "
               "ConvertTo-Json -Compress -Depth 3")
     data = _invoke(run, ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-                   8 if number is not None else 12)
+                   8 if number is not None else 8)
     records = json.loads(data.decode("utf-8-sig"))
     if isinstance(records, dict):
         records = [records]
@@ -272,22 +273,76 @@ def canonicalize_windows_external_bus(raw: str | None) -> str | None:
     return mapping.get(key)
 
 
-def _parse_usb_disk_records(records: list[dict]) -> list[Device]:
+def _windows_native_usb_indices(records: list[dict],
+                                run: Callable[..., bytes], *, max_probes: int = 6) -> set[int]:
+    """Corroborate UASP/SCSI-labelled USB disks without trusting InterfaceType.
+
+    Modern USB attached SCSI (UASP) adapters can appear as ``SCSI`` in
+    Win32_DiskDrive. Never assume that SCSI is external; ask the native Windows
+    storage descriptor *in a time-bounded separate process* and compare index
+    and size. This is inventory evidence only, NOT raw-write authorization.
+    """
+    verified: set[int] = set()
+    probes = 0
+    for record in records:
+        bus = canonicalize_windows_external_bus(str(record.get('InterfaceType') or
+                                                    record.get('BusType') or ''))
+        if bus == 'usb':
+            continue
+        try:
+            index = int(record.get('Index', record.get('Number')))
+        except (ValueError, TypeError):
+            continue
+        if index < 0 or index > 255:
+            continue
+        pnp = str(record.get('PNPDeviceID') or '').upper().strip()
+        # A known internal bus need not consume a native probe. SCSI may be
+        # USB/UASP or internal SAS, so the native bus is decisive here.
+        if pnp.startswith(('IDE\\', 'NVME\\', 'PCI\\')):
+            continue
+        if probes >= max_probes:
+            break
+        probes += 1
+        try:
+            raw = _invoke(run, [sys.executable, '-m', 'driverepair_desktop',
+                                'inspect-windows-disk', '--number', str(index)], 3)
+            metadata = json.loads(raw.decode('utf-8-sig'))
+            if not isinstance(metadata, dict) or metadata.get('number') != index:
+                continue
+            if canonicalize_windows_external_bus(str(metadata.get('bus') or '')) != 'usb':
+                continue
+            size = _positive_int(record.get('Size'))
+            native_size = _positive_int(metadata.get('size_bytes'))
+            # A few adapters round a capacity differently; do not accept a
+            # native result that describes a clearly different physical disk.
+            if not size or not native_size or abs(size - native_size) > 16 * 1024 * 1024:
+                continue
+            verified.add(index)
+        except (RuntimeError, OSError, ValueError, TypeError, UnicodeError,
+                json.JSONDecodeError):
+            continue
+    return verified
+
+
+def _parse_usb_disk_records(records: list[dict], *,
+                            native_usb_indices: set[int] | None = None) -> list[Device]:
     devices: list[Device] = []
     for record in records or []:
         bus = canonicalize_windows_external_bus(
             str(record.get("InterfaceType") or record.get("BusType") or "")
         )
-        # CIM/WMIC inventory stays USB-class only (SD/MMC typically appear as USB
-        # when docked). Get-Disk keeps the broader external set separately.
-        if bus != "usb":
-            continue
         try:
             number = int(record.get("Index", record.get("Number")))
         except (KeyError, ValueError, TypeError):
             continue
         if number < 0:
             continue
+        native_verified = number in (native_usb_indices or set())
+        # Native evidence can establish USB transport when the legacy CIM
+        # interface is labelled SCSI/UASP. It cannot authorize a write.
+        if bus != "usb" and not native_verified:
+            continue
+        bus = "usb"
         size = _positive_int(record.get("Size"))
         sector = _positive_int(
             record.get("BytesPerSector") or record.get("LogicalSectorSize"), 512
@@ -298,12 +353,14 @@ def _parse_usb_disk_records(records: list[dict]) -> list[Device]:
         model = str(record.get("Model") or record.get("FriendlyName") or "External USB disk").strip()
         serial = str(record.get("SerialNumber") or record.get("UniqueId") or "").strip()
         devices.append(Device(
-            f"windows:PhysicalDrive{number}", path, model, size, sector, bus, serial, "", "legacy-inventory",
+            f"windows:PhysicalDrive{number}", path, model, size, sector, bus, serial, "",
+            "cim-native-usb" if native_verified else "legacy-inventory",
         ))
     return devices
 
 
-def _windows_devices_from_cim(run: Callable[..., bytes], number: int | None = None) -> list[Device]:
+def _windows_devices_from_cim(run: Callable[..., bytes], number: int | None = None,
+                              observed_sizes: dict[int, int] | None = None) -> list[Device]:
     """Fallback when Get-Disk hangs after USB dock reseat (common on Windows).
 
     Prefer ``-Filter Index=N`` for mid-job reselect after heavy patient I/O —
@@ -312,29 +369,45 @@ def _windows_devices_from_cim(run: Callable[..., bytes], number: int | None = No
     if number is not None:
         script = (
             f"Get-CimInstance Win32_DiskDrive -Filter \"Index={int(number)}\" | "
-            "Select-Object Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector | "
+            "Select-Object Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector,PNPDeviceID | "
             "ConvertTo-Json -Compress -Depth 3"
         )
         timeout = 8
     else:
         script = (
             "Get-CimInstance Win32_DiskDrive | "
-            "Select-Object Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector | "
+            "Select-Object Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector,PNPDeviceID | "
             "ConvertTo-Json -Compress -Depth 3"
         )
-        timeout = 20
+        timeout = 9
     data = _invoke(run, ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], timeout)
     records = json.loads(data.decode("utf-8-sig"))
     if isinstance(records, dict):
         records = [records]
-    return _parse_usb_disk_records(list(records or []))
+    records = list(records or [])
+    if observed_sizes is not None:
+        for record in records:
+            try:
+                index = int(record.get('Index', record.get('Number')))
+            except (ValueError, TypeError):
+                continue
+            size = _positive_int(record.get('Size'))
+            if 0 <= index <= 255 and size:
+                observed_sizes[index] = size
+    direct = _parse_usb_disk_records(records)
+    # Windows may expose one USB disk directly and another as SCSI/UASP.
+    # Retain the direct inventory and independently corroborate remaining
+    # candidates instead of silently hiding one of the patient's disks.
+    verified = _windows_native_usb_indices(records, run)
+    extra = _parse_usb_disk_records(records, native_usb_indices=verified)
+    return extra if verified else direct
 
 
 def _windows_devices_from_wmic(run: Callable[..., bytes]) -> list[Device]:
     """Last-resort fallback: WMIC avoids nested PowerShell / Storage-cmdlet hangs."""
     data = _invoke(run,
         ["wmic", "diskdrive", "get",
-         "Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector", "/format:csv"], 20)
+         "Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector", "/format:csv"], 5)
     text = data.decode("utf-8-sig", errors="replace").strip()
     lines = [ln for ln in text.splitlines() if ln.strip()]
     if len(lines) < 2:
@@ -350,6 +423,51 @@ def _windows_devices_from_wmic(run: Callable[..., bytes]) -> list[Device]:
     return _parse_usb_disk_records(records)
 
 
+def _windows_devices_from_native(run: Callable[..., bytes], *, max_index: int = 15,
+                                 observed_sizes: dict[int, int] | None = None) -> list[Device]:
+    """Last-resort read-only USB inventory when CIM/Get-Disk/WMIC are unavailable.
+
+    Query a bounded set of physical-drive numbers through isolated, timeout-
+    limited native descriptor workers. Native USB is transport evidence, not
+    a proof of drive serial, non-system status, media type, or write safety.
+    Unverified serials stay blank and the existing Get-Disk write gate remains
+    mandatory. Never enumerate logical partitions or attempt a media write.
+    """
+    def one(number: int) -> Device | None:
+        try:
+            raw = _invoke(run, [sys.executable, '-m', 'driverepair_desktop',
+                                'inspect-windows-disk', '--number', str(number)], 2.5)
+            info = json.loads(raw.decode('utf-8-sig'))
+            if not isinstance(info, dict) or info.get('number') != number:
+                return None
+            bus = canonicalize_windows_external_bus(str(info.get('bus') or ''))
+            if bus != 'usb':
+                return None
+            size = _positive_int(info.get('size_bytes'))
+            sector = _positive_int(info.get('logical_sector_bytes'), 512)
+            if not size or not sector or size % sector:
+                return None
+            # A conflicting CIM size at the same physical-disk number can be
+            # evidence of USB disconnect/re-enumeration. Do not silently use
+            # a native disk with contradictory identity as the same patient.
+            claimed = (observed_sizes or {}).get(number)
+            if claimed and abs(claimed - size) > 16 * 1024 * 1024:
+                return None
+            model = str(info.get('model') or f'External USB disk {number}').strip()
+            if not model:
+                model = f'External USB disk {number}'
+            return Device(f'windows:PhysicalDrive{number}', rf'\\.\PhysicalDrive{number}',
+                          model, size, sector, bus, '', '', 'native-readonly-inventory')
+        except (RuntimeError, OSError, ValueError, TypeError, UnicodeError):
+            return None
+
+    if not 0 <= max_index <= 255:
+        raise ValueError('Invalid native inventory index limit')
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        candidates = list(pool.map(one, range(max_index + 1)))
+    return [item for item in candidates if item is not None]
+
+
 def windows_devices(run: Callable[..., bytes] = _run) -> list[Device]:
     # Inventory prefers CIM/WMIC first. Get-Disk frequently hangs after USB dock
     # reseat on Windows and can stall the Storage stack so later finders also
@@ -358,16 +476,28 @@ def windows_devices(run: Callable[..., bytes] = _run) -> list[Device]:
     # informational; select_external_device still requires Get-Disk for writes.
     errors: list[str] = []
     last_empty: list[Device] | None = None
+    cim_sizes: dict[int, int] = {}
     for finder in (_windows_devices_from_cim, _windows_devices_from_wmic,
                    _windows_devices_from_get_disk):
         try:
-            found = finder(run)
+            found = (finder(run, observed_sizes=cim_sizes)
+                     if finder is _windows_devices_from_cim else finder(run))
             if found:
                 return found
             last_empty = found
         except (RuntimeError, json.JSONDecodeError, ValueError, TypeError, OSError) as exc:
             errors.append(f"{finder.__name__}: {exc}")
             continue
+    # The modern Windows storage stack can leave *all three* cmdlet/WMI
+    # providers unresponsive after a failing USB disk read. Native descriptor
+    # queries are a separate read-only route. Their result is explicitly not a
+    # physical-write authorization; the normal Get-Disk gate is never skipped.
+    try:
+        native = _windows_devices_from_native(run, observed_sizes=cim_sizes)
+        if native:
+            return native
+    except (RuntimeError, OSError, ValueError, TypeError) as exc:
+        errors.append(f"native-readonly: {exc}")
     if last_empty is not None:
         return last_empty
     raise RuntimeError("Windows external-disk discovery failed (" + "; ".join(errors) + ")")

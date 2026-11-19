@@ -242,6 +242,10 @@ Drive condition scores are **evidence-based diagnostics**, not exact remaining-l
 
 ## Troubleshooting
 
+**No external drive appears in the Windows selector.** Press **Refresh** and allow Windows storage discovery to finish. The workstation now shows when discovery is slow or has timed out. Some USB/UASP enclosures identify as SCSI: DriveRepair only includes them after a separate read-only Windows USB-transport check. If Windows inventory commands fail entirely, a native read-only fallback may still list the disk, but it does not supply a trustworthy serial or authorize any physical writes. In an Administrator terminal, compare `python -m driverepair_desktop list --json` against Disk Management; see [Windows USB discovery and repair preflight](docs/WINDOWS_USB_DISCOVERY_B26.md).
+
+**A known HDD appears but repair is blocked.** The physical-write path requires an independently verified external, online, non-system disk, device identity, eligible HDD-media/health policy, explicit consent, exclusive access, and a durable journal located on separate storage. In earlier revisions, the journal preflight incorrectly rejected **all CIM-discovered devices** even after a Get-Disk gate passed; b26 corrects that contradiction. A missing serial, unverified medium, mounted disk, or blocked USB adapter can still veto repair.
+
 **The Flash button is grey.** Check all three wizard steps: select the USB **target**, type the exact `ERASE <device-id>` phrase, and **check the permanent-data-loss checkbox**. The status line explains the first missing step. Flashing is different from **Rescue data**, which saves the patient's readable bytes to a new image.
 
 **Targeted HDD repair is disabled.** This is usually missing stable identity or SMART rotation/health evidence from the USB bridge. Use **Check HDD eligibility**. Install `smartmontools`, ensure the enclosure supports ATA SAT pass-through, or safely test offline via direct SATA; the software will not infer permission to write from a Seagate/SMR model label alone. Rescue to image remains available.

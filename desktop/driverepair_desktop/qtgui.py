@@ -574,6 +574,11 @@ def launch():
             self._reconnect_timer.timeout.connect(self.refresh_devices)
             self.proc = None
             self.inventory_proc = None
+            self._inventory_timed_out = False
+            self._inventory_timeout = QTimer(self)
+            self._inventory_timeout.setSingleShot(True)
+            self._inventory_timeout.setInterval(32000)
+            self._inventory_timeout.timeout.connect(self.inventory_timed_out)
             self.setStyleSheet(css)
             shell=QWidget()
             shell_layout=QHBoxLayout(shell)
@@ -2571,27 +2576,79 @@ def launch():
 
         def refresh_devices(self):
             if self.inventory_proc and self.inventory_proc.state()!=QProcess.NotRunning:
+                self.device_note.setText('Windows drive discovery is already running. '
+                    'The OS may be waiting for a USB device; no scan or repair has started.')
                 return
-            self.device_note.setText('Looking for external drives…')
+            self._inventory_timed_out = False
+            self.device_note.setText('Identifying external disks using Windows storage inventory…'
+                if sys.platform=='win32' else 'Looking for external drives…')
             self.inventory_proc=QProcess(self)
             self.inventory_proc.setProgram(cli_prefix()[0])
             self.inventory_proc.setArguments(cli_prefix()[1:]+[
                 'list-all-linux' if (sys.platform=='linux' and self.offline_devices.isChecked())
                 else 'list','--json'])
             self.inventory_proc.finished.connect(self.inventory_done)
+            self.inventory_proc.errorOccurred.connect(self.inventory_error)
             self.inventory_proc.start()
+            self._inventory_timeout.start()
+            proc = self.inventory_proc
+            def announce_slow_inventory():
+                if (self.inventory_proc is proc and
+                    proc.state()!=QProcess.NotRunning and not self._inventory_timed_out):
+                    self.device_note.setText('Windows USB discovery is taking longer than expected. '
+                        'Checking alternate inventory methods. A stalled USB bridge can delay '
+                        'Windows; no disk writes have started.')
+            QTimer.singleShot(8000, announce_slow_inventory)
+
+        def inventory_timed_out(self):
+            proc = self.inventory_proc
+            if proc is None or proc.state()==QProcess.NotRunning:
+                return
+            self._inventory_timed_out = True
+            self.device_note.setText('Windows device discovery did not finish in 32 seconds. '
+                'Check the USB connection, Disk Management, or try another port; '
+                'then press Refresh. No disk writes were attempted.')
+            self.note_log('Device discovery worker exceeded 32-second GUI deadline; terminating child.')
+            proc.kill()  # Qt is not blocked by an unresponsive PowerShell subprocess
+
+        def inventory_error(self, error):
+            if error == QProcess.ProcessError.FailedToStart:
+                self._inventory_timeout.stop()
+                self._inventory_timed_out = False
+                self.device_note.setText('Drive inventory could not start. Confirm the Python '
+                    'application and its DriveRepair module are installed, then Refresh.')
+                self._devices=[]
+                self.device_box.clear()
+                self.update_action_state()
+
         def inventory_done(self,code,_status):
+            self._inventory_timeout.stop()
             stdout=bytes(self.inventory_proc.readAllStandardOutput()).decode('utf-8','replace')
             stderr=bytes(self.inventory_proc.readAllStandardError()).decode('utf-8','replace')
-            if code!=0:
-                self.device_note.setText('Device discovery failed. Reconnect the USB dock and retry; never bypass identity checks.')
+            if code!=0 or self._inventory_timed_out:
+                if self._inventory_timed_out:
+                    self.device_note.setText('Windows inventory timed out; reconnect or inspect '
+                        'the dock in Disk Management, then Refresh. No source writes attempted.')
+                else:
+                    detail = stderr.strip().splitlines()[-1][:260] if stderr.strip() else 'No diagnostic details returned.'
+                    self.device_note.setText('Drive discovery failed: '+detail+
+                        '  Check the USB connection and press Refresh.')
+                self._devices=[]
+                self.device_box.clear()
                 self.note_log(stderr[:3000])
                 self.update_action_state()
                 return
             try:
                 data=json.loads(stdout)
+                if not isinstance(data, list) or not all(isinstance(item,dict) for item in data):
+                    raise ValueError('Expected an array of device records')
             except (ValueError,TypeError):
-                self.device_note.setText('Could not interpret drive inventory')
+                self.device_note.setText('Drive inventory returned an invalid response. '
+                    'Refresh, then use Expert log to inspect the discovery error.')
+                self._devices=[]
+                self.device_box.clear()
+                self.note_log('Invalid inventory response: '+stdout[:1000]+stderr[:300])
+                self.update_action_state()
                 return
             prev=self.device_box.currentData()
             self.device_box.clear()
