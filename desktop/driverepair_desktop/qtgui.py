@@ -898,6 +898,9 @@ def launch():
             result_card.addWidget(results_heading)
             condition_row=QHBoxLayout()
             self.condition_gauge=ConditionGauge()
+            # The big dial adds visual noise when there is no actual SMART
+            # measurement. Reveal it only after a meaningful score exists.
+            self.condition_gauge.setVisible(False)
             condition_row.addWidget(self.condition_gauge)
             condition_summary=QVBoxLayout()
             self.condition_title=QLabel('Drive condition · not measured')
@@ -912,6 +915,7 @@ def launch():
             condition_row.addLayout(condition_summary,1)
             result_card.addLayout(condition_row)
             self.spec_button=QPushButton('Compare with documented service-hour rating…')
+            self.spec_button.setVisible(False)  # power-on evidence needed first
             self.spec_button.setToolTip('Only supply a published model-specific operating-hour rating. Fleet MTBF is not a failure prediction.')
             self.spec_button.clicked.connect(self.enter_manufacturer_specs)
             result_card.addWidget(self.spec_button)
@@ -933,6 +937,11 @@ def launch():
             self.next_action.setTextFormat(Qt.PlainText)
             result_card.addWidget(self.next_action)
             report_row=QHBoxLayout()
+            self.rescue_instead=QPushButton('Rescue to image instead')
+            self.rescue_instead.setToolTip('Switch to read-only imaging of this selected drive; no source writes.')
+            self.rescue_instead.clicked.connect(lambda:self.select_goal('rescue'))
+            self.rescue_instead.setVisible(False)
+            report_row.addWidget(self.rescue_instead)
             self.copy_summary_button=QPushButton('Copy operator summary')
             self.copy_summary_button.setEnabled(False)
             self.copy_summary_button.setToolTip('Copies only currently displayed local evidence. No data is sent anywhere.')
@@ -1054,7 +1063,7 @@ def launch():
                 if c.state()!=QProcess.NotRunning:
                     self.note_log('SMART identification timed out; preserving unknown media. No writes attempted.')
                     c.kill()
-            QTimer.singleShot(12000,bound_probe)
+            QTimer.singleShot(22000,bound_probe)
 
         def media_probe_done(self, child, key, code):
             if child is not self._auto_probe_proc:
@@ -1097,6 +1106,11 @@ def launch():
                     and time.monotonic()-self._last_progress_at>8):
                 self.metric_labels['rate'].setText('Waiting on drive')
                 elapsed=int(time.monotonic()-self._last_progress_at)
+                if self._last_phase is None and elapsed < 30:
+                    self.help.setText('Waiting for device and access preflight to return. '
+                        'No scan or write has been confirmed yet.')
+                    self.phase_caption.setText('Preflight pending · zero confirmed I/O')
+                    return
                 self.help.setText(f'Waiting {elapsed}s for the storage driver or USB device. '
                     'No new I/O result; the operation is NOT necessarily progressing. '
                     'Stop waits for a safe boundary and may not interrupt a blocked kernel request.')
@@ -1227,27 +1241,20 @@ def launch():
                 running=running, public_beta=PUBLIC_BETA_IMAGE_ONLY)
             if enabled and kind in {'carequick','carefull','careresume'}:
                 from .repair_readiness import ui_repair_readiness
-                ready, reason = ui_repair_readiness(self.selected(),kind)
+                dev=self.selected() or {}
+                snap=self._health_by_device.get(dev.get('identity_hint'))
+                ready, reason = ui_repair_readiness(dev,kind,snapshot=snap)
                 if not ready:
                     enabled=False
                     advice=reason
-                elif REPAIR_BETA_GUARDED:
-                    from .repair_strategy import advise
-                    dev=self.selected() or {}
-                    snap=self._health_by_device.get(dev.get('identity_hint'))
-                    if not snap:
-                        enabled=False
-                        advice='Checking SMART media type before physical repair. If unavailable, rescue data instead.'
-                    else:
-                        decision=advise(model=dev.get('model',''),bus=dev.get('bus',''),
-                            sector=int(dev.get('sector_size') or 512),snapshot=snap)
-                        if not decision.can_attempt_hdd_refresh:
-                            enabled=False
-                            advice='Read-only only: '+decision.label+'. '+'; '.join(decision.reasons)
             if self._pending_resume:
                 enabled=False
                 advice='Waiting for verified USB reconnect. Cancel reconnect to choose another operation.'
             self.start.setEnabled(enabled)
+            # When a repair is ineligible, expose the non-destructive next step
+            # without a cryptic failed worker run. No source write is performed.
+            self.rescue_instead.setVisible(kind in {'carequick','carefull','careresume'}
+                and bool(self.selected()) and not enabled and not running)
             self.ready_note.setText(advice)
             self.start.setToolTip(advice)
             self.device_box.setEnabled(not running)
@@ -1312,6 +1319,8 @@ def launch():
                 return
             self.condition_gauge.set_assessment(report)
             score=report.get('score')
+            self.condition_gauge.setVisible(type(score) in (int,float))
+            self.spec_button.setVisible(type(report.get('power_on_hours')) is int)
             confidence=report.get('confidence') or 'unknown'
             self.condition_title.setText('Condition index: ' +
                 ('Unknown' if score is None else f"{score}/100 · {report.get('band','UNKNOWN')}") +
@@ -1413,12 +1422,12 @@ def launch():
                 'Never choose a recovery patient or a USB disk holding the ISO.')
             caption.setWordWrap(True)
             lay.addWidget(caption)
-            image_label=QLabel('RECOVERY IMAGE READY  ·  '+Path(image['path']).name+'  ·  '+display_size(image['bytes']))
+            image_label=QLabel('ISO FILE CHECKED · BOOT UNVERIFIED  ·  '+Path(image['path']).name+'  ·  '+display_size(image['bytes']))
             image_label.setObjectName('section')
             image_label.setWordWrap(True)
             lay.addWidget(image_label)
             source_note=QLabel('Local image auto-selected. ISO markers checked; BIOS/UEFI boot unverified. '
-                'To change the image, close this wizard and use the ISO selection override below.')
+                'Choose a different ISO below only if needed. The selected file is not yet boot-qualified.')
             source_note.setObjectName('muted')
             source_note.setWordWrap(True)
             lay.addWidget(source_note)
@@ -1438,7 +1447,7 @@ def launch():
                     return
                 image.update(new_image)
                 self._media_settings.setValue('last_iso',new_image['path'])
-                image_label.setText('RECOVERY IMAGE READY  ·  '+Path(image['path']).name+'  ·  '+display_size(image['bytes']))
+                image_label.setText('ISO FILE CHECKED · BOOT UNVERIFIED  ·  '+Path(image['path']).name+'  ·  '+display_size(image['bytes']))
                 # On a new image size, all target choices must be reevaluated.
                 target_box.clear()
                 target_box.addItem('Choose a USB drive (nothing selected)',None)
@@ -1926,7 +1935,8 @@ def launch():
             d=self.selected()
             if kind in {'carequick','carefull','careresume'}:
                 from .repair_readiness import ui_repair_readiness
-                ready, reason = ui_repair_readiness(d,kind)
+                ready, reason = ui_repair_readiness(d,kind,
+                    snapshot=self._health_by_device.get((d or {}).get('identity_hint')))
                 if not ready:
                     QMessageBox.warning(self,'Drive is not eligible for physical writes',reason)
                     return
@@ -2146,8 +2156,9 @@ def launch():
             self.evidence_scope.setText('Untested is unknown')
             self.result.setText('Running — monitoring the device')
             self.explain.setText('Unknown regions remain unknown until observed.')
-            self.status.setText('Working…')
-            self.help.setText('Read-only where possible; no results are inferred from the progress bar.')
+            self.status.setText('Starting · validating device')
+            self.help.setText('Identifying the selected device and checking access before reads. '
+                'No media repair is claimed until readback verification completes.')
             self._buf={'stdout':'','stderr':''}
             self._final_stdout=''
             self._scanned=0
@@ -2309,6 +2320,11 @@ def launch():
             self.start.setEnabled(True)
             self.stop.setEnabled(False)
             self.metric_labels['eta'].setText('—')
+            if self.metric_labels['rate'].text() == 'Waiting on drive':
+                self.metric_labels['rate'].setText('—')
+            self.help.setText('Worker exited. Only completed reads and verified transactions are evidence; '
+                              'a stalled kernel request may still require reconnecting the device.')
+            self.phase_caption.setText('Worker exited · final outcome shown below')
             self.proc=None
             self._stop_requested=False
             if exit_code==0 and self._final_stdout.strip():
@@ -2350,7 +2366,7 @@ def launch():
                 self.show_condition(condition_report['after'], previous=condition_report.get('before'))
             elif isinstance(result.get('condition_assessment'),dict):
                 self.show_condition(result['condition_assessment'])
-            text=str(result.get('status') or ('Completed' if exit_code==0 else 'Stopped / failed'))
+            text=str(result.get('status') or ('Completed' if exit_code==0 else 'Incomplete / attention needed'))
             self.status.setText(text.replace('_',' ').title())
             if user_stop_requested and exit_code!=0:
                 self.result.setText('Stopped by operator — incomplete scan')

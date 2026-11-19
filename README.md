@@ -39,6 +39,12 @@ The updated Qt workstation offers a 64×12 full-device evidence map with **aggre
 
 See [workstation, batch, reliability and boot-handoff details](docs/MULTIDRIVE_CONDITION_AND_LIVE_UI_20261118.md) for completed changes, limitations and Windows testing checklist. **The new capabilities are source-level, not a hardware-certified release.**
 
+### 0.3.3b17: why an SMR Seagate can show “Repair ineligible” over USB
+
+The ST1000LM048 model is listed as a **5,400 RPM SMR HDD** in Seagate's BarraCuda 2.5 datasheet. That classifies the *model* for read-only sequential-first imaging; it does **not** verify what a USB bridge currently exposes or whether source writes are safe. A separate SMART ATA Identify result with a valid rotation rate and health information is required for the guided HDD-rewrite workflow. This revision tries one bounded read-only `smartctl -d sat` fallback when the automatic USB SMART query lacks media type. If that fails, the repair action remains disabled and offers **Rescue to image instead**. To unlock a suitable HDD for testing, install smartmontools and use a bridge with SAT SMART pass-through or connect the patient through a safe offline SATA interface, then verify identity and available SMART evidence. The engine independently enforces all existing locks, journal, and confirmation gates.
+
+A green map cell only means the bytes were readable during that request. An unreadable block is not reconstructed by HDD refresh; flash devices must never be treated like magnetic-sector repair targets. This is a bugfix and workflow update, **not** proof of revived drive lifetime or validation of Windows cancellation behavior.
+
 ## Start here — choose the safest workflow
 
 | Your situation | Start with | What the result means |
@@ -54,22 +60,22 @@ The desktop interface uses Python, optional PySide6 (Qt UI), and a Tk fallback. 
 
 ```sh
 python scripts/build_desktop.py --public-beta --no-wheel
-python dist/DriveRepair-0.3.3b13-public-beta.pyz gui
+python dist/DriveRepair-0.3.3b17-public-beta.pyz gui
 ```
 
 For a CLI image-only example, use a source **regular file** and an unused output path:
 
 ```sh
-python dist/DriveRepair-0.3.3b13-public-beta.pyz scan-image --image source.img --mode triage --json
-python dist/DriveRepair-0.3.3b13-public-beta.pyz rescue-image --image source.img --output recovered.img --json
-python dist/DriveRepair-0.3.3b13-public-beta.pyz rescue-status --output recovered.img --json
+python dist/DriveRepair-0.3.3b17-public-beta.pyz scan-image --image source.img --mode triage --json
+python dist/DriveRepair-0.3.3b17-public-beta.pyz rescue-image --image source.img --output recovered.img --json
+python dist/DriveRepair-0.3.3b17-public-beta.pyz rescue-status --output recovered.img --json
 ```
 
 For experimental **actual guided HDD repair** using a *separate*, explicitly restricted build, run:
 
 ```sh
 python scripts/build_desktop.py --repair-beta --no-wheel
-python dist/DriveRepair-0.3.3b13-repair-beta.pyz qt-gui
+python dist/DriveRepair-0.3.3b17-repair-beta.pyz qt-gui
 ```
 
 This build enables **guided `care-external` physical writes** (not unconditional write commands). It requires smartctl evidence of an HDD, separate disk-backed journal, fingerprint confirmation and exclusive locking; unknown/SSD/NVMe media are not rewrite targets. The GUI requests explicit data-loss and SMART-warning consent. This is for *sacrificial hardware testing*, not qualification for valuable media. See [repair-beta engineering and hardware handoff](docs/REPAIR_BETA_ENGINEERING_20261118.md).

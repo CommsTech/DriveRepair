@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — 2026-11-19 USB SMART identification and truthful preflight (0.3.3b17)
+
+- Apply the **same physical-repair eligibility decision in every Qt build**, not only the guarded beta. The UI checks stable serial, SMART evidence and actual media suitability before launching a repair subprocess; a Seagate SMR model label alone does not authorize patient writes. When repair is ineligible, show **Rescue to image instead** rather than a clickable Start button that predictably fails after launch. The CLI/engine remains independently authoritative.
+- Add **one bounded, read-only SAT (`smartctl -d sat`) fallback** for USB-attached SATA drives whose automatic SMART query omitted rotation rate. Accept the SAT result only when it actually supplies a numeric rotation-rate declaration and no command/open errors. Do not try SAT for positively identified NVMe; an unresponsive or incapable bridge remains UNKNOWN. Neither this probe nor a SMART pass certifies healthy media or authorizes writes by itself.
+- Simplify empty-workspace presentation: hide the blank health gauge and manufacturer-hour comparison until relevant SMART evidence exists. Clarify the flash wizard's image label as **ISO file checked; BIOS/UEFI unverified**. Keep the destructive erase confirmation unfilled and mandatory.
+- Correct misleading transient states: report device preflight as preflight (not a stalled disk read), and clear stale `Waiting on drive` indicators when the worker exits. This does not fix Windows kernel I/O cancellation.
+- Add synthetic tests for verified HDD permission, SSD/unknown refusal, SATA-through-USB SMART fallback, invalid SAT status and no unnecessary NVMe SAT probe. Passing tests do NOT qualify real device rewrites, ISO boot, or native Qt rendering. See `docs/USB_REPAIR_PREFLIGHT_B17.md`.
+
 ## Unreleased — 2026-11-19 truthful partial-repair outcomes and strict SSD/USB gate (0.3.3b16)
 
 - Fix Qt result translation: `partial_repair_unresolved_data` (nonzero exit) now shows rewritten/independently postverified bytes and unresolved scan evidence, rather than collapsing to generic `Stopped (2)`; failed read requests are NOT defective-sector counts; copied operator summaries use readable workflow names and that explicit distinction. Verification failure remains distinct from verified maintenance.
