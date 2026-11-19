@@ -11,10 +11,87 @@ import json
 import re
 import subprocess
 import sys
+import time
 from typing import Callable
 
 from .devices import Device
 
+# A bounded, ordered list of smartmontools device types worth trying for USB
+# bridges. Order matters: plain SAT first (cheapest, most common), then the
+# vendor-specific passthroughs. Unknown types are simply skipped by smartctl.
+USB_DEVICE_TYPES = ('sat', 'sntasmedia', 'sntjmicron', 'sntrealtek', 'usbjmicron')
+MAX_EXTRA_DEVICE_PROBES = 4
+EXTRA_PROBE_TIMEOUT_SECONDS = 5
+SMART_LOG_TIMEOUT_SECONDS = 5
+ATA_ATTRIBUTE_LIMIT = 64
+SMART_LOG_ENTRY_LIMIT = 5
+PROBE_BUDGET_SECONDS = 25.0
+
+
+def _decode_json(proc) -> dict | None:
+    try:
+        parsed = json.loads(proc.stdout.decode('utf-8-sig'))
+    except (ValueError, UnicodeError, AttributeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _usable_ata_view(raw: dict | None) -> bool:
+    """A passthrough result must positively identify an ATA device."""
+    if not isinstance(raw, dict):
+        return False
+    protocol = str((raw.get('device') or {}).get('protocol') or '').lower()
+    return 'ata' in protocol
+
+
+def _smart_logs(run: Callable[..., subprocess.CompletedProcess], executable: str,
+                path: str, deadline: float) -> dict:
+    """Read-only self-test and error log summary; never starts a test.
+
+    These logs add no device wear: smartctl only reads the controller's
+    existing records. Failures are reported as unavailable, never invented.
+    """
+    out = {'selftest': None, 'error_log': None, 'available': False}
+    for label, flag in (('selftest', 'selftest'), ('error_log', 'error')):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.5:
+            out[label] = {'available': False, 'reason': 'probe budget exhausted'}
+            continue
+        try:
+            proc = run([executable, '--json', '-l', flag, path],
+                       capture_output=True,
+                       timeout=min(SMART_LOG_TIMEOUT_SECONDS, remaining),
+                       check=False)
+            raw = _decode_json(proc)
+            if raw is None or proc.returncode & 0x07:
+                out[label] = {'available': False, 'reason': 'log unavailable'}
+                continue
+            if label == 'selftest':
+                table = raw.get('ata_smart_self_test_log') or {}
+                standard = (table.get('standard') or {})
+                entries = standard.get('table') or []
+                out[label] = {
+                    'available': True,
+                    'count': standard.get('count'),
+                    'last': [{k: item.get(k) for k in
+                              ('type', 'status', 'remaining_percent',
+                               'lifetime_hours', 'number')}
+                             for item in entries[:SMART_LOG_ENTRY_LIMIT]],
+                }
+            else:
+                table = raw.get('ata_smart_error_log') or {}
+                summary = table.get('summary') or {}
+                out[label] = {
+                    'available': True,
+                    'count': summary.get('count'),
+                    'last': [{k: item.get(k) for k in
+                              ('error_number', 'lifetime_hours', 'status')}
+                             for item in (summary.get('table') or [])[:SMART_LOG_ENTRY_LIMIT]],
+                }
+            out['available'] = True
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            out[label] = {'available': False, 'reason': 'log query failed'}
+    return out
 
 def health_snapshot(device: Device,
                     run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> dict:
@@ -27,6 +104,7 @@ def health_snapshot(device: Device,
     if not executable:
         raise RuntimeError('SMART support requires smartctl (smartmontools), not installed')
     cmd = [executable, '--json', '--all', device.path]
+    deadline = time.monotonic() + PROBE_BUDGET_SECONDS
     try:
         proc = run(cmd, capture_output=True, timeout=12, check=False)
     except FileNotFoundError as exc:
@@ -57,19 +135,35 @@ def health_snapshot(device: Device,
             # Do not replace a detailed ATA SMART table, including pending
             # or reallocated sector warnings, with a second less complete view.
             and not (raw.get('ata_smart_attributes') or {}).get('table')):
-        try:
-            sat = run([cmd[0], '--json', '--all', '-d', 'sat', device.path],
-                      capture_output=True, timeout=6, check=False)
-            sat_raw = json.loads(sat.stdout.decode('utf-8-sig'))
-            if (isinstance(sat_raw, dict) and not (sat.returncode & 0x07)
-                    and type(sat_raw.get('rotation_rate')) is int
-                    and 'ata' in str((sat_raw.get('device') or {}).get('protocol') or '').lower()):
-                # The SAT result must positively identify an ATA device and
-                # report physical rotation. A mere model name is not evidence.
-                proc, raw, source = sat, sat_raw, 'smartctl_sat_passthrough'
-        except (FileNotFoundError, subprocess.TimeoutExpired, ValueError,
-                UnicodeError, AttributeError, OSError):
-            pass
+        # Try a small, ordered set of bridge device types. Each attempt is
+        # bounded and the total probe budget is capped, so a sick bridge sees a
+        # few short commands at most - never a retry storm.
+        extra_probes = 0
+        for device_type in USB_DEVICE_TYPES:
+            if extra_probes >= MAX_EXTRA_DEVICE_PROBES:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.5:
+                break
+            extra_probes += 1
+            try:
+                sat = run([cmd[0], '--json', '--all', '-d', device_type, device.path],
+                          capture_output=True,
+                          timeout=min(EXTRA_PROBE_TIMEOUT_SECONDS, remaining),
+                          check=False)
+                sat_raw = _decode_json(sat)
+                if (sat_raw is not None and not (sat.returncode & 0x07)
+                        and type(sat_raw.get('rotation_rate')) is int
+                        and _usable_ata_view(sat_raw)):
+                    # The result must positively identify an ATA device and
+                    # report physical rotation. A mere model name is not evidence.
+                    proc, raw = sat, sat_raw
+                    source = ('smartctl_sat_passthrough' if device_type == 'sat'
+                              else f'smartctl_{device_type}_passthrough')
+                    break
+            except (FileNotFoundError, subprocess.TimeoutExpired, ValueError,
+                    UnicodeError, AttributeError, OSError):
+                continue
     if not parsed_ok and source != 'smartctl_sat_passthrough':
         raise RuntimeError('SMART query returned invalid JSON; '
                            'USB SAT passthrough was unavailable or inconclusive')
@@ -90,12 +184,42 @@ def health_snapshot(device: Device,
                        else 'hdd' if type(rpm) is int and rpm > 0 else 'unknown')
     temp = raw.get('temperature') or {}
     ata = raw.get('ata_smart_attributes') or {}
-    attrs = []
-    for item in ata.get('table', []):
-        if item.get('id') not in {5, 9, 187, 188, 197, 198, 199}:
+    # Keep the whole read-only attribute table (bounded), including the
+    # normalised VALUE/WORST/THRESH that vendor tools show, plus the raw
+    # counter. The 7-counter subset is retained for existing scoring.
+    ata_attributes = []
+    for item in (ata.get('table') or [])[:ATA_ATTRIBUTE_LIMIT]:
+        if type(item.get('id')) is not int:
             continue
-        attrs.append({'id': item.get('id'), 'name': item.get('name'),
-                      'raw_value': (item.get('raw') or {}).get('value')})
+        ata_attributes.append({
+            'id': item.get('id'),
+            'name': item.get('name'),
+            'value': item.get('value'),
+            'worst': item.get('worst'),
+            'thresh': item.get('thresh'),
+            'when_failed': item.get('when_failed'),
+            'failing_now': item.get('when_failed') not in (None, '-', ''),
+            'raw_value': (item.get('raw') or {}).get('value'),
+            'raw_string': (item.get('raw') or {}).get('string'),
+        })
+    selected_ids = {5, 9, 187, 188, 197, 198, 199}
+    attrs = [{'id': entry['id'], 'name': entry['name'],
+              'raw_value': entry['raw_value']}
+             for entry in ata_attributes if entry['id'] in selected_ids]
+    # Only read the logs when the primary probe was conclusive and healthy, and
+    # the device speaks ATA. A device already reporting failure (or an NVMe
+    # device, whose health log already carries the error counters) must not be
+    # sent further commands: that is how a marginal bridge turns into a stall.
+    if not parsed_ok:
+        smart_logs = {'available': False, 'reason': 'primary probe returned no JSON'}
+    elif failure_reported:
+        smart_logs = {'available': False,
+                      'reason': 'skipped: controller already reports failure'}
+    elif nvme_identified:
+        smart_logs = {'available': False,
+                      'reason': 'skipped: NVMe health log already reports error counters'}
+    else:
+        smart_logs = _smart_logs(run, cmd[0], device.path, deadline)
     result = {
         'status': status,
         'source': source,
@@ -111,8 +235,12 @@ def health_snapshot(device: Device,
                  'available_spare', 'available_spare_threshold', 'temperature')
                  if k in nvme},
         'ata_selected_raw_attributes': attrs,
+        'ata_attributes': ata_attributes,
+        'ata_attribute_count': len(ata_attributes),
+        'smart_logs': smart_logs,
         'notes': 'Read-only SMART health snapshot. Raw ATA counters are manufacturer-specific. '
                  'SMART pass does not rule out media defects or future failure. '
+                 'Self-test and error logs are read, never started. '
                  'No self-test, erase, remap, refresh, or repair was started.',
     }
     from .reliability_score import assess

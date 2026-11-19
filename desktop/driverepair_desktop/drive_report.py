@@ -136,6 +136,36 @@ def render_report(result: dict, *, device: dict | None = None, title: str='Stora
                       for k,v in counters.items()) if capacity else '<p class="dim">Read-only results do not include write-capacity sampling.</p>'
     latency=(_timings(result.get('read_latency'),'Read latency')+
              _timings(result.get('write_latency'),'Write latency')) if capacity else ''
+    # SMART evidence: attributes are vendor-defined; thresholds and normalised
+    # values are shown with their source, never converted into "life remaining".
+    attributes = result.get('ata_attributes') if isinstance(result.get('ata_attributes'), list) else []
+    logs = result.get('smart_logs') if isinstance(result.get('smart_logs'), dict) else {}
+    smart_section = ''
+    if attributes or logs.get('available'):
+        rows = ''.join(
+            '<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(
+                _esc(entry.get('id')), _esc(entry.get('name')),
+                _esc(entry.get('value')), _esc(entry.get('worst')),
+                _esc(entry.get('thresh')),
+                _esc(entry.get('raw_string') if entry.get('raw_string') is not None
+                     else entry.get('raw_value')))
+            for entry in attributes[:64])
+        selftest = logs.get('selftest') or {}
+        error_log = logs.get('error_log') or {}
+        log_text = ' '.join(filter(None, [
+            (f"Self-test log: {selftest.get('count')} entries." if selftest.get('available') else
+             f"Self-test log unavailable ({selftest.get('reason', 'not reported')})."),
+            (f"Error log: {error_log.get('count')} entries." if error_log.get('available') else
+             f"Error log unavailable ({error_log.get('reason', 'not reported')})."),
+        ]))
+        smart_section = ('<section class="panel"><h2>SMART evidence</h2>'
+                         '<p class="dim">Vendor-defined attributes, read only. '
+                         'A normalised value near its threshold is not a prediction of failure, '
+                         'and no self-test was started by this report.</p>'
+                         '<div class="tablewrap"><table><thead><tr><th>ID</th><th>Attribute</th>'
+                         '<th>Value</th><th>Worst</th><th>Threshold</th><th>Raw</th></tr></thead><tbody>'
+                         + (rows or '<tr><td colspan="6">No attributes returned</td></tr>')
+                         + '</tbody></table></div><p class="dim">' + _esc(log_text) + '</p></section>')
     conclusion=('Stop using this device for important data. If personal data was present, restore from '
                 'backup or use an appropriate professional lab.' if capacity and failures else
                 'Spot tests found no sampled mismatch. Use a full-capacity verification on disposable media '
@@ -154,7 +184,7 @@ h1{font-size:34px;letter-spacing:-.04em;line-height:1.15;margin:8px 0 10px}.mute
 <div class="grid">'''+metric_summary+'''</div>
 <section class="twocol"><div class="panel"><h2>Sampled address map</h2>'''+_map(regions)+'''<div class="legend">'''+legend+'''</div><p class="dim">Each tile describes one recorded observation, not surrounding untested bytes. Capacity may be spoofed and samples may alias.</p></div><div class="panel"><h2>Evidence breakdown</h2><div class="breakdown">'''+breakdown+'''</div></div></section>
 <section class="panel"><h2>Device & session facts</h2><div class="metadata">'''+meta_html+'''</div></section>
-'''+('''<section class="panel"><h2>Measured access latency</h2><p class="dim">Small random reads/writes, not sequential throughput. Coefficient of variation = standard deviation / average.</p><div class="timinggrid">'''+latency+'''</div></section>''' if capacity else '')+'''
+'''+('''<section class="panel"><h2>Measured access latency</h2><p class="dim">Small random reads/writes, not sequential throughput. Coefficient of variation = standard deviation / average.</p><div class="timinggrid">'''+latency+'''</div></section>''' if capacity else '')+smart_section+'''
 <section class="panel"><h2>Technical location evidence</h2><p class="dim">For specialists: each observation is tied to a specific logical byte offset. A read-only scan may report aggregate cells, not every individual sector.</p><details><summary>Show sampled positions and outcomes</summary><div class="tablewrap"><table><thead><tr><th>#</th><th>Start offset</th><th>Length</th><th>Outcome</th></tr></thead><tbody>'''+(rows or '<tr><td colspan="4">No sampled locations available</td></tr>')+'''</tbody></table></div></details></section>
 <section><h2>Recommended next action</h2><div class="summary">'''+_esc(conclusion)+'''</div></section><footer>Generated locally by DriveRepair. Observed data is not a warranty, recovered-file checksum, or estimate of remaining service life. Retain original logs and journals.</footer></main></body></html>'''
 

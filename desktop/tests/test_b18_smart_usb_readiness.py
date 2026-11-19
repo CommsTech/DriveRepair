@@ -35,8 +35,11 @@ class UsbHealthRegression(unittest.TestCase):
         report = health_snapshot(self.drive, run=runner)
         self.assertEqual(report['source'], 'smartctl_sat_passthrough')
         self.assertEqual(report['reported_medium'], 'hdd')
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[-1][-3:-1], ['-d', 'sat'])
+        # Count probe attempts only: healthy ATA snapshots also read the
+        # self-test and error logs (read-only, no test is started).
+        probes = [c for c in calls if '-l' not in c]
+        self.assertEqual(len(probes), 2)
+        self.assertEqual(probes[-1][-3:-1], ['-d', 'sat'])
 
     def test_auto_non_json_can_be_followed_by_valid_sat(self):
         def runner(cmd, **kwargs):
@@ -62,7 +65,8 @@ class UsbHealthRegression(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 8, stdout=b'{"smart_status":{"passed":false}}')
         report=health_snapshot(self.drive,run=runner)
         self.assertEqual(report['status'], 'failure_reported')
-        self.assertEqual(len(calls), 1)
+        probes = [c for c in calls if '-l' not in c]
+        self.assertEqual(len(probes), 1)
 
     def test_first_probe_timeout_does_not_send_more_usb_commands(self):
         calls=[]
@@ -71,7 +75,8 @@ class UsbHealthRegression(unittest.TestCase):
             raise subprocess.TimeoutExpired(cmd,kwargs.get('timeout',0))
         with self.assertRaisesRegex(RuntimeError,'timed out'):
             health_snapshot(self.drive,run=runner)
-        self.assertEqual(len(calls), 1)
+        probes = [c for c in calls if '-l' not in c]
+        self.assertEqual(len(probes), 1)
 
 
 class UsbConfirmationUX(unittest.TestCase):

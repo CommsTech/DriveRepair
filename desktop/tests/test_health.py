@@ -62,7 +62,9 @@ class HealthTests(unittest.TestCase):
         self.assertEqual(snapshot['reported_medium'],'hdd')
         self.assertEqual(snapshot['rotation_rate_rpm'],5400)
         self.assertEqual(snapshot['source'],'smartctl_sat_passthrough')
-        self.assertIn('-d',commands[-1])
+        # Read-only log queries may follow the SAT probe; the probe itself must
+        # be a device-typed ATA passthrough.
+        self.assertTrue(any('-d' in command for command in commands))
 
     def test_sat_fallback_does_not_fabricate_rotational_evidence(self):
         def runner(cmd, **kw):

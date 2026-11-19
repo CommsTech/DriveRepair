@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased — SMART breadth: full attribute table, read-only logs, more USB bridges (2026-11-19)
+
+- Health snapshots now retain the **whole ATA attribute table** (bounded at 64)
+  with normalised Value/Worst/Threshold, `when_failed`, and raw value/string,
+  instead of only seven raw counters. The seven-counter subset is kept for the
+  existing condition index and monitor so scoring behaviour is unchanged.
+- **Self-test and error logs** are read (`smartctl -l selftest`, `-l error`) and
+  summarised with entry counts and the most recent entries. Nothing is started:
+  no `--test`, no `--smart`, and the notes say so.
+- **USB bridge breadth**: after the plain SAT probe, up to four ordered
+  device-type probes are tried (`sntasmedia`, `sntjmicron`, `sntrealtek`,
+  `usbjmicron`) inside a 25 s budget and 5 s per call, so a marginal bridge sees
+  a few short commands at most.
+- **Deliberate restraint:** log queries are skipped when the controller already
+  reports failure, and for NVMe (whose health log already carries error
+  counters). A device in trouble is not sent extra commands.
+- The HTML evidence report gains a **SMART evidence** section (attribute table +
+  log summary) that states plainly that a normalised value near its threshold is
+  not a failure prediction. The section is omitted entirely when no SMART
+  evidence exists.
+- 7 new tests with synthetic smartctl fixtures; `scripts/qa_install_smartctl.ps1`
+  installs smartmontools through winget and captures health snapshots on Windows.
+
 ## Unreleased — specialist review pass: consensus rescue, durability cadence, security hardening (2026-11-19)
 
 Four specialists (competitive research, performance, code quality, security)
