@@ -17,19 +17,17 @@ and what was measured**. Deferred items are roadmap, not silently dropped work.
 | Optimization (HIGH) | Rescue loop ran `_validate_state` per chunk, re-sorting the whole missing-range map (32 ms/call at 50k ranges) | Validate only at durability boundaries (forced checkpoints, resume, completion) | `test_perf_cadence_20261119.py`: validation calls < chunks/4 while the final boundary still validates |
 | Optimization (HIGH) | Adaptive full scan wrote a durable checkpoint (2×fsync + rename + dir-fsync, 4.15 ms) after **every** chunk | Time-throttled non-forced saves (2 s); forced saves on abort/status/completion unchanged | measured: **256 chunk saves → 2** for a 256 MiB scan; resume test still completes |
 | Darwin (HIGH) | Rescue imaging declared marginal sectors missing without ever using the shipped consensus engine | Retry pass now attempts `consensus_read` (shifted rereads, majority vote) on a lost sector, bounded by attempts and a sector budget, recorded as `consensus_recovered_bytes` / `consensus_recovered_ranges` provenance — never as verified data | `test_rescue_consensus_20261119.py`: aligned-failure media recovers, budget is bounded, `consensus_attempts=0` restores old behaviour |
+| Darwin/Darwin #2, Security #1 | SMART surface was seven raw counters, one USB bridge type, no logs | Full ATA attribute table (bounded 64) with normalised values and thresholds; read-only self-test/error logs; up to four ordered USB bridge device types in a 25 s budget; log reads skipped for failing controllers and NVMe | `test_smart_breadth_20261119.py` (7 tests) |
 | Dev (HIGH) | Rescue CLI printed JSON on both `--json` and human paths | Human path prints a compact status line; `--json` unchanged | `test_review_fixes_20261119.py` |
 | Dev (MEDIUM) | `scanner.attempt` caught `TypeError` around the progress call, masking a `TypeError` raised **inside** the callback | Callback arity bound once via `inspect.signature`; no try/except around the call | same file |
 
 ## Deferred, with reasons
 
-- **SMART breadth** (Darwin #2, Security #1): full attribute table with
-  normalised values, `-l selftest`/`-l error` logs, more USB device types, and
-  Authenticode verification of a vendored `smartctl.exe`. High user impact, but
-  it needs a signed binary or a verified vendor source and real USB hardware to
-  validate — out of scope for a code pass. **Current state on the test host:
-  no smartmontools installed, so all three drives report health as UNKNOWN.**
 - **Per-drive history / trend** (Darwin #3): needs a persistence format and a
   retention policy; the CLI monitor exists but is not surfaced in Qt.
+- **Vendored smartctl authentication** (Security #1): the staged-binary SHA-256
+  sidecar is tamper-evidence, not publisher authentication. Adding Authenticode
+  verification needs a signed vendor binary to test against.
 - **Condition index reframing** (Darwin #4): rename and show the derivation. A
   copy change with product implications; should be decided, not slipped in.
 - **File-recovery breadth** (Darwin #5): ext undelete and partition-table

@@ -40,11 +40,23 @@ if (-not $python) {
     --accept-package-agreements --accept-source-agreements --disable-interactivity
 Write-Host "winget exit: $LASTEXITCODE"
 
-# 2. Refresh PATH for this process and locate smartctl.
+# 2. Refresh PATH for this process and locate smartctl. The installer does not
+#    always publish to the Machine PATH before this process reads it, so known
+#    install locations are checked explicitly.
 $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 $user = [Environment]::GetEnvironmentVariable('Path', 'User')
 $env:Path = "$machine;$user"
 $smartctl = (Get-Command smartctl.exe -ErrorAction SilentlyContinue).Source
+if (-not $smartctl) {
+    foreach ($candidate in @("$env:ProgramFiles\smartmontools\bin\smartctl.exe",
+            "${env:ProgramFiles(x86)}\smartmontools\bin\smartctl.exe")) {
+        if (Test-Path $candidate) { $smartctl = $candidate; break }
+    }
+}
+if ($smartctl) {
+    # Make the resolved directory visible to the Python child as well.
+    $env:Path = "$(Split-Path -Parent $smartctl);$env:Path"
+}
 Write-Host "smartctl: $smartctl"
 if (-not $smartctl) {
     "failed: smartctl not found after install" | Out-File (Join-Path $OutputDir '_complete.txt') -Encoding utf8
