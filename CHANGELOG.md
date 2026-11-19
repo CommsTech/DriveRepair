@@ -8,6 +8,7 @@
 - The prior Tk interface remains available until its deleted-file, filesystem and other specialized workflows are feature-parity tested in Qt; this release does not remove it.
 - Added fault-injection tests for corrupt reads, interrupted restores, result classification, HTML escaping and refusal to overwrite existing reports. Physical-device validation is still pending.
 - Windows fix: open capacity image fixtures with ``O_BINARY`` and use the shared positional ``pwrite`` helper so probe patterns are not text-mode mangled and mocked ``os.pwrite=None`` still falls back correctly.
+- Windows journal durability: retry `os.replace` on transient WinError 5/32 when updating `meta.json` / region blobs during rapid capacity spot tests.
 
 
 ## Unreleased — finish landing workbench-20261118 unique commits (2026-11-19)

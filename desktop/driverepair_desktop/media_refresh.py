@@ -29,7 +29,7 @@ import sys
 import time
 from typing import Callable, Protocol
 
-from .compat import binary_open_flags, pwrite
+from .compat import binary_open_flags, pwrite, replace_with_retry
 from .devices import Device
 from .recovery import _merge_ranges, _state_save
 from . import release_policy
@@ -529,7 +529,7 @@ def _atomic_write_bytes(path: str, data: bytes) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
-    os.replace(temp, path)
+    replace_with_retry(temp, path)
     # Persist the directory entry before recording SAVED/WRITING in meta.json.
     if os.name == "posix":
         dirfd = os.open(os.path.dirname(path), os.O_RDONLY)
