@@ -20,8 +20,19 @@ def load_scan(path: str) -> dict:
     with open(path, encoding="utf-8", errors="replace") as handle:
         lines = handle.read().splitlines()
     for index, line in enumerate(lines):
-        if line.strip() == "{":
-            return json.loads("\n".join(lines[index:]))
+        stripped = line.strip()
+        # PowerShell redirection can wrap the captured string in '[' ']' and
+        # prefixes the whole block with native-command banners.
+        if stripped in {"{", "[{"}:
+            body = "\n".join(lines[index:]).strip()
+            if body.startswith("["):
+                body = body[1:].rstrip()
+                if body.endswith("]"):
+                    body = body[:-1]
+            try:
+                return json.loads(body)
+            except ValueError:
+                continue
     raise ValueError(f"no JSON object found in {path}")
 
 
