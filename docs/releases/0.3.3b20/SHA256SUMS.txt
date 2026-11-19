@@ -1,0 +1,2 @@
+33387ae76992397653c42a3893d639454264afcbabb654104db49804296c40cd  DriveRepair_0.3.3b20_Qt_Boot_Fixes.patch
+e545839558d94adc28c2f89dc44161cd8492e5cf953ce81e170eb5a7497ebf85  DriveRepair_0.3.3b20_Qt_Only_Source.zip

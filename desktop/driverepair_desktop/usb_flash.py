@@ -195,6 +195,11 @@ def flash_usb_iso(iso: str, device_id: str, *, expect_fingerprint: str,
     if acknowledge_data_loss is not True:
         raise PermissionError('Explicit permanent-data-loss acknowledgement required')
     image = inspect_hybrid_iso(iso)
+    # Synthetic device injections are used only by tests. On every real USB
+    # operation require the actual live system, not just ISO/MBR magic bytes.
+    if selected_device is None:
+        from .boot_validation import qualify_live_iso
+        image = qualify_live_iso(iso)
     device = selected_device if selected_device is not None else device_lookup(device_id)
     if device.id != device_id:
         raise RuntimeError('Selected device identifier changed')
@@ -265,7 +270,8 @@ def flash_usb_iso(iso: str, device_id: str, *, expect_fingerprint: str,
             fresh=hashlib.sha256()
             while True:
                 part=source.read(CHUNK_BYTES)
-                if not part: break
+                if not part:
+                    break
                 fresh.update(part)
             if (h.digest()!=source_hash.digest() or fresh.digest()!=source_hash.digest()):
                 raise OSError('USB readback SHA-256 does not match source ISO')

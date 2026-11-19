@@ -2,7 +2,7 @@
 
 **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
 
-> **Release status:** `0.3.3b19` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+> **Release status:** `0.3.3b20` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
 
 The Qt workstation now selects an **automatic, bounded HDD investigation level** from available media and error evidence; it never uses a plan to bypass media-write safety. Expert CLI overrides remain for controlled laboratory work. Read [`docs/CAPACITY_AUTHENTICITY.md`](docs/CAPACITY_AUTHENTICITY.md) for the separate USB capacity-integrity test. See also `docs/STATISTICAL_SECTOR_RECOVERY_B18.md` for the level policies.
 
@@ -64,7 +64,7 @@ For **clicking/grinding disks, repeated disconnects, severe SMART failure, or ir
 ### Requirements
 
 - **Python 3.10+** on Windows or Linux (some read-only tools also work on macOS).
-- **PySide6** for the modern desktop workstation; without it, `gui` can use the older Tk interface (if installed).
+- **PySide6** for the modern desktop workstation; without it, `gui` can use the Qt interface.
 - **smartmontools / `smartctl`** strongly recommended for disk-specific health and rotational-media identification. USB enclosures may block its ATA/SAT pass-through; that limitation cannot be fixed by clicking past a warning.
 - A **separate healthy physical drive** with space for a full recovery image and its journal. Do not save a rescue image to the patient disk.
 - Appropriate OS permissions for raw-drive access. Windows may deny physical writes when a drive is mounted or held open. Do not bypass exclusive access checks.
@@ -87,22 +87,22 @@ On Windows PowerShell, run these same commands using `py` if Python is installed
 
 ```bash
 python scripts/build_desktop.py --public-beta --no-wheel
-python dist/DriveRepair-0.3.3b19-public-beta.pyz gui
+python dist/DriveRepair-0.3.3b20-public-beta.pyz gui
 ```
 
 Install optional `PySide6` in that Python environment if you want the new Qt workstation. The **public-beta** package blocks physical in-place writes. The separate **repair-beta** package may attempt the guided, HDD-only write workflow on sacrificial hardware with all safeguards enabled:
 
 ```bash
 python scripts/build_desktop.py --repair-beta --no-wheel
-python dist/DriveRepair-0.3.3b19-repair-beta.pyz qt-gui
+python dist/DriveRepair-0.3.3b20-repair-beta.pyz qt-gui
 ```
 
 For a CLI image-only example, use a source **regular file** and an unused output path:
 
 ```bash
-python dist/DriveRepair-0.3.3b19-public-beta.pyz scan-image --image source.img --mode triage --json
-python dist/DriveRepair-0.3.3b19-public-beta.pyz rescue-image --image source.img --output recovered.img --json
-python dist/DriveRepair-0.3.3b19-public-beta.pyz rescue-status --output recovered.img --json
+python dist/DriveRepair-0.3.3b20-public-beta.pyz scan-image --image source.img --mode triage --json
+python dist/DriveRepair-0.3.3b20-public-beta.pyz rescue-image --image source.img --output recovered.img --json
+python dist/DriveRepair-0.3.3b20-public-beta.pyz rescue-status --output recovered.img --json
 ```
 
 A repair-beta build is **not** a recommendation to write to a failing or valuable patient. See [hardware testing requirements](docs/USB_REPAIR_PREFLIGHT_B17.md) and [release gates](docs/RELEASE_STATUS.md).
@@ -202,7 +202,7 @@ Drive condition scores are **evidence-based diagnostics**, not exact remaining-l
 
 ## Architecture and contributions
 
-The primary workstation is **Python / PySide6** with a Tk fallback. The CLI runs I/O in separate processes and has independent checks for physical device identity, risk acknowledgements and journals. A **Rust core** is present for selected image-based operations, but it is not yet a fully qualified native physical-disk backend. Documentation on the current limits is in [architecture.md](architecture.md), [security](SECURITY.md), and [contribution guidelines](CONTRIBUTING.md).
+The primary workstation is **Python / PySide6** with a Qt-only workstation. The CLI runs I/O in separate processes and has independent checks for physical device identity, risk acknowledgements and journals. A **Rust core** is present for selected image-based operations, but it is not yet a fully qualified native physical-disk backend. Documentation on the current limits is in [architecture.md](architecture.md), [security](SECURITY.md), and [contribution guidelines](CONTRIBUTING.md).
 
 Automated tests operate on fixtures and synthetic images. They do **not** prove real Windows USB device locking, power-loss recovery, hardware remapping, SSD controller outcomes, or bootability. Report problems with anonymized logs and exact versions; do not publish full disk images, serial numbers or private recovered content.
 
@@ -211,3 +211,11 @@ For release changes see [CHANGELOG.md](CHANGELOG.md). Older technical release di
 **Support development:** [GitHub Sponsors — CommsTech](https://github.com/sponsors/CommsTech). Optional sponsorship does not grant access to recovered data or bypass any safety checks.
 
 **License:** [MIT](LICENSE).
+
+### Bootable recovery media (release requirement)
+
+The Windows USB wizard is a **writer**, not an ISO operating-system builder. A small ISO that merely contains MBR/ISO9660 signatures is **not** a usable DriveRepair recovery OS. Releases must bundle a real Debian live-build ISO with a kernel, initramfs, `filesystem.squashfs`, and BIOS/UEFI boot entries. The GUI and physical flash command now reject images missing these components.
+
+Build on Debian using `sudo bash scripts/build_live_iso.sh /path/to/empty-dir` and inspect with `bash scripts/check_live_iso.sh /path/to/DriveRepair-Live-amd64-UNVERIFIED.iso`. Boot-test that ISO in both BIOS and UEFI virtual machines, then on sacrificial USB media before claiming it works. A byte-for-byte USB readback proves copying, **not firmware boot**. On Windows, an ISO-hybrid USB can appear empty or lack a drive letter while still containing a Linux filesystem; only structural inspection and an actual boot establish functionality.
+
+The desktop interface is Qt-only (PySide6). Its Specialist Tools dialog exposes image scanning, filesystem analysis, recovery and clone-only ext repair without the removed Tk UI. Disk writes remain guarded by the CLI and require drive identity, access, journal and explicit risk authorization.

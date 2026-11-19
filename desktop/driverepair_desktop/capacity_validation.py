@@ -13,7 +13,6 @@ never an automatic action on recovery patients.
 from __future__ import annotations
 
 import hashlib
-import math
 import os
 from pathlib import Path
 import secrets
@@ -142,7 +141,9 @@ def validate_spots(media, *, size: int, sector: int, source_token: str,
     store.prepare_new()
     counters={'validated':0,'mismatch':0,'read_error':0,'write_error':0,
               'unstable_original':0,'restoration_error':0,'untested':0}
-    records=[]; read_times=[]; write_times=[]
+    records = []
+    read_times = []
+    write_times = []
     emit=progress or (lambda event:None)
     for i,offset in enumerate(offsets):
         if stop_requested is not None and stop_requested():

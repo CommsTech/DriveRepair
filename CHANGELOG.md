@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.3b20 — 2026-11-19: Qt consolidation, boot-media qualification, and UI cleanup
+
+- Remove the old Tk desktop runtime from the distributed source. Both `gui` and `qt-gui` now launch only PySide6/Qt; `gui-legacy` is a compatibility alias that also opens Qt, not Tk. Python CLI operations remain independently available.
+- Add Qt **Specialist recovery tools** to expose image filesystem detection, scan, rescue/resume/retry, file carving and undelete (including Sleuth Kit), ZIP salvage, hash integrity auditing and restore-from-reference, clone-only ext filesystem repair and evidence export.
+- Add **Hardware diagnostics** for read-only firmware/capability inspection, sampled benchmarks, bounded failed-offset rereads, and Windows volume optimization *advice only*; potentially stressful reads require explicit approval.
+- Remove empty, misleading dashboard data until real job evidence arrives; show an actionable HDD eligibility explanation and rescue route. Improve destructive USB confirmation contrast and control descriptions.
+- Replace permissive marker-only ISO validation on real USB flashes and release sidecars with a bounded ISO9660/El Torito preflight requiring a hybrid partition record, Linux kernel, initramfs, squashfs and BIOS+UEFI boot catalog entries. Placeholder ISO images are now rejected, rather than flashed with false confidence. Boot remains UNVERIFIED without real VM/hardware boot tests.
+- Retire the obsolete bootloader-only PowerShell ISO script. Strengthen the Debian live-build structural check, and remove `python3-tk` from the ISO package list. Tests use synthetic media only; **no physical USB boot or HDD repair has been validated in this revision**.
+- Remaining qualification gates: Qt native Windows visual/behavior testing, full Tk feature parity review for niche offline/volatile refresh controls, verified Debian live ISO build, BIOS/UEFI boot tests, hardware USB flashing and controlled real HDD writes. Do not advertise complete parity or boot qualification prematurely.
+
+
 ## Unreleased — 2026-11-19 USB capacity-integrity spot test and visual reports (0.3.3b19)
 
 - Introduced opt-in **temporary write/restore** capacity-authenticity spot checks for externally selected USB storage in engineering/guarded builds, and regular-image fixtures for safe automated tests. A 4 KiB preimage is durably journaled before each write; two matching restore reads are required; an unverified restore stops all further writes and preserves the recovery journal. **Spoofed-capacity controllers can still overwrite untested locations.**

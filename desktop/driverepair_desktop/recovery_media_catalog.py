@@ -12,7 +12,7 @@ from pathlib import Path
 import sys
 from typing import Iterable
 
-from .usb_flash import inspect_hybrid_iso
+from .boot_validation import qualify_live_iso
 
 ISO_GLOB = 'DriveRepair-Live*.iso'
 
@@ -55,7 +55,7 @@ def find_local_recovery_iso(*, preferred: str | None = None,
             continue
         seen.add(identifier)
         try:
-            result = inspect_hybrid_iso(candidate)
+            result = qualify_live_iso(candidate)
             result['selection'] = 'previously_selected' if preferred and candidate == Path(preferred) else 'local_driverepair_image'
             return result
         except (OSError, ValueError):

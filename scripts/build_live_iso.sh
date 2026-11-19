@@ -39,7 +39,6 @@ mkdir -p config/package-lists \
   config/includes.chroot/etc/systemd/system
 cat > config/package-lists/driverepair.list.chroot <<'EOF'
 python3
-python3-tk
 python3-pyside6.qtcore
 python3-pyside6.qtgui
 python3-pyside6.qtwidgets
@@ -97,6 +96,9 @@ if [[ -e "$TARGET" ]]; then
   exit 1
 fi
 cp -- "$ISO" "$TARGET"
+# Verify the live kernel, initramfs, squashfs and both firmware boot entries.
+# Byte-valid images that do not contain these components must never be shipped.
+"$REPO/scripts/check_live_iso.sh" "$TARGET"
 ( cd "$OUT" && sha256sum -- "$(basename "$TARGET")" > "$(basename "$TARGET").sha256" )
 echo "Built: $TARGET"
 echo 'MANDATORY: BIOS+UEFI VM smoke tests, physical boot tests and write-safety checks before distribution.'
