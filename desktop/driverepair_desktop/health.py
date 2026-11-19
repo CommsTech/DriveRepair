@@ -43,7 +43,9 @@ def health_snapshot(device: Device,
     nvme = raw.get('nvme_smart_health_information_log') or {}
     rpm = raw.get('rotation_rate')
     protocol = str((raw.get('device') or {}).get('protocol') or '').lower()
-    reported_medium = ('ssd' if 'nvme' in protocol or type(rpm) is int and rpm == 0
+    # NVMe behind USB can have a USB bus yet report an NVMe health log.
+    nvme_identified = 'nvme' in protocol or bool(nvme)
+    reported_medium = ('ssd' if nvme_identified or type(rpm) is int and rpm == 0
                        else 'hdd' if type(rpm) is int and rpm > 0 else 'unknown')
     temp = raw.get('temperature') or {}
     ata = raw.get('ata_smart_attributes') or {}
@@ -59,6 +61,7 @@ def health_snapshot(device: Device,
         'smartctl_exit_status': proc.returncode,
         'smart_status_passed': passed if isinstance(passed, bool) else None,
         'reported_medium': reported_medium,
+        'device_protocol': 'nvme' if nvme_identified else protocol or 'unknown',
         'rotation_rate_rpm': rpm if type(rpm) is int and rpm > 0 else None,
         'temperature_c': temp.get('current'),
         'nvme': {k: nvme.get(k) for k in ('percentage_used', 'media_errors',

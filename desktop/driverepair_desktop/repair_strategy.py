@@ -49,7 +49,8 @@ def advise(*, model: str = '', bus: str = '', media_type: str = '',
     snap = snapshot or {}
     medium = str(snap.get('reported_medium') or media_type or '').lower()
     profile = identify_profile(model=model, bus=bus, media_type=medium,
-                               recording=recording, sector=sector)
+                               recording=recording, sector=sector,
+                               protocol=str(snap.get('device_protocol') or ''))
     state = media_from_smart(snapshot)
     transport = transport_from_smart(snapshot)
     reasons = []
@@ -67,7 +68,7 @@ def advise(*, model: str = '', bus: str = '', media_type: str = '',
         return RepairAdvice('cool_rescue', 'Cool drive and prioritize rescue', False,
                             ('Observed temperature at or above 55 °C.',),
                             profile.kind, 'temperature_warning')
-    if profile.kind in {'nvme', 'ssd'}:
+    if profile.kind in {'nvme', 'ssd', 'flash'}:
         errors = _nvme_int(snap, 'media_errors') or 0
         spare = _nvme_int(snap, 'available_spare')
         threshold = _nvme_int(snap, 'available_spare_threshold')
@@ -79,8 +80,16 @@ def advise(*, model: str = '', bus: str = '', media_type: str = '',
         else:
             reasons.append('SSD/NVMe flash translation manages remapping; generic rewrite adds wear and is not an endurance repair.')
             path = 'ssd_diagnostics'
-        return RepairAdvice(path, 'Back up and use controller health/self-tests', False,
+        return RepairAdvice(path, ('Image data first; use flash diagnostics' if profile.kind == 'flash'
+                                   else 'Back up and use controller health/self-tests'), False,
                             tuple(reasons), profile.kind, 'device_protocol' if profile.kind == 'nvme' else profile.evidence)
+    # A known model number alone does not establish the actual physical medium
+    # behind a USB bridge. Require SMART rotation evidence before any HDD write.
+    if profile.kind in {'smr', 'cmr', 'hdd_unknown_recording'} and medium not in {
+            'hdd', 'hard disk', 'rotational'}:
+        return RepairAdvice('identify_rescue', 'Verify the underlying rotational drive; image data first',
+                            False, ('Recording/model labels are not proof of physical HDD media through USB.',),
+                            profile.kind, 'medium_unverified')
     if profile.kind not in {'smr', 'cmr', 'hdd_unknown_recording'}:
         return RepairAdvice('identify_rescue', 'Identify media first; rescue data', False,
                             ('Underlying media cannot be verified through this device/bridge.',),

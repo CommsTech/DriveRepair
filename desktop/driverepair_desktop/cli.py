@@ -1352,6 +1352,7 @@ def _run_care(args) -> int:
                                   bus=selected.bus if is_hardware else '',
                                   model=selected.model if is_hardware else '',
                                   media_type=(snapshot or {}).get('reported_medium', ''),
+                                  protocol=(snapshot or {}).get('device_protocol', ''),
                                   recording='' if args.recording == 'auto' else args.recording)
             # Win32 USB bridges can hold an individual synchronous ReadFile for
             # many minutes. A 6-16 MiB request multiplies the bytes at risk of
@@ -2034,6 +2035,22 @@ def run(argv: list[str] | None = None) -> int:
         if checkpoint_writer is not None:
             result['scan_checkpoint'] = str(checkpoint_writer.path)
             result['resume_requires_fresh_identity'] = True
+        if args.command == 'scan':
+            # Report the evidence and chosen logical scan window, so the GUI
+            # cannot imply that a hidden USB bridge was identified as CMR/SSD.
+            from .media_profiles import identify_profile
+            medium=identify_profile(model=device.model, bus=device.bus,
+                                    media_type=(smart or {}).get('reported_medium',''),
+                                    protocol=(smart or {}).get('device_protocol',''),sector=sector)
+            result['media_profile'] = {
+                'kind': medium.kind, 'evidence':medium.evidence,
+                'confidence':medium.confidence, 'workload':medium.workload,
+                'recovery_method':medium.recovery_method,
+                'logical_read_window_bytes':args.chunk_mib*1024*1024,
+                'windows_usb_kernel_read_limit_bytes':(1024*1024
+                    if sys.platform == 'win32' else None),
+                'no_write_authorization':True,
+            }
         result["health"] = health.public()
         result["repair_readiness"] = health.repair_readiness()
         if smart is not None:

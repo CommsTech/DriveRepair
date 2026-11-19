@@ -26,10 +26,13 @@ class MediaProfile:
     quick_fraction: float = 0.10
     neighbor_rewrite: bool = False
     maintenance_note: str = ''
+    confidence: str = 'unknown'
+    workload: str = 'general'
+    recovery_method: str = 'conservative sequential imaging with a persistent error map'
 
 
 def identify_profile(*, model: str = '', bus: str = '', media_type: str = '',
-                     recording: str = '', sector: int = 512) -> MediaProfile:
+                     recording: str = '', sector: int = 512, protocol: str = '') -> MediaProfile:
     """Prefer confirmed recording data, then exact model evidence; never guess CMR.
 
     media_type may be supplied from a reliable OS storage-property query; it is
@@ -48,18 +51,39 @@ def identify_profile(*, model: str = '', bus: str = '', media_type: str = '',
     medium = media_type.strip().lower()
     if recording_id not in {'', 'smr', 'cmr'}:
         raise ValueError('Unknown recording technology')
-    if recording_id == 'smr' or (not recording_id and known_smr):
-        kind, evidence = 'smr', ('confirmed recording' if recording_id else 'manufacturer model datasheet')
+    # NVR denotes a surveillance WORKLOAD, not a magnetic recording type.
+    # Manufacturer lines include CMR and SMR variants: do not infer one from a
+    # Purple/SkyHawk label. Workload awareness can prioritize long sequential
+    # reads while leaving actual recording technology unverified.
+    workload = ('surveillance' if re.search(r'\b(?:SKYHAWK|WD\s+PURPLE|PURPLE\s+PRO|S300)\b', model.upper())
+                else 'general')
+    nvme_protocol = protocol.strip().lower() in {'nvme', 'nvm express'}
+    solid_state = medium in {'ssd', 'solid state', 'solid-state', 'nvme', 'flash',
+                             'usb flash', 'flash drive', 'sd card', 'memory card', 'mmc'}
+    rotational = medium in {'hdd', 'hard disk', 'rotational'}
+    if medium not in {'', 'unknown', 'ssd', 'solid state', 'solid-state', 'nvme',
+                      'flash', 'usb flash', 'flash drive', 'sd card', 'memory card',
+                      'mmc', 'hdd', 'hard disk', 'rotational'}:
+        raise ValueError('Unknown reported medium')
+    # A contradictory set of physical claims must NEVER be resolved by
+    # guessing that one source is more trustworthy. Prefer read-only unknown.
+    if ((nvme_protocol or solid_state or bus_id in {'nvme', 'nvm express'}) and
+            (known_smr or recording_id or rotational)) or (known_smr and recording_id == 'cmr'):
+        kind, evidence, confidence = 'unknown', 'conflicting solid-state and magnetic evidence', 'conflict'
+    elif (recording_id == 'smr' or (not recording_id and known_smr)):
+        kind, evidence, confidence = 'smr', ('confirmed recording' if recording_id else 'manufacturer exact-model datasheet'), 'model' if known_smr and not recording_id else 'verified'
     elif recording_id == 'cmr':
-        kind, evidence = 'cmr', 'confirmed recording'
-    elif bus_id in {'nvme', 'nvm express'}:
-        kind, evidence = 'nvme', 'NVMe protocol'
+        kind, evidence, confidence = 'cmr', 'confirmed recording', 'verified'
+    elif nvme_protocol or bus_id in {'nvme', 'nvm express'} or medium == 'nvme':
+        kind, evidence, confidence = 'nvme', 'NVMe storage protocol', 'protocol'
+    elif medium in {'flash', 'usb flash', 'flash drive', 'sd card', 'memory card', 'mmc'}:
+        kind, evidence, confidence = 'flash', 'reported removable flash medium', 'reported'
     elif medium in {'ssd', 'solid state', 'solid-state'}:
-        kind, evidence = 'ssd', 'reported solid-state medium'
-    elif medium in {'hdd', 'hard disk', 'rotational'}:
-        kind, evidence = 'hdd_unknown_recording', 'reported rotational medium; recording unspecified'
+        kind, evidence, confidence = 'ssd', 'reported solid-state medium', 'reported'
+    elif rotational:
+        kind, evidence, confidence = 'hdd_unknown_recording', 'reported rotational medium; CMR/SMR unspecified', 'reported'
     else:
-        kind, evidence = 'unknown', 'no authoritative medium/recording identification'
+        kind, evidence, confidence = 'unknown', 'medium hidden or unverified (USB is transport only)', 'unknown'
     # Large, aligned sequential requests for good regions, bounded follow-up
     # reads for problem areas. Device/adapter max-transfer limits can be lower.
     specs = {
@@ -67,6 +91,7 @@ def identify_profile(*, model: str = '', bus: str = '', media_type: str = '',
         'cmr': (16, 4, 16, 256, 'Qualify every neighbor independently before any authorized write.'),
         'hdd_unknown_recording': (8, 2, 8, 256, 'Do not assume CMR or write adjacent blocks.'),
         'ssd': (16, 4, 16, 128, 'Avoid unnecessary refresh writes, which consume flash endurance.'),
+        'flash': (4, 1, 4, 64, 'Removable flash: prioritize image-out; do not attempt HDD remapping or endurance refresh.'),
         'nvme': (16, 4, 16, 128, 'Prefer health logs and controller-level maintenance; avoid write amplification.'),
         'unknown': (8, 1, 8, 256, 'Identify underlying media before choosing write-intensive maintenance.'),
     }
@@ -75,7 +100,15 @@ def identify_profile(*, model: str = '', bus: str = '', media_type: str = '',
         return max(sector, (n // sector) * sector)
     return MediaProfile(kind, evidence, aligned(quick * MIB), aligned(initial * MIB),
                         aligned(maximum * MIB), aligned(minimum_kib * 1024),
-                        maintenance_note=note)
+                        maintenance_note=note, confidence=confidence, workload=workload,
+                        recovery_method=(
+                            'Sequential image-out, then small bounded read retries; no raw NAND reconstruction'
+                            if kind in {'ssd', 'nvme', 'flash'} else
+                            'Sequential-first recovery with bounded, mapfile-tracked retries; no adjacent rewrites'
+                            if kind in {'smr', 'hdd_unknown_recording'} else
+                            'Sequential-first rescue, sector-level retry only for isolated errors'
+                            if kind == 'cmr' else
+                            'Identify physical medium; image readable bytes without in-place modifications'))
 
 
 def quick_coverage_plan(size: int, chunk: int, *, fraction: float = 0.10) -> dict:
