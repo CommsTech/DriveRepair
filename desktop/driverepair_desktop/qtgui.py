@@ -17,7 +17,8 @@ from .release_policy import PUBLIC_BETA_IMAGE_ONLY, REPAIR_BETA_GUARDED
 from .rates import choose_speed
 from .workstation_ui import (
     WORKSPACES, can_start, operation_impact, operation_family, operator_summary,
-    repair_presentation, drive_inspection_text,
+    repair_presentation, drive_inspection_text, should_render_progress,
+    PROGRESS_RENDER_INTERVAL_SECONDS,
 )
 import sys
 import time
@@ -208,6 +209,7 @@ def launch():
         QPushButton#goal:checked {{ background:#204344; border:2px solid {C['accent']}; color:white; }}
         QPushButton#primary {{ background:#269b90; color:#ffffff; border:1px solid #42beae; font-weight:750; }}
         QPushButton#primary:hover {{ background:#2cb8a4; }}
+        QPushButton#primary:disabled {{ background:#1a2636; color:#7d8fa3; border:1px solid #2a3545; }}
         QPushButton#danger {{ background:#b94751; color:#ffffff; border:1px solid #ee8c91; font-weight:750; }}
         QPushButton#danger:hover {{ background:#d75962; }}
         QPushButton#danger:disabled {{ background:#372931; color:#a98b92; border-color:#574049; }}
@@ -533,6 +535,12 @@ def launch():
             self._resume_poll_count=0
             self._last_progress_at=None
             self._last_phase=None
+            self._last_render_at=None
+            self._pending_render=None
+            self._render_timer=QTimer(self)
+            self._render_timer.setSingleShot(True)
+            self._render_timer.setInterval(max(16,int(PROGRESS_RENDER_INTERVAL_SECONDS*1000)))
+            self._render_timer.timeout.connect(self._flush_progress_render)
             self._last_debug_event_at=0.0
             self._last_io_offset=0
             self._last_io_length=0
@@ -638,6 +646,9 @@ def launch():
             # consuming the navigation with build-kit/ISO/flash distinctions.
             self.sponsor_button=QPushButton('♡  Support DriveRepair')
             self.sponsor_button.setObjectName('sponsor')
+            # The sidebar is only 214 px wide: 13 px text overflows the button and
+            # the trailing letters get clipped. One step down keeps it whole.
+            self.sponsor_button.setStyleSheet('font-size:12px; padding:6px 8px;')
             self.sponsor_button.setToolTip('Opens the same GitHub Sponsors profile as Repository Detective. No telemetry or network request until clicked.')
             self.sponsor_button.clicked.connect(lambda:QDesktopServices.openUrl(QUrl('https://github.com/sponsors/CommsTech')))
 
@@ -655,6 +666,9 @@ def launch():
             note=QLabel('Local processing  ·  No automatic uploads\nNo operation starts on selection')
             note.setObjectName('muted')
             note.setWordWrap(True)
+            # Small dim copy in the sidebar footer was the least readable text on
+            # screen; keep the quiet tone but restore comfortable legibility.
+            note.setStyleSheet('font-size:12px; color:#c3d4e4;')
             nav.addWidget(note)
             shell_layout.addWidget(sidebar)
             main_col=QWidget()
@@ -806,6 +820,9 @@ def launch():
             self.device_box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             self.device_box.setMinimumContentsLength(14)
             self.device_box.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            self.device_box.setAccessibleName('Source drive')
+            self.device_box.setAccessibleDescription('External source disk used for read-only work')
+            self.device_box.setPlaceholderText('No external drives detected yet — press Refresh')
             drive_panel.addWidget(self.device_box)
             self.offline_devices=QCheckBox('Offline Linux: show internal disks for read-only rescue')
             self.offline_devices.setToolTip('Only when booted from a trusted, separate Linux recovery OS. '
@@ -850,6 +867,8 @@ def launch():
             self.job_box=QComboBox()
             self.job_box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             self.job_box.setMinimumContentsLength(14)
+            self.job_box.setAccessibleName('Operation')
+            self.job_box.setAccessibleDescription('Read-only diagnosis, rescue, or experimental repair task')
             self.job_box.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
             self._jobs={
                 'fix':[('Targeted HDD region repair','carequick'),
@@ -893,6 +912,7 @@ def launch():
             workflow.addWidget(self.auto_pause)
             self.dest=QLineEdit()
             self.dest.setPlaceholderText('Choose an existing source image…')
+            self.dest.setAccessibleName('Source image path')
             self.browse=QPushButton('Choose image…')
             self.browse.clicked.connect(self.pick_image)
             pathrow=QHBoxLayout()
@@ -1046,7 +1066,11 @@ def launch():
             self.evidence_tabs=QTabWidget()
             self.evidence_tabs.setDocumentMode(True)
             self.evidence_tabs.addTab(self.results_card,'Assessment')
-            self.evidence_tabs.addTab(self.map_card,'Surface map & throughput')
+            # A long tab caption is clipped by the narrow evidence column, so the
+            # label stays short and the full meaning lives in the tooltip.
+            self.evidence_tabs.addTab(self.map_card,'Surface map')
+            self.evidence_tabs.setTabToolTip(1,'Measured surface coverage and observed throughput '
+                                               'over roughly the last 45 seconds.')
             right.addWidget(self.evidence_tabs,1)
             self.evidence_tabs.setCurrentIndex(0)
             self.recheck_button=QPushButton('Address scan errors…')
@@ -1088,6 +1112,11 @@ def launch():
             dock_layout.addWidget(self.stop)
             main_col_layout.addWidget(dock)
             # Native keyboard shortcuts, available without remote frameworks.
+            self.start_shortcut=QShortcut(QKeySequence('Ctrl+Return'),self)
+            self.start_shortcut.activated.connect(lambda:self.start.click())
+            self.start_shortcut.setEnabled(False)
+            refresh_shortcut=QShortcut(QKeySequence('F5'),self)
+            refresh_shortcut.activated.connect(self.refresh_devices)
             for shortcut, target in [('Ctrl+1','scanquick'), ('Ctrl+2','rescue')]:
                 key=QShortcut(QKeySequence(shortcut),self)
                 key.activated.connect(lambda t=target:self.select_goal(t))
@@ -1705,13 +1734,15 @@ def launch():
                 elif enabled:
                     advice='High-risk write/restore test. Use only a backed-up, disposable USB; an unreliable controller can overwrite unrelated data.'
             self.start.setEnabled(enabled)
+            # Keyboard start obeys exactly the same readiness decision.
+            self.start_shortcut.setEnabled(enabled)
             # When a repair is ineligible, expose the non-destructive next step
             # without a cryptic failed worker run. No source write is performed.
             self.rescue_instead.setVisible(kind in {'carequick','carefull','careresume'}
                 and bool(self.selected()) and not enabled and not running)
             self.ready_note.setText(advice)
             self.start.setToolTip(advice)
-            self.device_box.setEnabled(not running)
+            self.device_box.setEnabled(not running and bool(self._devices))
             self.offline_devices.setEnabled(not running)
             self.job_box.setEnabled(not running)
             self.auto_plan_note.setVisible(kind in {'carequick','carefull','careresume'})
@@ -2420,8 +2451,15 @@ def launch():
                     if d.get('id')==prev.get('id') and d.get('identity_hint')==prev.get('identity_hint'):
                         self.device_box.setCurrentIndex(i)
                         break
-            self.device_note.setText(f'{len(data)} whole disk(s) available (offline Linux)' if self.offline_devices.isChecked() else
-                f'{len(data)} external drive(s) available. Fresh identity required before writes.')
+            if not data:
+                # An empty dropdown with no explanation reads as a broken form.
+                self.device_note.setText(
+                    'No external drive detected yet. Connect the drive, let it spin up, then press '
+                    'Refresh. If the dock hides the disk, check power and cabling — that is not a '
+                    'repair result.')
+            else:
+                self.device_note.setText(f'{len(data)} whole disk(s) available (offline Linux)' if self.offline_devices.isChecked() else
+                    f'{len(data)} external drive(s) available. Fresh identity required before writes.')
             self.update_action_state()
             pending=self._pending_resume
             if pending and self.auto_resume.isChecked() and not (self.proc and self.proc.state()!=QProcess.NotRunning):
@@ -2833,6 +2871,17 @@ def launch():
         def progress_event(self,event):
             self.reveal_job_evidence()
             self._last_progress_at=time.monotonic()
+            phase=str(event.get('phase') or 'WORKING').upper()
+            # Coalesce repetitive in-phase updates. The newest event is retained
+            # and rendered on the next tick, so no final value is lost.
+            if not should_render_progress(now=self._last_progress_at,
+                                          last_render_at=self._last_render_at,
+                                          phase=phase, last_phase=self._last_phase):
+                self._pending_render=event
+                if not self._render_timer.isActive():
+                    self._render_timer.start()
+                return
+            self._last_render_at=self._last_progress_at
             if event.get('workflow') == 'rescue':
                 return self.rescue_progress_event(event)
             self._last_io_offset=int(event.get('offset') or 0)
@@ -2849,7 +2898,6 @@ def launch():
                 debug_trace('IO_TELEMETRY '+json.dumps(fields,sort_keys=True)+'\n')
                 self._last_debug_event_at=self._last_progress_at
             self.status.setText(str(event.get('phase') or 'WORKING').replace('_',' ').title())
-            phase=str(event.get('phase') or 'WORKING').upper()
             if phase != self._last_phase:
                 self._last_phase=phase
                 self.metric_labels['rate'].setText('Measuring…')
@@ -2904,9 +2952,18 @@ def launch():
                                 'Colored stripes mark observations, not full-region certification.')
             self.coverage_label.setText(f'MEASURED COVERAGE  ·  {self.map.coverage.coverage_pct:.2f}%')
             self.evidence_scope.setText('Read coverage ≠ media health')
+        def _flush_progress_render(self):
+            """Render the newest coalesced event; never leave a stale frame."""
+            event=self._pending_render
+            self._pending_render=None
+            if event is None:
+                return
+            self._last_render_at=None
+            self.progress_event(event)
         def rescue_progress_event(self, event):
             self.reveal_job_evidence()
             phase=str(event.get('phase') or 'FORWARD').upper()
+            self._last_phase=phase
             self.status.setText('Rescuing readable data' if phase == 'FORWARD' else 'Retrying missing ranges')
             self.phase_caption.setText('First pass  •  save readable data' if phase == 'FORWARD'
                                        else 'Targeted retry  •  isolate unreadable sectors')
@@ -2955,6 +3012,9 @@ def launch():
         def job_done(self,exit_code,_status):
             self.consume('stdout')
             self.consume('stderr')
+            # A coalesced frame must never repaint stale numbers over the result.
+            self._render_timer.stop()
+            self._pending_render=None
             user_stop_requested = self._stop_requested
             self.start.setEnabled(True)
             self.stop.setEnabled(False)

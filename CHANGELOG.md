@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — workstation responsiveness and first-run clarity (2026-11-19)
+
+- **Responsiveness:** progress repaints are coalesced to a 10 Hz cadence. Phase
+  changes and completion still render immediately and the newest event is always
+  flushed, so a fast source can no longer flood the UI thread with thousands of
+  label/map updates per second. The decision is a pure, unit-tested helper, not
+  an inline timing check.
+- **Disabled actions look disabled:** the primary Start button had no `:disabled`
+  style and kept its teal action colour while refusing to start — the exact
+  "green button that does nothing" contradiction. It now greys out, verified by
+  sampling the rendered button rather than the stylesheet string.
+- **No clipped labels:** the evidence tab caption is shortened to *Surface map*
+  with the full meaning in its tooltip, and the sidebar support button drops one
+  font step so its label is no longer cut off in a 214 px sidebar.
+- **Empty inventory explains itself:** with no external drive the selector is
+  disabled, shows a placeholder, and the note tells the user to connect the drive
+  and press Refresh instead of presenting a large unexplained empty dropdown.
+- **Accessibility and keyboard flow:** accessible names on the source-drive and
+  operation selectors and the image-path field; `Ctrl+Enter` starts a ready job
+  under exactly the same readiness gate as the button, and `F5` refreshes the
+  drive inventory. Sidebar footer contrast and size raised.
+- 12 new tests (7 offscreen Qt, 5 presentation) cover these behaviours; Qt tests
+  skip cleanly on hosts without PySide6.
+
 ## 0.3.3b21 — 2026-11-19: live evidence, focused follow-up and Windows boot building
 
 - Qt layout: remove numbered sidebar items, provide separate **Assessment** and **Surface map & throughput** tabs to reduce stacked scrolling; hide drive/workflow setup forms during active jobs and restore them at completion.

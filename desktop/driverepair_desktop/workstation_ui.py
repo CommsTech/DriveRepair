@@ -39,6 +39,26 @@ WORKSPACES = {
 IMAGE_OPERATIONS = frozenset({'rescueimage'})
 EXPERIMENTAL_OPERATIONS = frozenset({'carequick', 'carefull', 'careresume'})
 
+# A fast source can emit thousands of progress events per second. Repainting
+# every one of them starves the UI thread and makes the window feel stuck.
+PROGRESS_RENDER_INTERVAL_SECONDS = 0.1
+
+
+def should_render_progress(*, now: float, last_render_at: float | None,
+                           phase: str | None, last_phase: str | None,
+                           terminal: bool = False,
+                           min_interval: float = PROGRESS_RENDER_INTERVAL_SECONDS) -> bool:
+    """Coalesce high-rate progress events into a steady visual cadence.
+
+    Phase transitions and terminal events always render immediately; only the
+    repetitive in-phase updates are rate limited. Dropping frames must never
+    drop state: the caller keeps the newest event and renders it on the next
+    tick, so the final displayed value is still the latest one.
+    """
+    if terminal or last_render_at is None or phase != last_phase:
+        return True
+    return (now - last_render_at) >= min_interval
+
 
 def operation_family(kind: str | None) -> str:
     if kind in EXPERIMENTAL_OPERATIONS:

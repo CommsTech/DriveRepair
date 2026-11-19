@@ -2,6 +2,7 @@
 import unittest
 from driverepair_desktop.workstation_ui import (
     WORKSPACES, can_start, operation_impact, operation_family, operator_summary,
+    should_render_progress,
 )
 
 
@@ -44,6 +45,31 @@ class WorkstationPresentationTests(unittest.TestCase):
         self.assertIn('Failed read requests (not confirmed bad sectors): 2', text)
         self.assertIn('do not certify', text)
         self.assertNotIn('100% healthy', text)
+
+
+class ProgressCadenceTests(unittest.TestCase):
+    """Fast media must not flood the UI thread with thousands of repaints."""
+
+    def test_first_event_always_renders(self):
+        self.assertTrue(should_render_progress(now=5.0, last_render_at=None,
+                                               phase='SCANNING', last_phase=None))
+
+    def test_rapid_in_phase_events_are_coalesced(self):
+        self.assertFalse(should_render_progress(now=1.02, last_render_at=1.0,
+                                                phase='SCANNING', last_phase='SCANNING'))
+
+    def test_render_resumes_after_the_interval(self):
+        self.assertTrue(should_render_progress(now=1.1, last_render_at=1.0,
+                                               phase='SCANNING', last_phase='SCANNING'))
+
+    def test_phase_change_renders_immediately(self):
+        self.assertTrue(should_render_progress(now=1.01, last_render_at=1.0,
+                                               phase='REFRESH', last_phase='SCANNING'))
+
+    def test_terminal_event_renders_immediately(self):
+        self.assertTrue(should_render_progress(now=1.001, last_render_at=1.0,
+                                               phase='SCANNING', last_phase='SCANNING',
+                                               terminal=True))
 
 
 if __name__ == '__main__':
