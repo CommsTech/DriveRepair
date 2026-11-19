@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3b26 — 2026-11-19: Windows USB discovery and write-gate regression fixes
+
+- Fixed a **real repair-blocking contradiction**: Windows inventory was changed to CIM-first, but the journal preflight still rejected every disk whose provenance wasn't literally `Get-Disk`. The journal preflight now repeats the independent authoritative `Get-Disk` external/online/non-system safety gate regardless of inventory source. This does **not** waive device serial, SMART/media policy, locking, separate journal, explicit consent, or readback requirements.
+- Recognize USB-attached SCSI/UASP disks only when a separate bounded Windows native descriptor confirms USB transport, drive index, and compatible capacity. A second USB device is no longer silently hidden when a different device already advertises USB directly.
+- Add a last-resort **read-only** native USB inventory when Windows CIM, WMIC and Storage cmdlets cannot discover drives. It does not fabricate serial numbers or qualify raw writes.
+- Bound Qt inventory discovery and surface the actual failure/timeout instead of displaying an indefinite "Looking for external drives" placeholder. Invalid inventories clear stale drive selections safely.
+- Added synthetic Windows identification, identity-conflict, and independent write-preflight regression tests. Native Windows USB behavior and real physical-drive repair remain hardware qualification items.
+
 ## 0.3.3b25 — 2026-11-19: Media-aware Repair & Restore actions
 
 - Replaced the misleading disabled "Start authorized repair" control with a **context-aware** primary action. When the selected device is an SSD or removable flash drive, it switches to read-only image rescue instead of attempting HDD sector refresh. Unknown HDDs trigger read-only identification; corroborated HDDs retain their independent guarded rewrite checks. Switching workspaces never starts a physical write.

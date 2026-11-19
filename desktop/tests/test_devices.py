@@ -75,6 +75,92 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(disks[0].path, r"\\.\PhysicalDrive2")
         self.assertEqual(disks[0].provenance, "legacy-inventory")
 
+    def test_windows_cim_uasp_scsi_requires_native_usb_confirmation(self):
+        # A modern UASP enclosure can advertise SCSI in Win32_DiskDrive even
+        # though the physical transport is USB. Do not classify all SCSI as USB.
+        payload = [
+            {'Index': 0, 'InterfaceType': 'SCSI', 'Model': 'Internal SAS',
+             'Size': 100000000000, 'BytesPerSector': 512, 'SerialNumber': 'INT'},
+            {'Index': 3, 'InterfaceType': 'SCSI', 'Model': 'ST1000LM048 USB Device',
+             'Size': 1000000000000, 'BytesPerSector': 512, 'SerialNumber': 'DISK-SERIAL',
+             'PNPDeviceID': 'SCSI\\DISK&VEN_SEAGATE'},
+        ]
+        def run(cmd, timeout=None):
+            joined = ' '.join(cmd).lower()
+            if 'get-ciminstance' in joined:
+                return json.dumps(payload).encode()
+            if 'inspect-windows-disk' in joined:
+                number = int(cmd[-1])
+                return json.dumps({'number': number, 'bus': 'USB' if number == 3 else 'SAS',
+                    'size_bytes': 1000000000000 if number == 3 else 100000000000}).encode()
+            raise AssertionError('Other discovery tools should not run')
+        result = windows_devices(run)
+        self.assertEqual([d.id for d in result], ['windows:PhysicalDrive3'])
+        self.assertEqual(result[0].bus, 'usb')
+        self.assertEqual(result[0].provenance, 'cim-native-usb')
+        self.assertEqual(result[0].serial, 'DISK-SERIAL')
+
+    def test_windows_cim_mixed_usb_and_scsi_uasp(self):
+        payload = [
+            {'Index': 2, 'InterfaceType': 'USB', 'Model': 'Flash stick', 'Size': 4096000,
+             'BytesPerSector': 512, 'SerialNumber': 'USB2'},
+            {'Index': 4, 'InterfaceType': 'SCSI', 'Model': 'USB attached SCSI drive',
+             'Size': 8192000, 'BytesPerSector': 512, 'SerialNumber': 'UASP4'},
+        ]
+        def run(cmd, timeout=None):
+            joined = ' '.join(cmd).lower()
+            if 'get-ciminstance' in joined:
+                return json.dumps(payload).encode()
+            if 'inspect-windows-disk' in joined:
+                return json.dumps({'number': 4, 'bus': 'USB', 'size_bytes': 8192000}).encode()
+            raise AssertionError('Unexpected fallback')
+        self.assertEqual([d.id for d in windows_devices(run)],
+                         ['windows:PhysicalDrive2', 'windows:PhysicalDrive4'])
+
+    def test_windows_cim_rejects_native_different_disk(self):
+        payload = [{'Index': 3, 'InterfaceType': 'SCSI', 'Model': 'Unknown',
+                    'Size': 10000000000, 'BytesPerSector': 512, 'SerialNumber': 'ABC'}]
+        def run(cmd, timeout=None):
+            joined = ' '.join(cmd).lower()
+            if 'get-ciminstance' in joined:
+                return json.dumps(payload).encode()
+            if 'inspect-windows-disk' in joined:
+                return json.dumps({'number': 3, 'bus': 'USB', 'size_bytes': 9000000000}).encode()
+            if cmd[0] == 'wmic':
+                return b'Node,BytesPerSector,Index,InterfaceType,Model,SerialNumber,Size\n'
+            return b'[]'
+        self.assertEqual(windows_devices(run), [])
+
+    def test_windows_native_inventory_when_all_storage_providers_fail(self):
+        # Failing USB bridges can wedge PowerShell/CIM even though the native
+        # read-only descriptor remains available. Never treat this as write
+        # permission or invent a serial number.
+        def run(cmd, timeout=None):
+            joined = ' '.join(cmd).lower()
+            if 'inspect-windows-disk' in joined:
+                index = int(cmd[-1])
+                if index == 4:
+                    return json.dumps({'number': 4, 'bus': 'USB',
+                        'model': 'USB rescue patient', 'size_bytes': 4096000,
+                        'logical_sector_bytes': 512}).encode()
+                return json.dumps({'number': index, 'bus': 'SATA',
+                    'size_bytes': 8192000, 'logical_sector_bytes': 512}).encode()
+            raise RuntimeError('Windows storage provider unavailable')
+        found = windows_devices(run)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].id, 'windows:PhysicalDrive4')
+        self.assertEqual(found[0].serial, '')
+        self.assertEqual(found[0].provenance, 'native-readonly-inventory')
+        self.assertEqual(found[0].public()['serial_suffix'], 'unavailable')
+
+    def test_native_inventory_never_admits_internal_sata(self):
+        from driverepair_desktop.devices import _windows_devices_from_native
+        def run(cmd, timeout=None):
+            index = int(cmd[-1])
+            return json.dumps({'number': index, 'bus': 'SATA',
+                'size_bytes': 1000000000, 'logical_sector_bytes': 512}).encode()
+        self.assertEqual(_windows_devices_from_native(run, max_index=2), [])
+
     def test_select_matches_list_fingerprint_when_get_disk_size_disagrees(self):
         # USB bridges often report a different Size via Get-Disk than CIM.
         cim = [{"Index": 2, "InterfaceType": "USB", "Model": "USB flash",

@@ -1,0 +1,626 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index f30f9f0..5b2810e 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,13 @@
+ # Changelog
+ 
++## 0.3.3b26 — 2026-11-19: Windows USB discovery and write-gate regression fixes
++
++- Fixed a **real repair-blocking contradiction**: Windows inventory was changed to CIM-first, but the journal preflight still rejected every disk whose provenance wasn't literally `Get-Disk`. The journal preflight now repeats the independent authoritative `Get-Disk` external/online/non-system safety gate regardless of inventory source. This does **not** waive device serial, SMART/media policy, locking, separate journal, explicit consent, or readback requirements.
++- Recognize USB-attached SCSI/UASP disks only when a separate bounded Windows native descriptor confirms USB transport, drive index, and compatible capacity. A second USB device is no longer silently hidden when a different device already advertises USB directly.
++- Add a last-resort **read-only** native USB inventory when Windows CIM, WMIC and Storage cmdlets cannot discover drives. It does not fabricate serial numbers or qualify raw writes.
++- Bound Qt inventory discovery and surface the actual failure/timeout instead of displaying an indefinite "Looking for external drives" placeholder. Invalid inventories clear stale drive selections safely.
++- Added synthetic Windows identification, identity-conflict, and independent write-preflight regression tests. Native Windows USB behavior and real physical-drive repair remain hardware qualification items.
++
+ ## 0.3.3b25 — 2026-11-19: Media-aware Repair & Restore actions
+ 
+ - Replaced the misleading disabled "Start authorized repair" control with a **context-aware** primary action. When the selected device is an SSD or removable flash drive, it switches to read-only image rescue instead of attempting HDD sector refresh. Unknown HDDs trigger read-only identification; corroborated HDDs retain their independent guarded rewrite checks. Switching workspaces never starts a physical write.
+diff --git a/README.md b/README.md
+index 23468be..278eb6a 100644
+--- a/README.md
++++ b/README.md
+@@ -242,6 +242,10 @@ Drive condition scores are **evidence-based diagnostics**, not exact remaining-l
+ 
+ ## Troubleshooting
+ 
++**No external drive appears in the Windows selector.** Press **Refresh** and allow Windows storage discovery to finish. The workstation now shows when discovery is slow or has timed out. Some USB/UASP enclosures identify as SCSI: DriveRepair only includes them after a separate read-only Windows USB-transport check. If Windows inventory commands fail entirely, a native read-only fallback may still list the disk, but it does not supply a trustworthy serial or authorize any physical writes. In an Administrator terminal, compare `python -m driverepair_desktop list --json` against Disk Management; see [Windows USB discovery and repair preflight](docs/WINDOWS_USB_DISCOVERY_B26.md).
++
++**A known HDD appears but repair is blocked.** The physical-write path requires an independently verified external, online, non-system disk, device identity, eligible HDD-media/health policy, explicit consent, exclusive access, and a durable journal located on separate storage. In earlier revisions, the journal preflight incorrectly rejected **all CIM-discovered devices** even after a Get-Disk gate passed; b26 corrects that contradiction. A missing serial, unverified medium, mounted disk, or blocked USB adapter can still veto repair.
++
+ **The Flash button is grey.** Check all three wizard steps: select the USB **target**, type the exact `ERASE <device-id>` phrase, and **check the permanent-data-loss checkbox**. The status line explains the first missing step. Flashing is different from **Rescue data**, which saves the patient's readable bytes to a new image.
+ 
+ **Targeted HDD repair is disabled.** This is usually missing stable identity or SMART rotation/health evidence from the USB bridge. Use **Check HDD eligibility**. Install `smartmontools`, ensure the enclosure supports ATA SAT pass-through, or safely test offline via direct SATA; the software will not infer permission to write from a Seagate/SMR model label alone. Rescue to image remains available.
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index d498a8f..595e7af 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b25"
++__version__ = "0.3.3b26"
+diff --git a/desktop/driverepair_desktop/cli.py b/desktop/driverepair_desktop/cli.py
+index 6fe3b5f..ec030e3 100644
+--- a/desktop/driverepair_desktop/cli.py
++++ b/desktop/driverepair_desktop/cli.py
+@@ -499,8 +499,14 @@ def _validate_live_refresh_preflight(device, journal: str, *, ramdisk: bool = Fa
+     """Fail closed unless journal is on demonstrably separate storage."""
+     if not device.serial:
+         raise RuntimeError("Destructive refresh requires a stable hardware serial")
+-    if sys.platform == 'win32' and device.provenance != 'Get-Disk':
+-        raise RuntimeError('Live refresh requires verified Get-Disk discovery; legacy WMI inventory is read-only')
++    if sys.platform == 'win32':
++        # Inventory became CIM-first because USB docks can wedge Get-Disk.
++        # Requiring the inventory *provenance* to equal "Get-Disk" made every
++        # otherwise eligible CIM-discovered HDD fail before journal preflight.
++        # Instead repeat the independent, authoritative Get-Disk online /
++        # external / non-system gate here, regardless of the read-only finder.
++        # This must never be waived for native-only or legacy discoveries.
++        assert_windows_external_write_gate(device)
+     if sys.platform.startswith("linux"):
+         _verify_linux_patient_not_in_use(device)
+         # The journal has not been created yet; inspect its nearest parent mount.
+diff --git a/desktop/driverepair_desktop/devices.py b/desktop/driverepair_desktop/devices.py
+index 39a7442..86238c0 100644
+--- a/desktop/driverepair_desktop/devices.py
++++ b/desktop/driverepair_desktop/devices.py
+@@ -12,6 +12,7 @@ import plistlib
+ import re
+ import subprocess
+ import sys
++from concurrent.futures import ThreadPoolExecutor
+ from dataclasses import dataclass
+ from typing import Callable
+ 
+@@ -219,7 +220,7 @@ def _windows_devices_from_get_disk(run: Callable[..., bytes], number: int | None
+               "Size,LogicalSectorSize,BusType,IsBoot,IsSystem,IsOffline,Location | "
+               "ConvertTo-Json -Compress -Depth 3")
+     data = _invoke(run, ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+-                   8 if number is not None else 12)
++                   8 if number is not None else 8)
+     records = json.loads(data.decode("utf-8-sig"))
+     if isinstance(records, dict):
+         records = [records]
+@@ -272,22 +273,76 @@ def canonicalize_windows_external_bus(raw: str | None) -> str | None:
+     return mapping.get(key)
+ 
+ 
+-def _parse_usb_disk_records(records: list[dict]) -> list[Device]:
++def _windows_native_usb_indices(records: list[dict],
++                                run: Callable[..., bytes], *, max_probes: int = 6) -> set[int]:
++    """Corroborate UASP/SCSI-labelled USB disks without trusting InterfaceType.
++
++    Modern USB attached SCSI (UASP) adapters can appear as ``SCSI`` in
++    Win32_DiskDrive. Never assume that SCSI is external; ask the native Windows
++    storage descriptor *in a time-bounded separate process* and compare index
++    and size. This is inventory evidence only, NOT raw-write authorization.
++    """
++    verified: set[int] = set()
++    probes = 0
++    for record in records:
++        bus = canonicalize_windows_external_bus(str(record.get('InterfaceType') or
++                                                    record.get('BusType') or ''))
++        if bus == 'usb':
++            continue
++        try:
++            index = int(record.get('Index', record.get('Number')))
++        except (ValueError, TypeError):
++            continue
++        if index < 0 or index > 255:
++            continue
++        pnp = str(record.get('PNPDeviceID') or '').upper().strip()
++        # A known internal bus need not consume a native probe. SCSI may be
++        # USB/UASP or internal SAS, so the native bus is decisive here.
++        if pnp.startswith(('IDE\\', 'NVME\\', 'PCI\\')):
++            continue
++        if probes >= max_probes:
++            break
++        probes += 1
++        try:
++            raw = _invoke(run, [sys.executable, '-m', 'driverepair_desktop',
++                                'inspect-windows-disk', '--number', str(index)], 3)
++            metadata = json.loads(raw.decode('utf-8-sig'))
++            if not isinstance(metadata, dict) or metadata.get('number') != index:
++                continue
++            if canonicalize_windows_external_bus(str(metadata.get('bus') or '')) != 'usb':
++                continue
++            size = _positive_int(record.get('Size'))
++            native_size = _positive_int(metadata.get('size_bytes'))
++            # A few adapters round a capacity differently; do not accept a
++            # native result that describes a clearly different physical disk.
++            if not size or not native_size or abs(size - native_size) > 16 * 1024 * 1024:
++                continue
++            verified.add(index)
++        except (RuntimeError, OSError, ValueError, TypeError, UnicodeError,
++                json.JSONDecodeError):
++            continue
++    return verified
++
++
++def _parse_usb_disk_records(records: list[dict], *,
++                            native_usb_indices: set[int] | None = None) -> list[Device]:
+     devices: list[Device] = []
+     for record in records or []:
+         bus = canonicalize_windows_external_bus(
+             str(record.get("InterfaceType") or record.get("BusType") or "")
+         )
+-        # CIM/WMIC inventory stays USB-class only (SD/MMC typically appear as USB
+-        # when docked). Get-Disk keeps the broader external set separately.
+-        if bus != "usb":
+-            continue
+         try:
+             number = int(record.get("Index", record.get("Number")))
+         except (KeyError, ValueError, TypeError):
+             continue
+         if number < 0:
+             continue
++        native_verified = number in (native_usb_indices or set())
++        # Native evidence can establish USB transport when the legacy CIM
++        # interface is labelled SCSI/UASP. It cannot authorize a write.
++        if bus != "usb" and not native_verified:
++            continue
++        bus = "usb"
+         size = _positive_int(record.get("Size"))
+         sector = _positive_int(
+             record.get("BytesPerSector") or record.get("LogicalSectorSize"), 512
+@@ -298,12 +353,14 @@ def _parse_usb_disk_records(records: list[dict]) -> list[Device]:
+         model = str(record.get("Model") or record.get("FriendlyName") or "External USB disk").strip()
+         serial = str(record.get("SerialNumber") or record.get("UniqueId") or "").strip()
+         devices.append(Device(
+-            f"windows:PhysicalDrive{number}", path, model, size, sector, bus, serial, "", "legacy-inventory",
++            f"windows:PhysicalDrive{number}", path, model, size, sector, bus, serial, "",
++            "cim-native-usb" if native_verified else "legacy-inventory",
+         ))
+     return devices
+ 
+ 
+-def _windows_devices_from_cim(run: Callable[..., bytes], number: int | None = None) -> list[Device]:
++def _windows_devices_from_cim(run: Callable[..., bytes], number: int | None = None,
++                              observed_sizes: dict[int, int] | None = None) -> list[Device]:
+     """Fallback when Get-Disk hangs after USB dock reseat (common on Windows).
+ 
+     Prefer ``-Filter Index=N`` for mid-job reselect after heavy patient I/O —
+@@ -312,29 +369,45 @@ def _windows_devices_from_cim(run: Callable[..., bytes], number: int | None = No
+     if number is not None:
+         script = (
+             f"Get-CimInstance Win32_DiskDrive -Filter \"Index={int(number)}\" | "
+-            "Select-Object Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector | "
++            "Select-Object Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector,PNPDeviceID | "
+             "ConvertTo-Json -Compress -Depth 3"
+         )
+         timeout = 8
+     else:
+         script = (
+             "Get-CimInstance Win32_DiskDrive | "
+-            "Select-Object Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector | "
++            "Select-Object Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector,PNPDeviceID | "
+             "ConvertTo-Json -Compress -Depth 3"
+         )
+-        timeout = 20
++        timeout = 9
+     data = _invoke(run, ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], timeout)
+     records = json.loads(data.decode("utf-8-sig"))
+     if isinstance(records, dict):
+         records = [records]
+-    return _parse_usb_disk_records(list(records or []))
++    records = list(records or [])
++    if observed_sizes is not None:
++        for record in records:
++            try:
++                index = int(record.get('Index', record.get('Number')))
++            except (ValueError, TypeError):
++                continue
++            size = _positive_int(record.get('Size'))
++            if 0 <= index <= 255 and size:
++                observed_sizes[index] = size
++    direct = _parse_usb_disk_records(records)
++    # Windows may expose one USB disk directly and another as SCSI/UASP.
++    # Retain the direct inventory and independently corroborate remaining
++    # candidates instead of silently hiding one of the patient's disks.
++    verified = _windows_native_usb_indices(records, run)
++    extra = _parse_usb_disk_records(records, native_usb_indices=verified)
++    return extra if verified else direct
+ 
+ 
+ def _windows_devices_from_wmic(run: Callable[..., bytes]) -> list[Device]:
+     """Last-resort fallback: WMIC avoids nested PowerShell / Storage-cmdlet hangs."""
+     data = _invoke(run,
+         ["wmic", "diskdrive", "get",
+-         "Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector", "/format:csv"], 20)
++         "Index,Model,Size,InterfaceType,SerialNumber,BytesPerSector", "/format:csv"], 5)
+     text = data.decode("utf-8-sig", errors="replace").strip()
+     lines = [ln for ln in text.splitlines() if ln.strip()]
+     if len(lines) < 2:
+@@ -350,6 +423,51 @@ def _windows_devices_from_wmic(run: Callable[..., bytes]) -> list[Device]:
+     return _parse_usb_disk_records(records)
+ 
+ 
++def _windows_devices_from_native(run: Callable[..., bytes], *, max_index: int = 15,
++                                 observed_sizes: dict[int, int] | None = None) -> list[Device]:
++    """Last-resort read-only USB inventory when CIM/Get-Disk/WMIC are unavailable.
++
++    Query a bounded set of physical-drive numbers through isolated, timeout-
++    limited native descriptor workers. Native USB is transport evidence, not
++    a proof of drive serial, non-system status, media type, or write safety.
++    Unverified serials stay blank and the existing Get-Disk write gate remains
++    mandatory. Never enumerate logical partitions or attempt a media write.
++    """
++    def one(number: int) -> Device | None:
++        try:
++            raw = _invoke(run, [sys.executable, '-m', 'driverepair_desktop',
++                                'inspect-windows-disk', '--number', str(number)], 2.5)
++            info = json.loads(raw.decode('utf-8-sig'))
++            if not isinstance(info, dict) or info.get('number') != number:
++                return None
++            bus = canonicalize_windows_external_bus(str(info.get('bus') or ''))
++            if bus != 'usb':
++                return None
++            size = _positive_int(info.get('size_bytes'))
++            sector = _positive_int(info.get('logical_sector_bytes'), 512)
++            if not size or not sector or size % sector:
++                return None
++            # A conflicting CIM size at the same physical-disk number can be
++            # evidence of USB disconnect/re-enumeration. Do not silently use
++            # a native disk with contradictory identity as the same patient.
++            claimed = (observed_sizes or {}).get(number)
++            if claimed and abs(claimed - size) > 16 * 1024 * 1024:
++                return None
++            model = str(info.get('model') or f'External USB disk {number}').strip()
++            if not model:
++                model = f'External USB disk {number}'
++            return Device(f'windows:PhysicalDrive{number}', rf'\\.\PhysicalDrive{number}',
++                          model, size, sector, bus, '', '', 'native-readonly-inventory')
++        except (RuntimeError, OSError, ValueError, TypeError, UnicodeError):
++            return None
++
++    if not 0 <= max_index <= 255:
++        raise ValueError('Invalid native inventory index limit')
++    with ThreadPoolExecutor(max_workers=4) as pool:
++        candidates = list(pool.map(one, range(max_index + 1)))
++    return [item for item in candidates if item is not None]
++
++
+ def windows_devices(run: Callable[..., bytes] = _run) -> list[Device]:
+     # Inventory prefers CIM/WMIC first. Get-Disk frequently hangs after USB dock
+     # reseat on Windows and can stall the Storage stack so later finders also
+@@ -358,16 +476,28 @@ def windows_devices(run: Callable[..., bytes] = _run) -> list[Device]:
+     # informational; select_external_device still requires Get-Disk for writes.
+     errors: list[str] = []
+     last_empty: list[Device] | None = None
++    cim_sizes: dict[int, int] = {}
+     for finder in (_windows_devices_from_cim, _windows_devices_from_wmic,
+                    _windows_devices_from_get_disk):
+         try:
+-            found = finder(run)
++            found = (finder(run, observed_sizes=cim_sizes)
++                     if finder is _windows_devices_from_cim else finder(run))
+             if found:
+                 return found
+             last_empty = found
+         except (RuntimeError, json.JSONDecodeError, ValueError, TypeError, OSError) as exc:
+             errors.append(f"{finder.__name__}: {exc}")
+             continue
++    # The modern Windows storage stack can leave *all three* cmdlet/WMI
++    # providers unresponsive after a failing USB disk read. Native descriptor
++    # queries are a separate read-only route. Their result is explicitly not a
++    # physical-write authorization; the normal Get-Disk gate is never skipped.
++    try:
++        native = _windows_devices_from_native(run, observed_sizes=cim_sizes)
++        if native:
++            return native
++    except (RuntimeError, OSError, ValueError, TypeError) as exc:
++        errors.append(f"native-readonly: {exc}")
+     if last_empty is not None:
+         return last_empty
+     raise RuntimeError("Windows external-disk discovery failed (" + "; ".join(errors) + ")")
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+index cad6c25..a7f342e 100644
+--- a/desktop/driverepair_desktop/qtgui.py
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -574,6 +574,11 @@ def launch():
+             self._reconnect_timer.timeout.connect(self.refresh_devices)
+             self.proc = None
+             self.inventory_proc = None
++            self._inventory_timed_out = False
++            self._inventory_timeout = QTimer(self)
++            self._inventory_timeout.setSingleShot(True)
++            self._inventory_timeout.setInterval(32000)
++            self._inventory_timeout.timeout.connect(self.inventory_timed_out)
+             self.setStyleSheet(css)
+             shell=QWidget()
+             shell_layout=QHBoxLayout(shell)
+@@ -2571,27 +2576,79 @@ def launch():
+ 
+         def refresh_devices(self):
+             if self.inventory_proc and self.inventory_proc.state()!=QProcess.NotRunning:
++                self.device_note.setText('Windows drive discovery is already running. '
++                    'The OS may be waiting for a USB device; no scan or repair has started.')
+                 return
+-            self.device_note.setText('Looking for external drives…')
++            self._inventory_timed_out = False
++            self.device_note.setText('Identifying external disks using Windows storage inventory…'
++                if sys.platform=='win32' else 'Looking for external drives…')
+             self.inventory_proc=QProcess(self)
+             self.inventory_proc.setProgram(cli_prefix()[0])
+             self.inventory_proc.setArguments(cli_prefix()[1:]+[
+                 'list-all-linux' if (sys.platform=='linux' and self.offline_devices.isChecked())
+                 else 'list','--json'])
+             self.inventory_proc.finished.connect(self.inventory_done)
++            self.inventory_proc.errorOccurred.connect(self.inventory_error)
+             self.inventory_proc.start()
++            self._inventory_timeout.start()
++            proc = self.inventory_proc
++            def announce_slow_inventory():
++                if (self.inventory_proc is proc and
++                    proc.state()!=QProcess.NotRunning and not self._inventory_timed_out):
++                    self.device_note.setText('Windows USB discovery is taking longer than expected. '
++                        'Checking alternate inventory methods. A stalled USB bridge can delay '
++                        'Windows; no disk writes have started.')
++            QTimer.singleShot(8000, announce_slow_inventory)
++
++        def inventory_timed_out(self):
++            proc = self.inventory_proc
++            if proc is None or proc.state()==QProcess.NotRunning:
++                return
++            self._inventory_timed_out = True
++            self.device_note.setText('Windows device discovery did not finish in 32 seconds. '
++                'Check the USB connection, Disk Management, or try another port; '
++                'then press Refresh. No disk writes were attempted.')
++            self.note_log('Device discovery worker exceeded 32-second GUI deadline; terminating child.')
++            proc.kill()  # Qt is not blocked by an unresponsive PowerShell subprocess
++
++        def inventory_error(self, error):
++            if error == QProcess.ProcessError.FailedToStart:
++                self._inventory_timeout.stop()
++                self._inventory_timed_out = False
++                self.device_note.setText('Drive inventory could not start. Confirm the Python '
++                    'application and its DriveRepair module are installed, then Refresh.')
++                self._devices=[]
++                self.device_box.clear()
++                self.update_action_state()
++
+         def inventory_done(self,code,_status):
++            self._inventory_timeout.stop()
+             stdout=bytes(self.inventory_proc.readAllStandardOutput()).decode('utf-8','replace')
+             stderr=bytes(self.inventory_proc.readAllStandardError()).decode('utf-8','replace')
+-            if code!=0:
+-                self.device_note.setText('Device discovery failed. Reconnect the USB dock and retry; never bypass identity checks.')
++            if code!=0 or self._inventory_timed_out:
++                if self._inventory_timed_out:
++                    self.device_note.setText('Windows inventory timed out; reconnect or inspect '
++                        'the dock in Disk Management, then Refresh. No source writes attempted.')
++                else:
++                    detail = stderr.strip().splitlines()[-1][:260] if stderr.strip() else 'No diagnostic details returned.'
++                    self.device_note.setText('Drive discovery failed: '+detail+
++                        '  Check the USB connection and press Refresh.')
++                self._devices=[]
++                self.device_box.clear()
+                 self.note_log(stderr[:3000])
+                 self.update_action_state()
+                 return
+             try:
+                 data=json.loads(stdout)
++                if not isinstance(data, list) or not all(isinstance(item,dict) for item in data):
++                    raise ValueError('Expected an array of device records')
+             except (ValueError,TypeError):
+-                self.device_note.setText('Could not interpret drive inventory')
++                self.device_note.setText('Drive inventory returned an invalid response. '
++                    'Refresh, then use Expert log to inspect the discovery error.')
++                self._devices=[]
++                self.device_box.clear()
++                self.note_log('Invalid inventory response: '+stdout[:1000]+stderr[:300])
++                self.update_action_state()
+                 return
+             prev=self.device_box.currentData()
+             self.device_box.clear()
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index 2e640e7..619ac38 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b25"
++version = "0.3.3b26"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_b26_discovery_and_write_gate.py b/desktop/tests/test_b26_discovery_and_write_gate.py
+new file mode 100644
+index 0000000..d11b44a
+--- /dev/null
++++ b/desktop/tests/test_b26_discovery_and_write_gate.py
+@@ -0,0 +1,54 @@
++"""Regression for Windows CIM-first inventory vs independent raw-write gate.
++
++All tests are synthetic. Never open or write a physical disk in CI.
++"""
++from __future__ import annotations
++
++import subprocess
++import unittest
++from unittest import mock
++
++from driverepair_desktop import cli
++from driverepair_desktop.devices import Device
++
++
++class WindowsWritePreflightRegression(unittest.TestCase):
++    def setUp(self):
++        self.patient = Device('windows:PhysicalDrive4', r'\\.\PhysicalDrive4',
++                              'ST1000LM048 USB Device', 1000000000000, 512,
++                              'usb', 'SERIAL-TEST', provenance='legacy-inventory')
++
++    def test_verified_cim_inventory_may_pass_journal_check(self):
++        """An independent Get-Disk gate matters, not the original finder label."""
++        completed = subprocess.CompletedProcess(['powershell'], 0, b'2', b'')
++        with (mock.patch.object(cli.sys, 'platform', 'win32'),
++              mock.patch.object(cli, 'assert_windows_external_write_gate') as gate,
++              mock.patch.object(cli.os.path, 'abspath', return_value=r'D:\journal'),
++              mock.patch.object(cli.os.path, 'splitdrive', return_value=('D:', r'\journal')),
++              mock.patch.object(cli.subprocess, 'run', return_value=completed) as ps):
++            cli._validate_live_refresh_preflight(self.patient, r'D:\journal')
++        gate.assert_called_once_with(self.patient)
++        self.assertIn('Get-Partition', ps.call_args.args[0][-1])
++
++    def test_unverified_identity_still_blocks_before_write(self):
++        no_serial = Device(self.patient.id, self.patient.path, self.patient.model,
++                           self.patient.size_bytes, 512, 'usb', '',
++                           provenance='native-readonly-inventory')
++        with (mock.patch.object(cli.sys, 'platform', 'win32'),
++              mock.patch.object(cli, 'assert_windows_external_write_gate') as gate):
++            with self.assertRaisesRegex(RuntimeError, 'stable hardware serial'):
++                cli._validate_live_refresh_preflight(no_serial, r'D:\journal')
++        gate.assert_not_called()
++
++    def test_get_disk_denial_still_blocks_cim_disk(self):
++        with (mock.patch.object(cli.sys, 'platform', 'win32'),
++              mock.patch.object(cli, 'assert_windows_external_write_gate',
++                                side_effect=RuntimeError('System disk or offline')),
++              mock.patch.object(cli.subprocess, 'run') as ps):
++            with self.assertRaisesRegex(RuntimeError, 'System disk or offline'):
++                cli._validate_live_refresh_preflight(self.patient, r'D:\journal')
++        ps.assert_not_called()
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/desktop/tests/test_devices.py b/desktop/tests/test_devices.py
+index d29440e..f1aeab5 100644
+--- a/desktop/tests/test_devices.py
++++ b/desktop/tests/test_devices.py
+@@ -75,6 +75,92 @@ class DiscoveryTests(unittest.TestCase):
+         self.assertEqual(disks[0].path, r"\\.\PhysicalDrive2")
+         self.assertEqual(disks[0].provenance, "legacy-inventory")
+ 
++    def test_windows_cim_uasp_scsi_requires_native_usb_confirmation(self):
++        # A modern UASP enclosure can advertise SCSI in Win32_DiskDrive even
++        # though the physical transport is USB. Do not classify all SCSI as USB.
++        payload = [
++            {'Index': 0, 'InterfaceType': 'SCSI', 'Model': 'Internal SAS',
++             'Size': 100000000000, 'BytesPerSector': 512, 'SerialNumber': 'INT'},
++            {'Index': 3, 'InterfaceType': 'SCSI', 'Model': 'ST1000LM048 USB Device',
++             'Size': 1000000000000, 'BytesPerSector': 512, 'SerialNumber': 'DISK-SERIAL',
++             'PNPDeviceID': 'SCSI\\DISK&VEN_SEAGATE'},
++        ]
++        def run(cmd, timeout=None):
++            joined = ' '.join(cmd).lower()
++            if 'get-ciminstance' in joined:
++                return json.dumps(payload).encode()
++            if 'inspect-windows-disk' in joined:
++                number = int(cmd[-1])
++                return json.dumps({'number': number, 'bus': 'USB' if number == 3 else 'SAS',
++                    'size_bytes': 1000000000000 if number == 3 else 100000000000}).encode()
++            raise AssertionError('Other discovery tools should not run')
++        result = windows_devices(run)
++        self.assertEqual([d.id for d in result], ['windows:PhysicalDrive3'])
++        self.assertEqual(result[0].bus, 'usb')
++        self.assertEqual(result[0].provenance, 'cim-native-usb')
++        self.assertEqual(result[0].serial, 'DISK-SERIAL')
++
++    def test_windows_cim_mixed_usb_and_scsi_uasp(self):
++        payload = [
++            {'Index': 2, 'InterfaceType': 'USB', 'Model': 'Flash stick', 'Size': 4096000,
++             'BytesPerSector': 512, 'SerialNumber': 'USB2'},
++            {'Index': 4, 'InterfaceType': 'SCSI', 'Model': 'USB attached SCSI drive',
++             'Size': 8192000, 'BytesPerSector': 512, 'SerialNumber': 'UASP4'},
++        ]
++        def run(cmd, timeout=None):
++            joined = ' '.join(cmd).lower()
++            if 'get-ciminstance' in joined:
++                return json.dumps(payload).encode()
++            if 'inspect-windows-disk' in joined:
++                return json.dumps({'number': 4, 'bus': 'USB', 'size_bytes': 8192000}).encode()
++            raise AssertionError('Unexpected fallback')
++        self.assertEqual([d.id for d in windows_devices(run)],
++                         ['windows:PhysicalDrive2', 'windows:PhysicalDrive4'])
++
++    def test_windows_cim_rejects_native_different_disk(self):
++        payload = [{'Index': 3, 'InterfaceType': 'SCSI', 'Model': 'Unknown',
++                    'Size': 10000000000, 'BytesPerSector': 512, 'SerialNumber': 'ABC'}]
++        def run(cmd, timeout=None):
++            joined = ' '.join(cmd).lower()
++            if 'get-ciminstance' in joined:
++                return json.dumps(payload).encode()
++            if 'inspect-windows-disk' in joined:
++                return json.dumps({'number': 3, 'bus': 'USB', 'size_bytes': 9000000000}).encode()
++            if cmd[0] == 'wmic':
++                return b'Node,BytesPerSector,Index,InterfaceType,Model,SerialNumber,Size\n'
++            return b'[]'
++        self.assertEqual(windows_devices(run), [])
++
++    def test_windows_native_inventory_when_all_storage_providers_fail(self):
++        # Failing USB bridges can wedge PowerShell/CIM even though the native
++        # read-only descriptor remains available. Never treat this as write
++        # permission or invent a serial number.
++        def run(cmd, timeout=None):
++            joined = ' '.join(cmd).lower()
++            if 'inspect-windows-disk' in joined:
++                index = int(cmd[-1])
++                if index == 4:
++                    return json.dumps({'number': 4, 'bus': 'USB',
++                        'model': 'USB rescue patient', 'size_bytes': 4096000,
++                        'logical_sector_bytes': 512}).encode()
++                return json.dumps({'number': index, 'bus': 'SATA',
++                    'size_bytes': 8192000, 'logical_sector_bytes': 512}).encode()
++            raise RuntimeError('Windows storage provider unavailable')
++        found = windows_devices(run)
++        self.assertEqual(len(found), 1)
++        self.assertEqual(found[0].id, 'windows:PhysicalDrive4')
++        self.assertEqual(found[0].serial, '')
++        self.assertEqual(found[0].provenance, 'native-readonly-inventory')
++        self.assertEqual(found[0].public()['serial_suffix'], 'unavailable')
++
++    def test_native_inventory_never_admits_internal_sata(self):
++        from driverepair_desktop.devices import _windows_devices_from_native
++        def run(cmd, timeout=None):
++            index = int(cmd[-1])
++            return json.dumps({'number': index, 'bus': 'SATA',
++                'size_bytes': 1000000000, 'logical_sector_bytes': 512}).encode()
++        self.assertEqual(_windows_devices_from_native(run, max_index=2), [])
++
+     def test_select_matches_list_fingerprint_when_get_disk_size_disagrees(self):
+         # USB bridges often report a different Size via Get-Disk than CIM.
+         cim = [{"Index": 2, "InterfaceType": "USB", "Model": "USB flash",
+diff --git a/docs/WINDOWS_USB_DISCOVERY_B26.md b/docs/WINDOWS_USB_DISCOVERY_B26.md
+new file mode 100644
+index 0000000..74784d9
+--- /dev/null
++++ b/docs/WINDOWS_USB_DISCOVERY_B26.md
+@@ -0,0 +1,34 @@
++# Windows USB discovery and repair preflight — b26
++
++## What changed
++
++1. Windows CIM (`Win32_DiskDrive`) sometimes labels UASP-attached disks **SCSI**. DriveRepair now asks its separate, read-only native storage descriptor worker to verify **USB transport, index and disk length** before including those devices in the external inventory. A SCSI label alone never qualifies a disk as USB.
++2. If CIM, WMIC and `Get-Disk` all fail or return no usable disks, DriveRepair queries a bounded range of native physical-disk handles in child processes. Native-only inventory is **read-only evidence** with no trusted serial. It cannot authorize in-place repair or unattended rescue requiring an authoritative serial.
++3. Qt now times out a stuck inventory worker and displays failure diagnostics rather than an indefinite “Looking for drives” placeholder. Errors are also written to the optional local GUI debug log.
++4. **Critical repair bug:** a later Windows journal preflight previously required the inventory source label `Get-Disk` even though the inventory was deliberately CIM-first. The preflight now runs an **independent `Get-Disk` external, online, non-boot/system gate** regardless of which method found the disk. This fixes a logic contradiction without skipping any gate.
++
++## Windows hardware acceptance test (not executed in CI)
++
++Run from an Administrator terminal with the app installed and a **sacrificial** USB HDD connected. First ensure the source disk contains no irreplaceable data.
++
++```powershell
++python -m driverepair_desktop list --json
++python -m driverepair_desktop inspect-windows-disk --number 4 --json
++```
++
++Replace `4` with the disk number actually returned by inventory. Corroborate against Disk Management and `Get-Disk`. Do not use a guessed PhysicalDrive number. The second command is **read-only** and never grants write authority.
++
++Open the Qt application. Confirm external disks are listed without waiting indefinitely. Test an ordinary USB flash drive, the SanDisk SSD, the Seagate HDD, and a UASP enclosure if available. Reconnect the dock, press Refresh and verify that any new PhysicalDrive number is checked again.
++
++### Qualifying a sacrificial HDD repair
++
++- The Seagate **model catalogue** alone must not authorize rewrites. Collect current device serial, HDD/media evidence and the independently checked Get-Disk state.
++- If the bridge hides identity, keep the disk read-only; try a known compatible SAT enclosure or direct SATA rather than faking SMART evidence.
++- Make a complete recovery image to separate, healthy storage; check the recovery journal for missing bytes.
++- With an independently backed-up sacrificial disk only, verify consent, stable identity, Windows exclusive locks and a separately located durable journal. Attempt a *small* eligible HDD maintenance batch.
++- Record original SHA-256 digests, post-write independent reads, health warnings and the final outcome; do not treat a completed write transaction as recovered unreadable data.
++- Repeat after a USB reconnect and with an injected `Get-Disk` failure. The operation must fail closed if the disk is missing, boot/system, offline, has an identity mismatch, or cannot be locked.
++
++### Important limitations
++
++The code's Windows device handling has not been exercised on this machine. Native descriptor queries can fail due to driver permissions, and some USB docks hide the HDD or serial permanently. A correct Qt inventory does **not** establish successful physical repair. The public-beta build still prohibits patient writes; only the guarded experimental build can attempt approved HDD maintenance on suitable hardware.

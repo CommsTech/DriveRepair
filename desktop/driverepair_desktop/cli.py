@@ -499,8 +499,14 @@ def _validate_live_refresh_preflight(device, journal: str, *, ramdisk: bool = Fa
     """Fail closed unless journal is on demonstrably separate storage."""
     if not device.serial:
         raise RuntimeError("Destructive refresh requires a stable hardware serial")
-    if sys.platform == 'win32' and device.provenance != 'Get-Disk':
-        raise RuntimeError('Live refresh requires verified Get-Disk discovery; legacy WMI inventory is read-only')
+    if sys.platform == 'win32':
+        # Inventory became CIM-first because USB docks can wedge Get-Disk.
+        # Requiring the inventory *provenance* to equal "Get-Disk" made every
+        # otherwise eligible CIM-discovered HDD fail before journal preflight.
+        # Instead repeat the independent, authoritative Get-Disk online /
+        # external / non-system gate here, regardless of the read-only finder.
+        # This must never be waived for native-only or legacy discoveries.
+        assert_windows_external_write_gate(device)
     if sys.platform.startswith("linux"):
         _verify_linux_patient_not_in_use(device)
         # The journal has not been created yet; inspect its nearest parent mount.
