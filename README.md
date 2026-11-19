@@ -2,9 +2,9 @@
 
 **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
 
-> **Release status:** `0.3.3b18` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+> **Release status:** `0.3.3b19` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
 
-HDD maintenance includes an optional **maintenance level** ladder (1–5) with multi-sample reads and settle delays; weak statistical votes are refused. See `docs/STATISTICAL_SECTOR_RECOVERY_B18.md`. USB flash / SMART readiness notes: `docs/B18_USB_REPAIR_AND_README_QA.md`.
+The Qt workstation now selects an **automatic, bounded HDD investigation level** from available media and error evidence; it never uses a plan to bypass media-write safety. Expert CLI overrides remain for controlled laboratory work. Read [`docs/CAPACITY_AUTHENTICITY.md`](docs/CAPACITY_AUTHENTICITY.md) for the separate USB capacity-integrity test. See also `docs/STATISTICAL_SECTOR_RECOVERY_B18.md` for the level policies.
 
 [Get started](#get-started) · [Choose a workflow](#choose-a-workflow) · [Recovery USB](#create-a-recovery-usb) · [Command line](#command-line-examples) · [Troubleshooting](#troubleshooting) · [Changelog](CHANGELOG.md) · [Support](https://github.com/sponsors/CommsTech)
 
@@ -12,13 +12,19 @@ HDD maintenance includes an optional **maintenance level** ladder (1–5) with m
 
 | Workspace | You can do | What it **does not** mean |
 | --- | --- | --- |
-| **Diagnose** | Read SMART/NVMe health where available, sample or scan drive regions, view observed read delays/errors and a coverage map | A successful read is not proof that the bytes match the original file, or that the disk will remain reliable |
+| **Diagnose** | Read SMART/NVMe health where available, sample or scan drive regions, run an optional **write/restore USB capacity spot test** on a backed-up disposable drive, and export an offline HTML evidence report | A successful read is not proof that the bytes match the original file, or that the disk will remain reliable |
 | **Rescue data** | Copy readable sectors to a **new image on separate healthy storage**, record missing ranges, resume and retry bounded failed reads | A full-size image file is not proof that every byte was successfully recovered |
 | **Targeted HDD repair** | On eligible, positively identified rotational HDDs: inspect weak but repeatably readable regions and perform small, journaled, post-verified rewrites | This cannot regenerate unreadable original bytes, fix mechanical damage, or make SSD/NVMe rewrites into "repairs" |
 | **Analyze recovered images** | Recover select deleted files, carve recognized file formats, check compatible filesystems, work on a clone | File carving cannot reliably reconstruct every fragmented file or encrypted volume |
 | **Create recovery USB** | Flash a separately built DriveRepair hybrid ISO to a **disposable USB drive** with full-image readback | This **erases the USB**. It does not image/repair a patient disk or establish that BIOS/UEFI boot has been tested |
 
 **Designed for:** experienced technicians who need evidence, drive owners who want a guided recovery route, and developers testing recovery against synthetic or sacrificial disks. Raw-media repair is currently **engineering/beta only**.
+
+### New: USB capacity authenticity and detailed reports
+
+Use **Diagnose → Verify USB capacity** only on a **disposable, fully backed-up USB device**, never on a drive containing irreplaceable data. The test selects 144 distributed 4 KiB spots by default, saves each original region in a durable journal on **another physical drive**, temporarily writes random data, reads it back, and restores/independently verifies the original. A dishonest USB controller can overwrite unrelated positions, so even the write/restore design is **not data-safe** and a passing result **does not certify full capacity**. This is optional and not part of normal read-only diagnosis.
+
+After a scan or test, select **View detailed report** to save a local, themed HTML report. The report separates claimed capacity, tested locations, read errors and observed latency; expert-level address evidence is expandable, not forced on new users. No external account or upload is required. See [capacity-test precautions](docs/CAPACITY_AUTHENTICITY.md).
 
 ## Choose a workflow
 
@@ -81,22 +87,22 @@ On Windows PowerShell, run these same commands using `py` if Python is installed
 
 ```bash
 python scripts/build_desktop.py --public-beta --no-wheel
-python dist/DriveRepair-0.3.3b18-public-beta.pyz gui
+python dist/DriveRepair-0.3.3b19-public-beta.pyz gui
 ```
 
 Install optional `PySide6` in that Python environment if you want the new Qt workstation. The **public-beta** package blocks physical in-place writes. The separate **repair-beta** package may attempt the guided, HDD-only write workflow on sacrificial hardware with all safeguards enabled:
 
 ```bash
 python scripts/build_desktop.py --repair-beta --no-wheel
-python dist/DriveRepair-0.3.3b18-repair-beta.pyz qt-gui
+python dist/DriveRepair-0.3.3b19-repair-beta.pyz qt-gui
 ```
 
 For a CLI image-only example, use a source **regular file** and an unused output path:
 
 ```bash
-python dist/DriveRepair-0.3.3b18-public-beta.pyz scan-image --image source.img --mode triage --json
-python dist/DriveRepair-0.3.3b18-public-beta.pyz rescue-image --image source.img --output recovered.img --json
-python dist/DriveRepair-0.3.3b18-public-beta.pyz rescue-status --output recovered.img --json
+python dist/DriveRepair-0.3.3b19-public-beta.pyz scan-image --image source.img --mode triage --json
+python dist/DriveRepair-0.3.3b19-public-beta.pyz rescue-image --image source.img --output recovered.img --json
+python dist/DriveRepair-0.3.3b19-public-beta.pyz rescue-status --output recovered.img --json
 ```
 
 A repair-beta build is **not** a recommendation to write to a failing or valuable patient. See [hardware testing requirements](docs/USB_REPAIR_PREFLIGHT_B17.md) and [release gates](docs/RELEASE_STATUS.md).

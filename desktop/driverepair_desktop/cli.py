@@ -79,6 +79,23 @@ def parser() -> argparse.ArgumentParser:
     usb.add_argument('--confirm-identity', required=True)
     usb.add_argument('--confirm-erase', required=True)
     usb.add_argument('--ack-data-loss', action='store_true')
+    for name in ('validate-image-capacity', 'validate-usb-capacity'):
+        spot=sub.add_parser(name, help=('Image-backed authenticity spot test (writes and restores image bytes)' if name=='validate-image-capacity' else
+            'HIGH-RISK: saved-byte USB spot checks with restore journal; backup required'))
+        spot.add_argument('--image' if name=='validate-image-capacity' else '--device',required=True)
+        spot.add_argument('--journal',required=True,help='NEW durable journal path on healthy storage, never patient')
+        spot.add_argument('--samples',type=int,choices=[72,144,288,576],default=144)
+        spot.add_argument('--json',action='store_true')
+        spot.add_argument('--progress-jsonl',action='store_true')
+        spot.add_argument('--cooperative-stop-stdin',action='store_true')
+        spot.add_argument('--report-html',help='NEW .html report path')
+        if name=='validate-usb-capacity':
+            spot.add_argument('--confirm-identity',required=True)
+            spot.add_argument('--confirm-test',required=True,help='Type TEST <12-character identity hint>')
+            spot.add_argument('--ack-data-loss',action='store_true')
+            spot.add_argument('--ack-backed-up',action='store_true')
+            spot.add_argument('--restore-only',action='store_true',
+                help='ONLY restore interrupted test region from exact-matching journal')
     listing = sub.add_parser("list", help="List externally attached whole disks")
     listing.add_argument("--json", action="store_true")
     probe = sub.add_parser('probe-region', help='READ-ONLY: bounded investigation of a previously failed disk range')
@@ -175,7 +192,7 @@ def parser() -> argparse.ArgumentParser:
                          help='Advanced high-risk: confirmed CMR only, reread both sides before adding writes')
         cmd.add_argument('--repair-policy', choices=['preserve', 'balanced'], default='balanced',
                          help='Balanced retries read errors without rewriting unknown bytes')
-        cmd.add_argument('--maintenance-level', default='2',
+        cmd.add_argument('--maintenance-level', default='auto',
                          help='Statistical recovery ladder 1-5 or quick|normal|thorough|deep|extreme '
                               '(investigation + refresh; fail-closed; not a SpinRite clone)')
         cmd.add_argument('--ack-media-warning', action='store_true',
@@ -1286,8 +1303,11 @@ def _run_care(args) -> int:
     is_hardware = args.command == 'care-external'
     control = StopControl(bool(getattr(args, 'cooperative_stop_stdin', False)))
     ram_only = args.journal_backend == 'memory'
-    maintenance = resolve_maintenance_level(getattr(args, 'maintenance_level', '2'))
-    maintenance_kwargs = level_as_refresh_kwargs(maintenance)
+    chosen_level = getattr(args, 'maintenance_level', 'auto')
+    # Automatic mode requires freshly queried physical evidence below. The
+    # explicit numeric CLI ladder remains available for specialist tests.
+    maintenance = None if str(chosen_level).lower() == 'auto' else resolve_maintenance_level(chosen_level)
+
     # An explicitly opted-in, small offsets-only history file is independent
     # of a RAM-only REGION journal. No sector bytes or recovery image are saved.
     if ram_only and args.resume:
@@ -1347,6 +1367,15 @@ def _run_care(args) -> int:
         sector = 512 if size % 512 == 0 else 1
         snapshot = None
         guarded_advice = None
+
+    if maintenance is None:
+        from .automatic_maintenance import choose_maintenance
+        recommendation = choose_maintenance(
+            model=selected.model if selected else '',
+            bus=selected.bus if selected else 'image',
+            snapshot=snapshot, mode=args.mode)
+        maintenance = resolve_maintenance_level(recommendation.level)
+    maintenance_kwargs = level_as_refresh_kwargs(maintenance)
 
     # Lock only after the journal's separate-storage location was validated.
     # Volatile mode creates ZERO files, including no sidecar lock. Physical
@@ -1481,6 +1510,20 @@ def _run_care(args) -> int:
                                    history_hints=hints, sample_seed=sampling_seed,
                                    progress=scan_progress, resume_state=prior_scan,
                                    checkpoint=checkpoint_writer.save if checkpoint_writer else None)
+                if str(chosen_level).lower()=='auto':
+                    # Fresh findings may justify LESS read pressure than the
+                    # initial SMART/media strategy. Never silently escalate to
+                    # majority-vote reconstruction on a USB bridge.
+                    from .automatic_maintenance import choose_maintenance
+                    auto=choose_maintenance(
+                        model=selected.model if selected else '',
+                        bus=selected.bus if selected else 'image', snapshot=snapshot,
+                        read_errors=int(scan.get('read_error_chunks') or 0), mode=args.mode)
+                    maintenance=resolve_maintenance_level(auto.level)
+                    maintenance_kwargs=level_as_refresh_kwargs(maintenance)
+                    scan['automatic_maintenance']={'level':auto.level,
+                        'name':auto.title,'reason':auto.explanation,
+                        'note':'Investigation sampling only; not a write authorization.'}
                 if checkpoint_writer is not None:
                     scan['scan_checkpoint'] = str(checkpoint_writer.path)
                     scan['resume_requires_fresh_identity'] = True
@@ -1613,6 +1656,11 @@ def _run_care(args) -> int:
             if journal_meta.get('mode') != 'targeted' or type(journal_meta.get('chunk')) is not int:
                 raise ValueError('Not a guided targeted-refresh journal')
             chunk = journal_meta['chunk']
+            if str(chosen_level).lower()=='auto':
+                # Resume must keep its saved level. Changing the sampling
+                # agreement rules in an interrupted transaction is unsafe.
+                maintenance=resolve_maintenance_level(journal_meta.get('maintenance_level',2))
+                maintenance_kwargs=level_as_refresh_kwargs(maintenance)
 
         # Select the patient again immediately before RW; fail closed if renumbered.
         if is_hardware:
@@ -1778,6 +1826,74 @@ def run(argv: list[str] | None = None) -> int:
         from .release_policy import block_public_physical_writes
         block_public_physical_writes(args.command,
                                      execute_optimization=bool(getattr(args, 'execute', False)))
+        if args.command in {'validate-image-capacity','validate-usb-capacity'}:
+            from .capacity_validation import RegularImageWriter, validate_spots, restore_pending
+            from .drive_report import save_report
+            emitter=ProgressEmitter(enabled=bool(args.progress_jsonl),min_interval_s=.1)
+            spot_stop=StopControl(enabled=bool(args.cooperative_stop_stdin))
+            def emit_spot(event):
+                emitter.emit({**event,'probe_index':event.get('index'),
+                              'probe_total':event.get('total'),
+                              'message':f"Sample {event.get('index')} of {event.get('total')} · {event.get('status')}"})
+            from .media_refresh import assert_stable_identity, open_device_readwrite
+            if args.command=='validate-image-capacity':
+                if getattr(args,'restore_only',False):
+                    raise ValueError('Restore-only mode is reserved for external media')
+                media=RegularImageWriter(args.image)
+                device_info={'model':os.path.basename(args.image),'size_bytes':media.size,
+                             'bus':'regular image','sector_size':512}
+                try:
+                    result=validate_spots(media,size=media.size,sector=512,source_token=media.token,
+                        journal_dir=args.journal,samples=args.samples,skip_edges=0,progress=emit_spot,
+                        stop_requested=spot_stop.requested)
+                finally:
+                    media.close()
+            else:
+                # This deliberately stresses a selected USB's data. It must
+                # NEVER be offered as automatic diagnosis of a failing patient.
+                if not args.ack_data_loss or not args.ack_backed_up:
+                    raise PermissionError('USB capacity spot testing requires backup and data-loss acknowledgements')
+                selected=select_external_device(args.device)
+                if selected.bus.strip().lower()!='usb' or not selected.serial:
+                    raise PermissionError('Verified external USB bus and hardware serial required')
+                if (args.confirm_identity!=selected.fingerprint[:12] or
+                    args.confirm_test!='TEST '+selected.fingerprint[:12]):
+                    raise PermissionError('USB target identity confirmation mismatch')
+                assert_windows_external_write_gate(selected)
+                for other in list_external_devices():
+                    if other.id != selected.id and other.serial == selected.serial:
+                        raise PermissionError('Duplicate device serial; raw test refused')
+                # The durable journal must be on demonstrably separate physical
+                # storage; no file may be created on the patient during preflight.
+                _validate_live_refresh_preflight(selected,args.journal)
+                if args.report_html:
+                    # A report is written only after the test; still prove its
+                    # location is not on the patient BEFORE any raw I/O begins.
+                    if os.path.lexists(args.report_html):
+                        raise FileExistsError('Report destination already exists')
+                    _separate_live_destination(selected,args.report_html)
+                assert_patient_idle_windows(selected,allow_locked_volume=True)
+                assert_stable_identity(selected,select_external_device(args.device))
+                media=open_device_readwrite(selected,auto_lock_volumes=True)
+                try:
+                    if args.restore_only:
+                        result=restore_pending(media,args.journal,
+                            source_token=selected.fingerprint,size=selected.size_bytes,
+                            sector=selected.sector_size)
+                    else:
+                        result=validate_spots(media,size=selected.size_bytes,
+                            sector=selected.sector_size,source_token=selected.fingerprint,
+                            journal_dir=args.journal,samples=args.samples,progress=emit_spot,
+                            stop_requested=spot_stop.requested)
+                finally:
+                    media.close()
+                device_info=selected.public()
+            result['device']=device_info
+            if args.report_html:
+                result['report_path']=str(save_report(args.report_html,result,device=device_info))
+            print(json.dumps(result,indent=2) if args.json else
+                  f"{result['status']} · verified spots {result.get('verified_regions',0)}",flush=True)
+            return (0 if result['status'] in {'SAMPLED_REGIONS_VERIFIED','ORIGINAL_RESTORED_VERIFIED'} else 2)
         if args.command == 'flash-usb':
             from .usb_flash import flash_usb_iso
             def report(e):
@@ -2148,7 +2264,7 @@ def run(argv: list[str] | None = None) -> int:
                   f"readable {result['readable_bytes']:,}; read-error chunks "
                   f"{result['read_error_chunks']}")
         return 0 if result["status"] == "completed" else 2
-    except (ValueError, RuntimeError, OSError, json.JSONDecodeError, zipfile.BadZipFile) as exc:
+    except (ValueError, RuntimeError, OSError, PermissionError, json.JSONDecodeError, zipfile.BadZipFile) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

@@ -10,11 +10,11 @@ PUBLIC_BETA_IMAGE_ONLY = False  # Source checkout / engineering distribution onl
 REPAIR_BETA_GUARDED = False  # Only the explicit --repair-beta artifact enables this.
 
 PHYSICAL_WRITE_COMMANDS = frozenset({
-    'care-external', 'refresh-external', 'refresh-system',
+    'care-external', 'refresh-external', 'refresh-system', 'validate-usb-capacity',
 })
 # Image in-place refresh also writes the original source image. Public recovery
 # is copy-out-only; work on a separately created clone in engineering builds.
-IN_PLACE_WRITE_COMMANDS = PHYSICAL_WRITE_COMMANDS | {'care-image', 'refresh-image'}
+IN_PLACE_WRITE_COMMANDS = PHYSICAL_WRITE_COMMANDS | {'care-image', 'refresh-image', 'validate-image-capacity'}
 
 
 def block_public_physical_writes(command: str | None, *, execute_optimization: bool = False) -> None:
@@ -27,7 +27,7 @@ def block_public_physical_writes(command: str | None, *, execute_optimization: b
             'Choose a read-only scan or rescue to a new image instead. '
             'Hardware repair remains restricted to separately qualified engineering builds.'
         )
-    if REPAIR_BETA_GUARDED and direct_write and command != 'care-external':
+    if REPAIR_BETA_GUARDED and direct_write and command not in {'care-external','validate-usb-capacity'}:
         raise ValueError(
             'Direct media writes are unavailable in the guarded repair beta. '
             'Use the guided care-external workflow with SMART evidence, identity '

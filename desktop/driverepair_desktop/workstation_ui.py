@@ -56,6 +56,8 @@ def can_start(kind: str | None, *, device_selected: bool, image_exists: bool,
     """
     if running:
         return False, 'An operation is already running. Stop it safely before starting another.'
+    if kind == 'capacity' and public_beta:
+        return False, 'USB capacity spot tests temporarily write to the source and are unavailable in the read-only public build.'
     if kind in EXPERIMENTAL_OPERATIONS and public_beta:
         return False, 'In-place repair is unavailable in the image-first public beta.'
     if kind in IMAGE_OPERATIONS:
@@ -72,6 +74,8 @@ def can_start(kind: str | None, *, device_selected: bool, image_exists: bool,
 
 
 def operation_impact(kind: str | None) -> tuple[str, str]:
+    if kind == 'capacity':
+        return ('WRITES / RESTORES SOURCE', 'High-risk test. Temporarily writes sampled USB regions and tries to restore originals; full backup required.')
     if kind in IMAGE_OPERATIONS:
         return ('READ-ONLY SOURCE', 'Source image is read-only; a separate NEW image receives the recovered bytes.')
     family = operation_family(kind)

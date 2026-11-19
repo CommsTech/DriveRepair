@@ -1,0 +1,1409 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 13a0e9f..1caa878 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,14 @@
+ # Changelog
+ 
++## Unreleased — 2026-11-19 USB capacity-integrity spot test and visual reports (0.3.3b19)
++
++- Introduced opt-in **temporary write/restore** capacity-authenticity spot checks for externally selected USB storage in engineering/guarded builds, and regular-image fixtures for safe automated tests. A 4 KiB preimage is durably journaled before each write; two matching restore reads are required; an unverified restore stops all further writes and preserves the recovery journal. **Spoofed-capacity controllers can still overwrite untested locations.**
++- Added an original offline HTML evidence report: declared capacity, observed coverage, sampled-address heatmap, read/write latency distributions, per-position results and plain-language next steps. Sparse samples never masquerade as continuous verified capacity.
++- Replaced visible manual HDD maintenance levels in the Qt workstation with an evidence-aware automatic consistency budget. Write eligibility and human consent remain independent.
++- The prior Tk interface remains available until its deleted-file, filesystem and other specialized workflows are feature-parity tested in Qt; this release does not remove it.
++- Added fault-injection tests for corrupt reads, interrupted restores, result classification, HTML escaping and refusal to overwrite existing reports. Physical-device validation is still pending.
++
++
+ ## Unreleased — finish landing workbench-20261118 unique commits (2026-11-19)
+ 
+ - Port remaining unique `workbench-20261118` commits onto `main`: read-only surface consensus recovery, `choose_speed` finished-job average fallback (fixes stale Measuring…), and Windows GUI telemetry test diagnostics (GATE-012).
+diff --git a/README.md b/README.md
+index 1449356..ab4f8af 100644
+--- a/README.md
++++ b/README.md
+@@ -2,9 +2,9 @@
+ 
+ **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
+ 
+-> **Release status:** `0.3.3b18` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
++> **Release status:** `0.3.3b19` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+ 
+-HDD maintenance includes an optional **maintenance level** ladder (1–5) with multi-sample reads and settle delays; weak statistical votes are refused. See `docs/STATISTICAL_SECTOR_RECOVERY_B18.md`. USB flash / SMART readiness notes: `docs/B18_USB_REPAIR_AND_README_QA.md`.
++The Qt workstation now selects an **automatic, bounded HDD investigation level** from available media and error evidence; it never uses a plan to bypass media-write safety. Expert CLI overrides remain for controlled laboratory work. Read [`docs/CAPACITY_AUTHENTICITY.md`](docs/CAPACITY_AUTHENTICITY.md) for the separate USB capacity-integrity test. See also `docs/STATISTICAL_SECTOR_RECOVERY_B18.md` for the level policies.
+ 
+ [Get started](#get-started) · [Choose a workflow](#choose-a-workflow) · [Recovery USB](#create-a-recovery-usb) · [Command line](#command-line-examples) · [Troubleshooting](#troubleshooting) · [Changelog](CHANGELOG.md) · [Support](https://github.com/sponsors/CommsTech)
+ 
+@@ -12,7 +12,7 @@ HDD maintenance includes an optional **maintenance level** ladder (1–5) with m
+ 
+ | Workspace | You can do | What it **does not** mean |
+ | --- | --- | --- |
+-| **Diagnose** | Read SMART/NVMe health where available, sample or scan drive regions, view observed read delays/errors and a coverage map | A successful read is not proof that the bytes match the original file, or that the disk will remain reliable |
++| **Diagnose** | Read SMART/NVMe health where available, sample or scan drive regions, run an optional **write/restore USB capacity spot test** on a backed-up disposable drive, and export an offline HTML evidence report | A successful read is not proof that the bytes match the original file, or that the disk will remain reliable |
+ | **Rescue data** | Copy readable sectors to a **new image on separate healthy storage**, record missing ranges, resume and retry bounded failed reads | A full-size image file is not proof that every byte was successfully recovered |
+ | **Targeted HDD repair** | On eligible, positively identified rotational HDDs: inspect weak but repeatably readable regions and perform small, journaled, post-verified rewrites | This cannot regenerate unreadable original bytes, fix mechanical damage, or make SSD/NVMe rewrites into "repairs" |
+ | **Analyze recovered images** | Recover select deleted files, carve recognized file formats, check compatible filesystems, work on a clone | File carving cannot reliably reconstruct every fragmented file or encrypted volume |
+@@ -20,6 +20,12 @@ HDD maintenance includes an optional **maintenance level** ladder (1–5) with m
+ 
+ **Designed for:** experienced technicians who need evidence, drive owners who want a guided recovery route, and developers testing recovery against synthetic or sacrificial disks. Raw-media repair is currently **engineering/beta only**.
+ 
++### New: USB capacity authenticity and detailed reports
++
++Use **Diagnose → Verify USB capacity** only on a **disposable, fully backed-up USB device**, never on a drive containing irreplaceable data. The test selects 144 distributed 4 KiB spots by default, saves each original region in a durable journal on **another physical drive**, temporarily writes random data, reads it back, and restores/independently verifies the original. A dishonest USB controller can overwrite unrelated positions, so even the write/restore design is **not data-safe** and a passing result **does not certify full capacity**. This is optional and not part of normal read-only diagnosis.
++
++After a scan or test, select **View detailed report** to save a local, themed HTML report. The report separates claimed capacity, tested locations, read errors and observed latency; expert-level address evidence is expandable, not forced on new users. No external account or upload is required. See [capacity-test precautions](docs/CAPACITY_AUTHENTICITY.md).
++
+ ## Choose a workflow
+ 
+ ```text
+@@ -81,22 +87,22 @@ On Windows PowerShell, run these same commands using `py` if Python is installed
+ 
+ ```bash
+ python scripts/build_desktop.py --public-beta --no-wheel
+-python dist/DriveRepair-0.3.3b18-public-beta.pyz gui
++python dist/DriveRepair-0.3.3b19-public-beta.pyz gui
+ ```
+ 
+ Install optional `PySide6` in that Python environment if you want the new Qt workstation. The **public-beta** package blocks physical in-place writes. The separate **repair-beta** package may attempt the guided, HDD-only write workflow on sacrificial hardware with all safeguards enabled:
+ 
+ ```bash
+ python scripts/build_desktop.py --repair-beta --no-wheel
+-python dist/DriveRepair-0.3.3b18-repair-beta.pyz qt-gui
++python dist/DriveRepair-0.3.3b19-repair-beta.pyz qt-gui
+ ```
+ 
+ For a CLI image-only example, use a source **regular file** and an unused output path:
+ 
+ ```bash
+-python dist/DriveRepair-0.3.3b18-public-beta.pyz scan-image --image source.img --mode triage --json
+-python dist/DriveRepair-0.3.3b18-public-beta.pyz rescue-image --image source.img --output recovered.img --json
+-python dist/DriveRepair-0.3.3b18-public-beta.pyz rescue-status --output recovered.img --json
++python dist/DriveRepair-0.3.3b19-public-beta.pyz scan-image --image source.img --mode triage --json
++python dist/DriveRepair-0.3.3b19-public-beta.pyz rescue-image --image source.img --output recovered.img --json
++python dist/DriveRepair-0.3.3b19-public-beta.pyz rescue-status --output recovered.img --json
+ ```
+ 
+ A repair-beta build is **not** a recommendation to write to a failing or valuable patient. See [hardware testing requirements](docs/USB_REPAIR_PREFLIGHT_B17.md) and [release gates](docs/RELEASE_STATUS.md).
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index 2099fd5..9df36c5 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b18"
++__version__ = "0.3.3b19"
+diff --git a/desktop/driverepair_desktop/automatic_maintenance.py b/desktop/driverepair_desktop/automatic_maintenance.py
+new file mode 100644
+index 0000000..ef68de2
+--- /dev/null
++++ b/desktop/driverepair_desktop/automatic_maintenance.py
+@@ -0,0 +1,47 @@
++"""Evidence-driven automatic investigation intensity.
++
++Selects only read-consistency budgets; NEVER authorizes a write, overrides SMART
++safety, invents bytes, or enables sector-majority reconstruction on USB media.
++A higher level is more stress, not automatically better recovery.
++"""
++from __future__ import annotations
++from dataclasses import dataclass
++
++from .media_profiles import identify_profile
++
++
++@dataclass(frozen=True)
++class AutoMaintenance:
++    level: int
++    title: str
++    explanation: str
++    source: str = 'automatic evidence policy'
++
++
++def choose_maintenance(*, model: str='', bus: str='', snapshot: dict | None=None,
++                       read_errors: int=0, transport_errors: int=0,
++                       mode: str='quick') -> AutoMaintenance:
++    snap=snapshot or {}
++    profile=identify_profile(model=model, bus=bus,
++        media_type=str(snap.get('reported_medium') or ''),
++        protocol=str(snap.get('device_protocol') or ''))
++    if profile.kind not in {'hdd_unknown_recording','smr','cmr'}:
++        return AutoMaintenance(1,'Identify or rescue first',
++            'No HDD refresh authorized: use read-only recovery until rotational media is verified.')
++    if transport_errors or str(snap.get('status') or '').lower() in {'failure_reported','smart_failed'}:
++        return AutoMaintenance(1,'Minimum-stress investigation',
++            'Transport or critical health warnings require rescue first; additional repetitions may increase damage.')
++    if read_errors:
++        return AutoMaintenance(1,'Conservative investigation',
++            'Unresolved reads are isolated with bounded retries; aggressive rereading is not automatically safe.')
++    if profile.kind=='smr':
++        return AutoMaintenance(2,'SMR-aware conservative sampling',
++            'Three matching reads and short settle; no adjacent-band rewrites or inferred track geometry.')
++    if bus.lower() in {'usb','firewire','thunderbolt'}:
++        return AutoMaintenance(2,'USB-aware sampling',
++            'Three matching reads; avoid unnecessary retry pressure through an external controller.')
++    if mode=='full' and profile.kind=='cmr':
++        return AutoMaintenance(3,'Verified CMR assessment',
++            'Five matching reads for full-depth investigation on a confirmed magnetic disk.')
++    return AutoMaintenance(2,'Balanced HDD investigation',
++        'Three matching reads with short settle; increased stress requires new evidence.')
+diff --git a/desktop/driverepair_desktop/capacity_validation.py b/desktop/driverepair_desktop/capacity_validation.py
+new file mode 100644
+index 0000000..c7104f5
+--- /dev/null
++++ b/desktop/driverepair_desktop/capacity_validation.py
+@@ -0,0 +1,260 @@
++"""DriveRepair capacity-authenticity spot checks.
++
++Distinct from read-only surface scanning and from a full-capacity test. Each
++selected location is saved to a durable separate-device rolling journal before
++any temporary write, verified, then restored and independently re-read.
++
++WARNING: a dishonest controller can alias writes into an *unselected* region;
++restoring only selected regions cannot undo that unknown damage. A sudden power
++loss or uncooperative USB bridge can also defeat restoration. Physical use is
++therefore explicitly opt-in, engineering/guarded only, after a full backup, and
++never an automatic action on recovery patients.
++"""
++from __future__ import annotations
++
++import hashlib
++import math
++import os
++from pathlib import Path
++import secrets
++import stat
++import statistics
++import threading
++import time
++from typing import Callable
++
++from .media_refresh import JournalStore
++
++SCHEMA = 1
++TEST_BYTES = 4096
++MAX_SAMPLES = 576
++
++
++def planned_locations(size: int, sector: int, *, samples: int = 144,
++                      skip_edges: int = 16 * 1024 * 1024) -> list[int]:
++    """Distribute unique, aligned spots across declared space; avoid metadata edges.
++
++    Guarding the first/last 16 MiB reduces, but does not eliminate, the risk of
++    corrupting filesystem metadata or existing files. Never claim it does.
++    """
++    if (type(size) is not int or type(sector) is not int or sector not in
++            (512, 1024, 2048, 4096) or type(samples) is not int or
++            not 2 <= samples <= MAX_SAMPLES or size <= 0 or size % sector):
++        raise ValueError('Invalid capacity, logical sector or sample count')
++    block = max(TEST_BYTES, sector)
++    start = ((skip_edges + sector - 1) // sector) * sector
++    end = ((size - skip_edges - block) // sector) * sector
++    if end < start or (end - start)//block + 1 < samples:
++        raise ValueError('Not enough capacity for safe, distinct sampled regions')
++    spots = [((start + (end-start)*i//(samples-1))//block)*block for i in range(samples)]
++    # Alignment floor can collide for small sizes; always fail closed.
++    if len(set(spots)) != samples or spots[0] < start-block or spots[-1]+block > size-skip_edges:
++        raise ValueError('Cannot space all validation regions uniquely')
++    return spots
++
++
++def latency_stats(values: list[float]) -> dict | None:
++    if not values:
++        return None
++    avg = statistics.fmean(values)
++    stddev = statistics.pstdev(values)
++    return {'samples':len(values), 'min_ms':round(min(values),4),
++            'max_ms':round(max(values),4), 'mean_ms':round(avg,4),
++            'median_ms':round(statistics.median(values),4),
++            'stddev_ms':round(stddev,4),
++            'coefficient_of_variation':round(stddev/avg,4) if avg else None,
++            'total_ms':round(sum(values),4)}
++
++
++def _read(media, off, count):
++    result = media.read_at(off, count)
++    if len(result) != count:
++        raise OSError(f'Short read at byte {off}: {len(result)} of {count}')
++    return result
++
++
++def _write(media, off, data):
++    count = media.write_at(off, data)
++    if count != len(data):
++        raise OSError(f'Short write at byte {off}: {count} of {len(data)}')
++    media.flush()
++
++
++def _record_tx(store: JournalStore, meta: dict, state: str) -> None:
++    meta['state'] = state
++    store.save_meta(meta)
++
++
++def restore_pending(media, journal_dir: str | Path, *, source_token: str,
++                    size: int, sector: int) -> dict:
++    """Recover original from an interrupted test before ANY new writes.
++
++    A corrupt/mismatched journal never writes. Caller must have independently
++    reopened and exclusively locked the exact same source device.
++    """
++    from json import load
++    path = Path(journal_dir)
++    if path.is_symlink() or (path/'region.bin').is_symlink():
++        raise PermissionError('Capacity journal must not be a symlink')
++    meta_path = path/'meta.json'
++    if not meta_path.is_file() or meta_path.is_symlink():
++        raise ValueError('No valid pending validation journal found')
++    with meta_path.open('r',encoding='utf-8') as f:
++        meta=load(f)
++    if (meta.get('schema') != SCHEMA or meta.get('operation') != 'capacity_authenticity' or
++        meta.get('source_token') != source_token or meta.get('size') != size or
++        meta.get('sector') != sector or meta.get('state') not in
++        {'SAVED','WRITE_PENDING','RESTORE_PENDING','RESTORE_FAILED'}):
++        raise PermissionError('Journal identity or state mismatch; refusing source writes')
++    offset=meta.get('offset')
++    count=meta.get('length')
++    if (type(offset) is not int or type(count) is not int or offset < 0 or
++        count <= 0 or count > 4096 or offset%sector or count%sector or offset+count>size):
++        raise ValueError('Invalid journal region')
++    store=JournalStore(str(path),'disk')
++    data=store.load_region(count,meta['original_sha256'])
++    _write(media,offset,data)
++    if _read(media,offset,count)!=data or _read(media,offset,count)!=data:
++        _record_tx(store,meta,'RESTORE_FAILED')
++        raise OSError('Original data was NOT restored and verified; retain the journal')
++    _record_tx(store,meta,'RESTORED')
++    store.clear_region()
++    return {'status':'ORIGINAL_RESTORED_VERIFIED','offset':offset,'bytes':count}
++
++
++def validate_spots(media, *, size: int, sector: int, source_token: str,
++                   journal_dir: str | Path, samples: int=144,
++                   skip_edges: int=16*1024*1024,
++                   stop_requested: Callable[[],bool] | None=None,
++                   progress: Callable[[dict],None] | None=None) -> dict:
++    """A limited reversible-write spot test, NOT an all-sector health test.
++
++    The caller owns physical device identity, volume locking, separate journal
++    disk verification, human authorization and the media handle. Does not run
++    on physical media automatically. On restore failure the original journal
++    remains and every further test write stops.
++    """
++    offsets=planned_locations(size,sector,samples=samples,skip_edges=skip_edges)
++    if Path(journal_dir).is_symlink():
++        raise PermissionError('Capacity journal must not be a symlink')
++    store=JournalStore(str(journal_dir),'disk')
++    store.prepare_new()
++    counters={'validated':0,'mismatch':0,'read_error':0,'write_error':0,
++              'unstable_original':0,'restoration_error':0,'untested':0}
++    records=[]; read_times=[]; write_times=[]
++    emit=progress or (lambda event:None)
++    for i,offset in enumerate(offsets):
++        if stop_requested is not None and stop_requested():
++            counters['untested']=len(offsets)-i
++            break
++        before=time.perf_counter()
++        try:
++            original=_read(media,offset,TEST_BYTES)
++            if _read(media,offset,TEST_BYTES)!=original:
++                raise ValueError('Original read is unstable; not safe to write')
++            read_times.append((time.perf_counter()-before)*500.0)
++        except (OSError,ValueError) as exc:
++            outcome='unstable_original' if isinstance(exc,ValueError) else 'read_error'
++            counters[outcome]+=1
++            records.append({'index':i,'offset':offset,'length':TEST_BYTES,'status':outcome,
++                            'error_type':type(exc).__name__})
++            emit({'phase':'CAPACITY_TEST','index':i+1,'total':len(offsets),'status':outcome})
++            continue
++        meta={'schema':SCHEMA,'operation':'capacity_authenticity','source_token':source_token,
++              'size':size,'sector':sector,'offset':offset,'length':TEST_BYTES,
++              'original_sha256':hashlib.sha256(original).hexdigest()}
++        # Persist preimage BEFORE marking even a possible write. If staging fails,
++        # fail without touching the patient.
++        store.save_region(original)
++        _record_tx(store,meta,'SAVED')
++        probe=secrets.token_bytes(TEST_BYTES)
++        status='write_error'
++        restore_ok=False
++        try:
++            _record_tx(store,meta,'WRITE_PENDING')
++            t=time.perf_counter()
++            _write(media,offset,probe)
++            write_times.append((time.perf_counter()-t)*1000.0)
++            _record_tx(store,meta,'RESTORE_PENDING')
++            t=time.perf_counter()
++            check=_read(media,offset,TEST_BYTES)
++            read_times.append((time.perf_counter()-t)*1000.0)
++            status='validated' if check==probe else 'mismatch'
++        except OSError:
++            status='write_error'
++        finally:
++            # Even a failed write can have partially changed the region.
++            try:
++                _record_tx(store,meta,'RESTORE_PENDING')
++                _write(media,offset,original)
++                restore_ok=(_read(media,offset,TEST_BYTES)==original and
++                            _read(media,offset,TEST_BYTES)==original)
++            except (OSError,RuntimeError):
++                restore_ok=False
++            if not restore_ok:
++                _record_tx(store,meta,'RESTORE_FAILED')
++                counters['restoration_error']+=1
++                records.append({'index':i,'offset':offset,'length':TEST_BYTES,
++                                'status':'restoration_error','probe_status':status})
++                # DO NOT delete journal, do not continue testing.
++                raise OSError('CRITICAL: original data restoration not verified. Stop using the drive; '
++                              f'preserve journal at {journal_dir}.')
++            _record_tx(store,meta,'RESTORED')
++            store.clear_region()
++        counters[status]+=1
++        records.append({'index':i,'offset':offset,'length':TEST_BYTES,'status':status,
++                        'original_restored_and_verified':True})
++        emit({'phase':'CAPACITY_TEST','index':i+1,'total':len(offsets),'status':status,
++              'offset':offset})
++    # Only the saved sample points are evidence. A high validated offset is
++    # NOT a lower bound on valid capacity; holes and aliasing can exist.
++    valid=[r['offset'] for r in records if r['status']=='validated']
++    status=('STOPPED_INCOMPLETE' if counters['untested'] else
++            'SAMPLED_REGIONS_VERIFIED' if counters['validated']==samples else
++            'CAPACITY_INTEGRITY_WARNINGS')
++    return {'schema':1,'test_kind':'capacity_spot_write_restore', 'status':status,
++            'declared_bytes':size,'samples_planned':len(offsets),
++            'samples_completed':len(records),'sample_bytes':TEST_BYTES,
++            'counters':counters,'highest_verified_offset':max(valid) if valid else None,
++            'verified_regions':counters['validated'],
++            'read_latency':latency_stats(read_times),
++            'write_latency':latency_stats(write_times), 'regions':records,
++            'notes':['These spots do NOT certify all intervening sectors or true writable capacity.',
++                     'A dishonest controller can alias writes into unselected data even if tested spots restore.',
++                     'No source data is claimed recovered or drive lifetime extended.']}
++
++
++class RegularImageWriter:
++    """Regular-file fixture only. No symlinks, devices or sparse creation."""
++    def __init__(self,path: str):
++        p=Path(path)
++        if p.is_symlink() or not p.is_file():
++            raise ValueError('Select a regular existing image, not a symlink or physical device')
++        fd=os.open(p,os.O_RDWR | getattr(os,'O_NOFOLLOW',0))
++        try:
++            st=os.fstat(fd)
++            if not stat.S_ISREG(st.st_mode) or st.st_size<TEST_BYTES:
++                raise ValueError('Image must be a nonempty regular file')
++        except BaseException:
++            os.close(fd)
++            raise
++        self.fd=fd
++        self._lock=threading.Lock()
++        self.size=st.st_size
++        self.token=hashlib.sha256(repr((os.path.realpath(path),st.st_dev,st.st_ino,st.st_size)).encode()).hexdigest()
++    def read_at(self,off:int,n:int)->bytes:
++        if callable(getattr(os,'pread',None)):
++            return os.pread(self.fd,n,off)
++        # Python on Windows does not expose os.pread/pwrite. Serialized
++        # seek/read is correct for the one-reader image fixture.
++        with self._lock:
++            os.lseek(self.fd,off,os.SEEK_SET)
++            return os.read(self.fd,n)
++    def write_at(self,off:int,data:bytes)->int:
++        if callable(getattr(os,'pwrite',None)):
++            return os.pwrite(self.fd,data,off)
++        with self._lock:
++            os.lseek(self.fd,off,os.SEEK_SET)
++            return os.write(self.fd,data)
++    def flush(self)->None:os.fsync(self.fd)
++    def close(self)->None:os.close(self.fd)
+diff --git a/desktop/driverepair_desktop/cli.py b/desktop/driverepair_desktop/cli.py
+index d1d4794..ddf4760 100644
+--- a/desktop/driverepair_desktop/cli.py
++++ b/desktop/driverepair_desktop/cli.py
+@@ -79,6 +79,23 @@ def parser() -> argparse.ArgumentParser:
+     usb.add_argument('--confirm-identity', required=True)
+     usb.add_argument('--confirm-erase', required=True)
+     usb.add_argument('--ack-data-loss', action='store_true')
++    for name in ('validate-image-capacity', 'validate-usb-capacity'):
++        spot=sub.add_parser(name, help=('Image-backed authenticity spot test (writes and restores image bytes)' if name=='validate-image-capacity' else
++            'HIGH-RISK: saved-byte USB spot checks with restore journal; backup required'))
++        spot.add_argument('--image' if name=='validate-image-capacity' else '--device',required=True)
++        spot.add_argument('--journal',required=True,help='NEW durable journal path on healthy storage, never patient')
++        spot.add_argument('--samples',type=int,choices=[72,144,288,576],default=144)
++        spot.add_argument('--json',action='store_true')
++        spot.add_argument('--progress-jsonl',action='store_true')
++        spot.add_argument('--cooperative-stop-stdin',action='store_true')
++        spot.add_argument('--report-html',help='NEW .html report path')
++        if name=='validate-usb-capacity':
++            spot.add_argument('--confirm-identity',required=True)
++            spot.add_argument('--confirm-test',required=True,help='Type TEST <12-character identity hint>')
++            spot.add_argument('--ack-data-loss',action='store_true')
++            spot.add_argument('--ack-backed-up',action='store_true')
++            spot.add_argument('--restore-only',action='store_true',
++                help='ONLY restore interrupted test region from exact-matching journal')
+     listing = sub.add_parser("list", help="List externally attached whole disks")
+     listing.add_argument("--json", action="store_true")
+     probe = sub.add_parser('probe-region', help='READ-ONLY: bounded investigation of a previously failed disk range')
+@@ -175,7 +192,7 @@ def parser() -> argparse.ArgumentParser:
+                          help='Advanced high-risk: confirmed CMR only, reread both sides before adding writes')
+         cmd.add_argument('--repair-policy', choices=['preserve', 'balanced'], default='balanced',
+                          help='Balanced retries read errors without rewriting unknown bytes')
+-        cmd.add_argument('--maintenance-level', default='2',
++        cmd.add_argument('--maintenance-level', default='auto',
+                          help='Statistical recovery ladder 1-5 or quick|normal|thorough|deep|extreme '
+                               '(investigation + refresh; fail-closed; not a SpinRite clone)')
+         cmd.add_argument('--ack-media-warning', action='store_true',
+@@ -1286,8 +1303,11 @@ def _run_care(args) -> int:
+     is_hardware = args.command == 'care-external'
+     control = StopControl(bool(getattr(args, 'cooperative_stop_stdin', False)))
+     ram_only = args.journal_backend == 'memory'
+-    maintenance = resolve_maintenance_level(getattr(args, 'maintenance_level', '2'))
+-    maintenance_kwargs = level_as_refresh_kwargs(maintenance)
++    chosen_level = getattr(args, 'maintenance_level', 'auto')
++    # Automatic mode requires freshly queried physical evidence below. The
++    # explicit numeric CLI ladder remains available for specialist tests.
++    maintenance = None if str(chosen_level).lower() == 'auto' else resolve_maintenance_level(chosen_level)
++
+     # An explicitly opted-in, small offsets-only history file is independent
+     # of a RAM-only REGION journal. No sector bytes or recovery image are saved.
+     if ram_only and args.resume:
+@@ -1348,6 +1368,15 @@ def _run_care(args) -> int:
+         snapshot = None
+         guarded_advice = None
+ 
++    if maintenance is None:
++        from .automatic_maintenance import choose_maintenance
++        recommendation = choose_maintenance(
++            model=selected.model if selected else '',
++            bus=selected.bus if selected else 'image',
++            snapshot=snapshot, mode=args.mode)
++        maintenance = resolve_maintenance_level(recommendation.level)
++    maintenance_kwargs = level_as_refresh_kwargs(maintenance)
++
+     # Lock only after the journal's separate-storage location was validated.
+     # Volatile mode creates ZERO files, including no sidecar lock. Physical
+     # writers still use exclusive block/volume access. Do not claim restart safety.
+@@ -1481,6 +1510,20 @@ def _run_care(args) -> int:
+                                    history_hints=hints, sample_seed=sampling_seed,
+                                    progress=scan_progress, resume_state=prior_scan,
+                                    checkpoint=checkpoint_writer.save if checkpoint_writer else None)
++                if str(chosen_level).lower()=='auto':
++                    # Fresh findings may justify LESS read pressure than the
++                    # initial SMART/media strategy. Never silently escalate to
++                    # majority-vote reconstruction on a USB bridge.
++                    from .automatic_maintenance import choose_maintenance
++                    auto=choose_maintenance(
++                        model=selected.model if selected else '',
++                        bus=selected.bus if selected else 'image', snapshot=snapshot,
++                        read_errors=int(scan.get('read_error_chunks') or 0), mode=args.mode)
++                    maintenance=resolve_maintenance_level(auto.level)
++                    maintenance_kwargs=level_as_refresh_kwargs(maintenance)
++                    scan['automatic_maintenance']={'level':auto.level,
++                        'name':auto.title,'reason':auto.explanation,
++                        'note':'Investigation sampling only; not a write authorization.'}
+                 if checkpoint_writer is not None:
+                     scan['scan_checkpoint'] = str(checkpoint_writer.path)
+                     scan['resume_requires_fresh_identity'] = True
+@@ -1613,6 +1656,11 @@ def _run_care(args) -> int:
+             if journal_meta.get('mode') != 'targeted' or type(journal_meta.get('chunk')) is not int:
+                 raise ValueError('Not a guided targeted-refresh journal')
+             chunk = journal_meta['chunk']
++            if str(chosen_level).lower()=='auto':
++                # Resume must keep its saved level. Changing the sampling
++                # agreement rules in an interrupted transaction is unsafe.
++                maintenance=resolve_maintenance_level(journal_meta.get('maintenance_level',2))
++                maintenance_kwargs=level_as_refresh_kwargs(maintenance)
+ 
+         # Select the patient again immediately before RW; fail closed if renumbered.
+         if is_hardware:
+@@ -1778,6 +1826,74 @@ def run(argv: list[str] | None = None) -> int:
+         from .release_policy import block_public_physical_writes
+         block_public_physical_writes(args.command,
+                                      execute_optimization=bool(getattr(args, 'execute', False)))
++        if args.command in {'validate-image-capacity','validate-usb-capacity'}:
++            from .capacity_validation import RegularImageWriter, validate_spots, restore_pending
++            from .drive_report import save_report
++            emitter=ProgressEmitter(enabled=bool(args.progress_jsonl),min_interval_s=.1)
++            spot_stop=StopControl(enabled=bool(args.cooperative_stop_stdin))
++            def emit_spot(event):
++                emitter.emit({**event,'probe_index':event.get('index'),
++                              'probe_total':event.get('total'),
++                              'message':f"Sample {event.get('index')} of {event.get('total')} · {event.get('status')}"})
++            from .media_refresh import assert_stable_identity, open_device_readwrite
++            if args.command=='validate-image-capacity':
++                if getattr(args,'restore_only',False):
++                    raise ValueError('Restore-only mode is reserved for external media')
++                media=RegularImageWriter(args.image)
++                device_info={'model':os.path.basename(args.image),'size_bytes':media.size,
++                             'bus':'regular image','sector_size':512}
++                try:
++                    result=validate_spots(media,size=media.size,sector=512,source_token=media.token,
++                        journal_dir=args.journal,samples=args.samples,skip_edges=0,progress=emit_spot,
++                        stop_requested=spot_stop.requested)
++                finally:
++                    media.close()
++            else:
++                # This deliberately stresses a selected USB's data. It must
++                # NEVER be offered as automatic diagnosis of a failing patient.
++                if not args.ack_data_loss or not args.ack_backed_up:
++                    raise PermissionError('USB capacity spot testing requires backup and data-loss acknowledgements')
++                selected=select_external_device(args.device)
++                if selected.bus.strip().lower()!='usb' or not selected.serial:
++                    raise PermissionError('Verified external USB bus and hardware serial required')
++                if (args.confirm_identity!=selected.fingerprint[:12] or
++                    args.confirm_test!='TEST '+selected.fingerprint[:12]):
++                    raise PermissionError('USB target identity confirmation mismatch')
++                assert_windows_external_write_gate(selected)
++                for other in list_external_devices():
++                    if other.id != selected.id and other.serial == selected.serial:
++                        raise PermissionError('Duplicate device serial; raw test refused')
++                # The durable journal must be on demonstrably separate physical
++                # storage; no file may be created on the patient during preflight.
++                _validate_live_refresh_preflight(selected,args.journal)
++                if args.report_html:
++                    # A report is written only after the test; still prove its
++                    # location is not on the patient BEFORE any raw I/O begins.
++                    if os.path.lexists(args.report_html):
++                        raise FileExistsError('Report destination already exists')
++                    _separate_live_destination(selected,args.report_html)
++                assert_patient_idle_windows(selected,allow_locked_volume=True)
++                assert_stable_identity(selected,select_external_device(args.device))
++                media=open_device_readwrite(selected,auto_lock_volumes=True)
++                try:
++                    if args.restore_only:
++                        result=restore_pending(media,args.journal,
++                            source_token=selected.fingerprint,size=selected.size_bytes,
++                            sector=selected.sector_size)
++                    else:
++                        result=validate_spots(media,size=selected.size_bytes,
++                            sector=selected.sector_size,source_token=selected.fingerprint,
++                            journal_dir=args.journal,samples=args.samples,progress=emit_spot,
++                            stop_requested=spot_stop.requested)
++                finally:
++                    media.close()
++                device_info=selected.public()
++            result['device']=device_info
++            if args.report_html:
++                result['report_path']=str(save_report(args.report_html,result,device=device_info))
++            print(json.dumps(result,indent=2) if args.json else
++                  f"{result['status']} · verified spots {result.get('verified_regions',0)}",flush=True)
++            return (0 if result['status'] in {'SAMPLED_REGIONS_VERIFIED','ORIGINAL_RESTORED_VERIFIED'} else 2)
+         if args.command == 'flash-usb':
+             from .usb_flash import flash_usb_iso
+             def report(e):
+@@ -2148,7 +2264,7 @@ def run(argv: list[str] | None = None) -> int:
+                   f"readable {result['readable_bytes']:,}; read-error chunks "
+                   f"{result['read_error_chunks']}")
+         return 0 if result["status"] == "completed" else 2
+-    except (ValueError, RuntimeError, OSError, json.JSONDecodeError, zipfile.BadZipFile) as exc:
++    except (ValueError, RuntimeError, OSError, PermissionError, json.JSONDecodeError, zipfile.BadZipFile) as exc:
+         print(f"Error: {exc}", file=sys.stderr)
+         return 1
+     except KeyboardInterrupt:
+diff --git a/desktop/driverepair_desktop/drive_report.py b/desktop/driverepair_desktop/drive_report.py
+new file mode 100644
+index 0000000..ac66bf2
+--- /dev/null
++++ b/desktop/driverepair_desktop/drive_report.py
+@@ -0,0 +1,173 @@
++"""Standalone, offline, evidence-led DriveRepair HTML report.
++
++Inspired by the *level of detail*, not the graphics or proprietary layout, of
++GRC's publicly documented ValiDrive report. Never manufacture a health score,
++validated capacity, latencies or full-surface coverage from sparse samples.
++"""
++from __future__ import annotations
++
++import html
++import json
++import math
++from pathlib import Path
++import statistics
++from datetime import datetime, timezone
++
++
++def _esc(value) -> str:
++    return html.escape(str(value), quote=True)
++
++
++def _bytes(value) -> str:
++    if not isinstance(value, (float, int)) or value < 0:
++        return 'Not measured'
++    size=float(value)
++    for unit in ('B','KiB','MiB','GiB','TiB'):
++        if size<1024 or unit=='TiB':
++            return f'{size:,.0f} {unit}' if unit=='B' else f'{size:,.2f} {unit}'
++        size/=1024
++    return 'Not measured'
++
++
++def _metric(name, value, detail=''):
++    return (f'<div class="metric"><div class="label">{_esc(name)}</div>'
++            f'<div class="value">{_esc(value)}</div><div class="sub">{_esc(detail)}</div></div>')
++
++
++def _palette(status: str) -> str:
++    return {'validated':'#34c7ad','readable':'#34c7ad','sampled':'#56a8b9','mismatch':'#fb7586',
++            'restoration_error':'#fb7586','read_error':'#efad60',
++            'write_error':'#e08088','unstable_original':'#f0c66e',
++            'slow':'#f0c66e','untested':'#253b53'}.get(status,'#253b53')
++
++
++def _map(regions: list[dict], *, columns: int=24) -> str:
++    if not regions:
++        return '<div class="empty">No location-level evidence was retained. A percentage alone cannot reconstruct a surface map.</div>'
++    cells=[]
++    for i,r in enumerate(regions[:2500]):
++        status=str(r.get('status') or 'untested')
++        loc=f'Offset {_bytes(r.get("offset"))} · {status.replace("_", " ")}'
++        cells.append(f'<span class="cell" style="background:{_palette(status)}" '
++                     f'title="{_esc(loc)}" aria-label="{_esc(loc)}"></span>')
++    return (f'<div class="heatmap" style="--columns:{columns}" role="img" '
++            f'aria-label="Sampled storage location map">{"".join(cells)}</div>')
++
++
++def _timings(stats: dict | None, title: str) -> str:
++    if not isinstance(stats,dict) or not stats:
++        return f'<div class="timing"><h3>{_esc(title)}</h3><p class="dim">No latency measurements available</p></div>'
++    rows=[('Samples',stats.get('samples')),('Minimum',stats.get('min_ms')),
++          ('Median',stats.get('median_ms')),('Average',stats.get('mean_ms')),
++          ('Maximum',stats.get('max_ms')),('Std. deviation',stats.get('stddev_ms')),
++          ('Coefficient of variation',stats.get('coefficient_of_variation')),
++          ('Total',stats.get('total_ms'))]
++    body=''.join('<tr><td>'+_esc(label)+'</td><td>'+_esc('—' if value is None else value)+
++                 ('' if label in ('Samples','Coefficient of variation') else ' ms')+'</td></tr>'
++                 for label,value in rows)
++    # A simple pure-CSS visual ratio of median to maximum shows latency spread
++    # without implying a continuous measured time series.
++    median=stats.get('median_ms')
++    worst=stats.get('max_ms')
++    ratio=(max(0,min(100,100*median/worst)) if isinstance(median,(int,float))
++           and isinstance(worst,(int,float)) and worst>0 else 0)
++    graphic=(f'<div class="latencytrack" aria-label="Median latency as fraction of maximum">'
++             f'<div class="latencyfill" style="width:{ratio:.2f}%"></div></div>'
++             f'<p class="dim">Median / worst observed latency (not sequential speed)</p>')
++    return f'<div class="timing"><h3>{_esc(title)}</h3>{graphic}<table><tbody>{body}</tbody></table></div>'
++
++
++def render_report(result: dict, *, device: dict | None = None, title: str='Storage evidence report',
++                  scan_regions: list[dict] | None = None) -> str:
++    """Pure, escaped HTML from explicit result fields; no network assets or JS."""
++    if not isinstance(result,dict):
++        raise ValueError('Report input must be a result dictionary')
++    device=device or {}
++    kind=str(result.get('test_kind') or ('read_only_scan' if any(k in result for k in ('scan','surface_coverage_pct','readable_bytes')) else 'disk_operation'))
++    capacity=kind=='capacity_spot_write_restore'
++    status=str(result.get('status') or 'NOT_REPORTED')
++    counters=result.get('counters') if isinstance(result.get('counters'),dict) else {}
++    scan=result.get('scan') if isinstance(result.get('scan'),dict) else result
++    declared=result.get('declared_bytes') if capacity else device.get('size_bytes',scan.get('size_bytes'))
++    if capacity:
++        validated=counters.get('validated',0)
++        planned=result.get('samples_planned',0)
++        observed=f'{validated:,} / {planned:,}'
++        tested=f'{result.get("samples_completed",0):,} spots'
++        failures=sum(int(counters.get(n,0) or 0) for n in ('mismatch','read_error','write_error','unstable_original','restoration_error'))
++        verdict=('Evidence of storage failure' if failures else
++                 'Spot checks passed, not certified' if status=='SAMPLED_REGIONS_VERIFIED' else
++                 'Incomplete validation')
++        detail=('Read → save original → write random data → verify → restore → reread. '
++                'Raw spot checks can harm existing files if a device lies about its capacity; '
++                'a verified sample is not a guaranteed capacity boundary.')
++        metric_summary=_metric('Successful spot verifications',observed,'Validated sampled locations')+\
++                       _metric('Locations tested',tested,'Distinct positions')+\
++                       _metric('Reported capacity',_bytes(declared),'Claimed size, not confirmed capacity')+\
++                       _metric('Highest validated address',_bytes(result.get('highest_verified_offset')),
++                               'A sample, NOT contiguous validated capacity')
++        regions=result.get('regions') or []
++    else:
++        coverage=scan.get('surface_coverage_pct',result.get('surface_coverage_pct'))
++        coverage_text=(f'{coverage:.2f}%' if type(coverage) in (int,float) else 'Unknown')
++        failures=scan.get('read_error_chunks',result.get('read_error_chunks'))
++        verdict=('Read errors observed' if isinstance(failures,int) and failures else
++                 'No read errors reported' if failures==0 else 'Evidence incomplete')
++        detail=('A scan measures readable observations, not file checksums, remaining lifespan '
++                'or physical-media repair. Unvisited locations remain unknown.')
++        metric_summary=_metric('Successful read coverage',coverage_text,'Of claimed physical address space')+\
++                       _metric('Readable bytes',_bytes(scan.get('readable_bytes')),'Confirmed successful read operations')+\
++                       _metric('Failed read requests',failures if failures is not None else 'Unknown','Not confirmed bad sectors')+\
++                       _metric('Declared capacity',_bytes(declared),'Device-advertised capacity')
++        regions=scan_regions or []
++    meta=[('Model',device.get('model') or 'Unknown'),('Bus',device.get('bus') or 'Unknown'),
++          ('Serial suffix',device.get('serial_suffix') or 'Unavailable'),
++          ('Logical sector size',device.get('sector_size') or 'Unknown'),
++          ('Workflow',kind.replace('_',' ').title()),('Result code',status),
++          ('Generated at',datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'))]
++    meta_html=''.join(f'<div><span>{_esc(k)}</span><strong>{_esc(v)}</strong></div>' for k,v in meta)
++    legend=''.join(f'<span><i style="background:{_palette(k)}"></i>{_esc(label)}</span>' for k,label in
++                   [('validated' if capacity else 'readable','Verified sample' if capacity else 'Readable'),
++                    ('read_error','Read issue'),('mismatch','Mismatch'),('untested','Not tested')])
++    rows=''.join(f'<tr><td>{i+1}</td><td>{_esc(_bytes(r.get("offset")))}</td>'
++                 f'<td>{_esc(_bytes(r.get("length")))}</td><td><b class="dot" '
++                 f'style="background:{_palette(str(r.get("status")))}"></b>'
++                 f'{_esc(str(r.get("status", "unknown")).replace("_", " ").title())}</td></tr>'
++                 for i,r in enumerate(regions[:1000]))
++    breakdown=''.join(f'<div><span class="dot" style="background:{_palette(str(k))}"></span>'
++                      f'<span>{_esc(k.replace("_"," ").title())}</span><strong>{_esc(v)}</strong></div>'
++                      for k,v in counters.items()) if capacity else '<p class="dim">Read-only results do not include write-capacity sampling.</p>'
++    latency=(_timings(result.get('read_latency'),'Read latency')+
++             _timings(result.get('write_latency'),'Write latency')) if capacity else ''
++    conclusion=('Stop using this device for important data. If personal data was present, restore from '
++                'backup or use an appropriate professional lab.' if capacity and failures else
++                'Spot tests found no sampled mismatch. Use a full-capacity verification on disposable media '
++                'and preserve backups; passing spots cannot certify all storage.' if capacity else
++                'If data is important or errors occurred, create a separate recovery image before attempting writes.')
++    return '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
++<title>'''+_esc(title)+''' · DriveRepair</title><style>
++:root{color-scheme:dark;--bg:#0b1521;--surface:#142439;--surface2:#1b3048;--border:#30445a;--text:#f2f7fe;--sub:#b0c2d4;--teal:#40cfb5;--red:#fb7586;--amber:#f1b45e}
++*{box-sizing:border-box}body{background:var(--bg);color:var(--text);font:14px/1.55 'Segoe UI',Inter,system-ui,sans-serif;margin:0}
++main{max-width:1200px;margin:auto;padding:42px 30px 64px}.top{display:flex;align-items:center;justify-content:space-between;gap:20px;border-bottom:1px solid var(--border);padding-bottom:20px;margin-bottom:32px}.logo{font-weight:800;letter-spacing:.12em;color:var(--teal)}.eyebrow{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:.16em;font-weight:750}
++h1{font-size:34px;letter-spacing:-.04em;line-height:1.15;margin:8px 0 10px}.muted,.dim{color:var(--sub)}.hero{display:flex;justify-content:space-between;align-items:flex-start;gap:30px;margin:0 0 30px}.verdict{font-size:20px;font-weight:750;color:var(--amber)}
++.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric,.panel{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px}.metric{min-height:126px}.metric .label{color:var(--sub);font-size:12px}.metric .value{font-size:24px;font-weight:760;margin-top:8px;letter-spacing:-.03em}.metric .sub{color:var(--sub);font-size:11px;margin-top:6px}section{margin-top:26px}h2{font-size:18px;margin:0 0 16px}h3{font-size:15px;margin:0 0 12px}.twocol{display:grid;grid-template-columns:2fr 1fr;gap:16px}.heatmap{display:grid;grid-template-columns:repeat(var(--columns),minmax(0,1fr));gap:3px}.cell{min-width:0;height:14px;border-radius:2px;opacity:.97}.cell:hover{outline:2px solid white}.legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:15px;color:var(--sub);font-size:12px}.legend i,.dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px}.breakdown>div{display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid #263b53}.breakdown strong{margin-left:auto}.metadata{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}.metadata div{display:flex;flex-direction:column;border-bottom:1px solid var(--border);padding-bottom:8px}.metadata span{font-size:12px;color:var(--sub)}table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:10px 12px;border-bottom:1px solid var(--border);text-align:left}th{color:var(--sub)}.tablewrap{max-height:440px;overflow:auto}.timings{flex:1}.timinggrid{display:flex;gap:20px}.latencytrack{height:11px;border-radius:9px;background:#2a4057;overflow:hidden;margin:15px 0 7px}.latencyfill{height:100%;background:linear-gradient(90deg,#328b9c,var(--teal));border-radius:9px}.timing{min-width:0;flex:1}.summary{padding:16px 20px;border-left:4px solid var(--teal);background:var(--surface);border-radius:0 9px 9px 0}.empty{padding:28px;text-align:center;color:var(--sub)}details{margin-top:14px}summary{cursor:pointer;color:var(--teal);font-weight:700;padding:8px 0}details[open] summary{margin-bottom:10px}footer{color:var(--sub);font-size:12px;margin-top:30px}a{color:var(--teal)}
++@media(max-width:850px){.grid{grid-template-columns:repeat(2,1fr)}.twocol{grid-template-columns:1fr}.hero{flex-direction:column}.metadata{grid-template-columns:1fr}}@media print{body{background:#fff;color:#17283b;print-color-adjust:exact;-webkit-print-color-adjust:exact}.metric,.panel,.summary{background:#f2f5f9;color:#17283b}main{padding:15px}.tablewrap{max-height:none}.cell{border:1px solid #ddd}}
++</style></head><body><main><header class="top"><div class="logo">DR / DRIVEREPAIR</div><div class="eyebrow">LOCAL STORAGE EVIDENCE · NO UPLOADS</div></header>
++<div class="hero"><div><div class="eyebrow">Technical evidence report</div><h1>'''+_esc(title)+'''</h1><p class="muted">'''+_esc(detail)+'''</p></div><div><div class="eyebrow">Assessment</div><div class="verdict">'''+_esc(verdict)+'''</div><div class="muted">'''+_esc(status.replace('_',' '))+'''</div></div></div>
++<div class="grid">'''+metric_summary+'''</div>
++<section class="twocol"><div class="panel"><h2>Sampled address map</h2>'''+_map(regions)+'''<div class="legend">'''+legend+'''</div><p class="dim">Each tile describes one recorded observation, not surrounding untested bytes. Capacity may be spoofed and samples may alias.</p></div><div class="panel"><h2>Evidence breakdown</h2><div class="breakdown">'''+breakdown+'''</div></div></section>
++<section class="panel"><h2>Device & session facts</h2><div class="metadata">'''+meta_html+'''</div></section>
++'''+('''<section class="panel"><h2>Measured access latency</h2><p class="dim">Small random reads/writes, not sequential throughput. Coefficient of variation = standard deviation / average.</p><div class="timinggrid">'''+latency+'''</div></section>''' if capacity else '')+'''
++<section class="panel"><h2>Technical location evidence</h2><p class="dim">For specialists: each observation is tied to a specific logical byte offset. A read-only scan may report aggregate cells, not every individual sector.</p><details><summary>Show sampled positions and outcomes</summary><div class="tablewrap"><table><thead><tr><th>#</th><th>Start offset</th><th>Length</th><th>Outcome</th></tr></thead><tbody>'''+(rows or '<tr><td colspan="4">No sampled locations available</td></tr>')+'''</tbody></table></div></details></section>
++<section><h2>Recommended next action</h2><div class="summary">'''+_esc(conclusion)+'''</div></section><footer>Generated locally by DriveRepair. Observed data is not a warranty, recovered-file checksum, or estimate of remaining service life. Retain original logs and journals.</footer></main></body></html>'''
++
++
++def save_report(path: str | Path, result: dict, *, device: dict | None=None,
++                scan_regions: list[dict] | None=None) -> Path:
++    path=Path(path)
++    if path.suffix.lower()!='.html' or path.is_symlink() or path.exists():
++        raise ValueError('Choose a NEW .html report path; existing files are not overwritten')
++    content=render_report(result, device=device, scan_regions=scan_regions)
++    with path.open('x',encoding='utf-8') as handle:
++        handle.write(content)
++    return path
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+index e6ccf32..0b932a6 100644
+--- a/desktop/driverepair_desktop/qtgui.py
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -154,7 +154,7 @@ def launch():
+         from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+             QLabel, QPushButton, QFrame, QProgressBar, QComboBox, QLineEdit, QFileDialog,
+             QPlainTextEdit, QMessageBox, QCheckBox, QToolButton, QScrollArea, QGridLayout,
+-            QDialog, QListWidget, QSizePolicy, QAbstractItemView)
++            QDialog, QListWidget, QSizePolicy, QAbstractItemView, QInputDialog)
+     except ImportError as exc:
+         raise RuntimeError('Qt workstation requires the optional PySide6 package: python -m pip install PySide6') from exc
+ 
+@@ -514,6 +514,8 @@ def launch():
+             self._devices=[]
+             self._job_args=[]
+             self._last_job_kind=''
++            self._last_job_result=None
++            self._last_report_file=None
+             self._last_good_device=None
+             self._scanned=0
+             self._pending_resume=None
+@@ -821,29 +823,20 @@ def launch():
+                 'recover':[('Rescue selected external drive to NEW image','rescue'),
+                            ('Recover from existing disk image','rescueimage')],
+                 'check':[('Check disk health (read-only)','health'),
++                         ('Verify USB capacity · write / restore spot test','capacity'),
+                          ('Quick surface check (read-only)','scanquick'),
+                          ('Full surface scan (read-only)','scanfull'),
+                          ('Continue interrupted full scan','resume')],
+             }
+             self.job_box.currentIndexChanged.connect(self.choice_changed)
+             workflow.addWidget(self.job_box)
+-            self.maintenance_box=QComboBox()
+-            self.maintenance_box.setToolTip(
+-                'Statistical multi-sample recovery ladder for HDD maintenance. '
+-                'Higher levels add settle delays and samples; deep/extreme may use '
+-                'high-confidence sector majority. Fail-closed — never invents weak votes. '
+-                'Not a SpinRite clone; SSD/USB unknown media gates are unchanged.'
+-            )
+-            for label, value in (
+-                ('Maintenance level 1 · Quick (2 identical reads)', '1'),
+-                ('Maintenance level 2 · Normal (3 samples + settle)', '2'),
+-                ('Maintenance level 3 · Thorough (5 samples)', '3'),
+-                ('Maintenance level 4 · Deep (sector majority ≥75%)', '4'),
+-                ('Maintenance level 5 · Extreme (sector majority ≥80%)', '5'),
+-            ):
+-                self.maintenance_box.addItem(label, value)
+-            self.maintenance_box.setCurrentIndex(1)  # Normal default for guided care
+-            workflow.addWidget(self.maintenance_box)
++            # Automatic intensity is an evidence-led plan, never a user-set
++            # integer or a substitute for independent raw-write authorization.
++            self.auto_plan_note=QLabel('Automatic maintenance plan · waiting for device evidence')
++            self.auto_plan_note.setObjectName('muted')
++            self.auto_plan_note.setWordWrap(True)
++            self.auto_plan_note.setToolTip('DriveRepair chooses a bounded consistency budget. More reads are not automatically safer; it does not enable destructive writes.')
++            workflow.addWidget(self.auto_plan_note)
+             self.batch_button=QPushButton('Queue multiple drives for rescue  +')
+             self.batch_button.setToolTip('Serial read-only imaging of multiple selected sources. Each destination is a unique NEW image on separate healthy storage.')
+             self.batch_button.clicked.connect(self.queue_rescue)
+@@ -975,6 +968,11 @@ def launch():
+             self.copy_summary_button.setToolTip('Copies only currently displayed local evidence. No data is sent anywhere.')
+             self.copy_summary_button.clicked.connect(self.copy_summary)
+             report_row.addStretch()
++            self.detailed_report_button=QPushButton('View detailed report')
++            self.detailed_report_button.setEnabled(False)
++            self.detailed_report_button.setToolTip('Save a modern, completely local HTML evidence report. No data is uploaded.')
++            self.detailed_report_button.clicked.connect(self.export_detailed_report)
++            report_row.addWidget(self.detailed_report_button)
+             report_row.addWidget(self.copy_summary_button)
+             result_card.addLayout(report_row)
+             # Actionable outcome precedes dense telemetry. The evidence map
+@@ -1055,6 +1053,12 @@ def launch():
+                     title+=' · NVR / surveillance workload (NOT a recording type)'
+                 self.profile_note.setText(title + '\n' + profile.recovery_method)
+                 self.media_pipeline.set_policy(profile.kind,decision.can_attempt_hdd_refresh)
++                if self.job_box.currentData() in {'carequick','carefull','careresume'}:
++                    from .automatic_maintenance import choose_maintenance
++                    plan=choose_maintenance(model=str(d.get('model') or ''),
++                        bus=str(d.get('bus') or ''), snapshot=snap,
++                        mode='full' if self.job_box.currentData()=='carefull' else 'quick')
++                    self.auto_plan_note.setText(f'Automatic plan · {plan.title}. {plan.explanation}')
+                 self.profile_note.setToolTip('Classification: '+profile.confidence+'. '+
+                     'USB is a transport, not a physical medium. '+profile.maintenance_note+
+                     '\nRecommendation: '+decision.label+'; '+'; '.join(decision.reasons))
+@@ -1214,6 +1218,7 @@ def launch():
+                 self.offline_devices.blockSignals(False)
+                 QTimer.singleShot(0,self.refresh_devices)
+             hints={'health':'Reads SMART attributes where available; no physical writes.',
++                   'capacity':'Authenticity spot check: temporary writes to selected USB regions, readback, and restoration. Requires full backup and durable separate-drive journal. Not a normal health scan.',
+                    'scanquick':'Samples at least 10% of the entire drive with distributed random locations; no writes.',
+                    'scanfull':'Reads the full address space, saving a resumable local checkpoint.',
+                    'carequick':'Investigates slow regions; may rewrite only consistently readable targets after consent.',
+@@ -1232,9 +1237,18 @@ def launch():
+             self.operation_impact.setToolTip(impact_detail)
+             self.operation_impact.style().unpolish(self.operation_impact)
+             self.operation_impact.style().polish(self.operation_impact)
+-            self.start.setText('Start '+('read-only rescue' if kind in {'rescue','rescueimage'} else
++            self.start.setText('Start '+('capacity spot test' if kind=='capacity' else
++                                         'read-only rescue' if kind in {'rescue','rescueimage'} else
+                                          'diagnostics' if kind in {'health','scanquick','scanfull','resume'} else
+                                          'authorized repair'))
++            if guided:
++                from .automatic_maintenance import choose_maintenance
++                d=self.selected() or {}
++                auto=choose_maintenance(model=str(d.get('model') or ''),
++                    bus=str(d.get('bus') or ''),
++                    snapshot=self._health_by_device.get(d.get('identity_hint')),
++                    mode='full' if kind=='carefull' else 'quick')
++                self.auto_plan_note.setText(f'Automatic plan · {auto.title}. {auto.explanation}')
+             self.update_action_state()
+         def quick_switch(self):
+             """Keyboard-searchable local workflow switcher, no remote indexes."""
+@@ -1247,6 +1261,7 @@ def launch():
+                      ('Rescue · existing disk image','rescueimage')]
+             if not PUBLIC_BETA_IMAGE_ONLY:
+                 choices.append(('Repair · experimental targeted rewrite','carequick'))
++                choices.append(('Validate · USB authenticity spot test (writes+restores)','capacity'))
+             dialog=QDialog(self)
+             dialog.setWindowTitle('Quick switch · Ctrl+K')
+             dialog.resize(425,320)
+@@ -1294,6 +1309,15 @@ def launch():
+             if self._pending_resume:
+                 enabled=False
+                 advice='Waiting for verified USB reconnect. Cancel reconnect to choose another operation.'
++            if kind=='capacity':
++                if PUBLIC_BETA_IMAGE_ONLY:
++                    enabled=False
++                    advice='Capacity testing writes temporarily to patient USB regions and is unavailable in the read-only public beta.'
++                elif enabled and (self.selected() or {}).get('bus','').lower()!='usb':
++                    enabled=False
++                    advice='Capacity spot testing requires a selected external USB disk.'
++                elif enabled:
++                    advice='High-risk write/restore test. Use only a backed-up, disposable USB; an unreliable controller can overwrite unrelated data.'
+             self.start.setEnabled(enabled)
+             # When a repair is ineligible, expose the non-destructive next step
+             # without a cryptic failed worker run. No source write is performed.
+@@ -1304,7 +1328,7 @@ def launch():
+             self.device_box.setEnabled(not running)
+             self.offline_devices.setEnabled(not running)
+             self.job_box.setEnabled(not running)
+-            self.maintenance_box.setEnabled(not running and kind in {'carequick','carefull','careresume'})
++            self.auto_plan_note.setVisible(kind in {'carequick','carefull','careresume'})
+             self.browse.setEnabled(not running)
+             self.batch_button.setEnabled(not running)
+             self.boot_button.setEnabled(not running)
+@@ -1321,6 +1345,43 @@ def launch():
+             self.smart_check_button.setEnabled(not running and bool(self.selected()) and
+                 not (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning))
+ 
++        def export_detailed_report(self):
++            result=self._last_job_result
++            if not isinstance(result,dict) or not result:
++                QMessageBox.information(self,'No report yet','Run a diagnostic, rescue or capacity test first.')
++                return
++            preferred=self._last_report_file if self._last_job_kind=='capacity' else None
++            if preferred and Path(preferred).is_file():
++                QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(preferred).resolve())))
++                return
++            suggested='DriveRepair-evidence-'+time.strftime('%Y%m%d-%H%M%S')+'.html'
++            path,_=QFileDialog.getSaveFileName(self,'Export local visual evidence report',
++                 suggested,'HTML reports (*.html)')
++            if not path:
++                return
++            if not path.lower().endswith('.html'):
++                path+='.html'
++            try:
++                from .drive_report import save_report
++                regions=None
++                # Surface cells are only coarse evidence aggregates, not
++                # equivalent to 576 individually validated capacity spots.
++                if self._last_job_kind not in {'capacity','rescue','rescueimage'}:
++                    coverage=self.map.coverage
++                    if coverage.size>0:
++                        regions=[]
++                        for cell in coverage.cells:
++                            status=('read_error' if cell.read_errors else
++                                    'slow' if cell.slow_reads else
++                                    'readable' if cell.fraction>=0.999 else
++                                    'sampled' if cell.fraction>0 else 'untested')
++                            regions.append({'offset':cell.start,'length':cell.end-cell.start,
++                                            'status':status,'read_fraction':round(cell.fraction,4)})
++                save_report(path,result,device=self._last_good_device or {},scan_regions=regions)
++                QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).resolve())))
++            except (OSError,ValueError) as exc:
++                QMessageBox.warning(self,'Could not export report',str(exc)[:300])
++
+         def copy_summary(self):
+             device=(None if self._last_job_kind == 'rescueimage' else
+                     (self._last_good_device or self.selected()))
+@@ -2008,7 +2069,48 @@ def launch():
+                 if not ready:
+                     QMessageBox.warning(self,'Drive is not eligible for physical writes',reason)
+                     return
+-            if kind in {'rescue','rescueimage'}:
++            if kind == 'capacity':
++                if not d or str(d.get('bus','')).lower()!='usb' or PUBLIC_BETA_IMAGE_ONLY:
++                    QMessageBox.warning(self,'External USB required',
++                        'This write/restore test is restricted to backed-up external USB disks in guarded/engineering builds.')
++                    return
++                warning=QMessageBox.warning(self,'Capacity spot test — potential data loss',
++                    'This is NOT a read-only test. DriveRepair temporarily overwrites small locations '
++                    'and attempts to restore original bytes. An untrustworthy USB controller can alias '
++                    'writes into OTHER locations which cannot be restored. Never test a recovery patient '
++                    'or irreplaceable files; use only a disposable device with a verified backup.\n\n'
++                    f'Selected: {d.get("model", "Unknown")} · {d.get("serial_suffix", "unknown")}\n'
++                    'Continue only if all data has been backed up and you accept possible permanent loss.',
++                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
++                if warning!=QMessageBox.Yes:
++                    return
++                token='TEST '+str(d.get('identity_hint',''))
++                typed,accepted=QInputDialog.getText(self,'Confirm exact USB target',
++                    f'Type exactly {token} to authorize the selected USB test:')
++                if not accepted or typed!=token:
++                    QMessageBox.warning(self,'Not authorized','Target confirmation did not match. No test was started.')
++                    return
++                parent=QFileDialog.getExistingDirectory(self,'Choose journal parent on a DIFFERENT healthy disk')
++                if not parent:
++                    return
++                import secrets
++                journal=os.path.join(parent,'DriveRepair-Capacity-'+secrets.token_hex(5))
++                suggested='DriveRepair-capacity-'+time.strftime('%Y%m%d-%H%M%S')+'.html'
++                report,_=QFileDialog.getSaveFileName(self,'Save detailed evidence report to healthy storage',
++                    suggested,'HTML report (*.html)')
++                if not report:
++                    return
++                if not report.lower().endswith('.html'):
++                    report+='.html'
++                if os.path.lexists(report):
++                    QMessageBox.warning(self,'Existing report','Choose a NEW report path. Existing files are not overwritten.')
++                    return
++                args=['validate-usb-capacity','--device',d['id'],
++                    '--confirm-identity',d['identity_hint'], '--confirm-test',token,
++                    '--ack-data-loss','--ack-backed-up','--journal',journal,
++                    '--samples','144','--report-html',report,'--cooperative-stop-stdin','--progress-jsonl','--json']
++                self._last_report_file=report
++            elif kind in {'rescue','rescueimage'}:
+                 if kind == 'rescue' and not d:
+                     QMessageBox.warning(self,'Choose an external drive','Select the SOURCE drive to rescue first.')
+                     return
+@@ -2187,7 +2289,7 @@ def launch():
+                             'Save a small, private read-only scan checkpoint locally? '
+                             'This stores offsets and observations, not recovered sector bytes.',
+                             QMessageBox.Yes | QMessageBox.No)==QMessageBox.Yes
+-                    maint=str(self.maintenance_box.currentData() or '2')
++                    maint='auto'  # Freshly evaluated in the engine after live SMART identification
+                     args=['care-external','--cooperative-stop-stdin','--device',dev,'--mode','full' if kind=='carefull' else 'quick',
+                           '--maintenance-level',maint,
+                           *journal_args,'--auto-lock-volumes','--confirm-identity',d['identity_hint'],
+@@ -2231,6 +2333,8 @@ def launch():
+                 'No media repair is claimed until readback verification completes.')
+             self._buf={'stdout':'','stderr':''}
+             self._final_stdout=''
++            self._last_job_result=None
++            self.detailed_report_button.setEnabled(False)
+             self._scanned=0
+             self._last_progress_at=time.monotonic()
+             self._rescue_started_at=self._last_progress_at
+@@ -2297,8 +2401,8 @@ def launch():
+                 self._last_phase=phase
+                 self.metric_labels['rate'].setText('Measuring…')
+                 self.metric_labels['avg'].setText('Measuring…')
+-            self.metric_headers['read'].setText('DATA REWRITTEN' if phase=='REFRESH' else 'DATA READ')
+-            self.metric_headers['errors'].setText('READ ERRORS')
++            self.metric_headers['read'].setText('SAMPLED LOCATIONS' if phase=='CAPACITY_TEST' else 'DATA REWRITTEN' if phase=='REFRESH' else 'DATA READ')
++            self.metric_headers['errors'].setText('FAILED SPOTS' if phase=='CAPACITY_TEST' else 'READ ERRORS')
+             phase_number={'SCANNING':1, 'INVESTIGATING':2, 'REFRESH':3}.get(phase)
+             self.phase_caption.setText(
+                 f'Phase {phase_number} of up to 3 · {phase.title()}' if phase_number and
+@@ -2420,6 +2524,8 @@ def launch():
+                     self.note_log(self._final_stdout[-3000:])
+             if not isinstance(result,dict):
+                 result={}
++            self._last_job_result=result if result else None
++            self.detailed_report_button.setEnabled(bool(result))
+             condition_report = result.get('condition_comparison') or {}
+             key=(self._last_good_device or {}).get('identity_hint')
+             if key and isinstance(result,dict):
+@@ -2555,8 +2661,23 @@ def launch():
+                     self._reconnect_timer.start()
+             if 'read_error_chunks' in result:
+                 self.metric_labels['errors'].setText(str(result['read_error_chunks']))
++            if self._last_job_kind=='capacity':
++                counters=result.get('counters') if isinstance(result.get('counters'),dict) else {}
++                verified=int(counters.get('validated') or 0)
++                requested=int(result.get('samples_planned') or 0)
++                self.result.setText(('Spot test completed · sampled locations verified' if exit_code==0 else
++                                     'Capacity integrity warnings · review test evidence'))
++                self.explain.setText(f'{verified}/{requested} random-pattern sampled regions matched and were restored. '
++                    'A passing spot test does NOT certify full USB capacity or exclude aliasing into other data. '
++                    'Review the detailed report. Do not use a device with any mismatch for important files.')
++                self.next_action.setText('Review the per-location report; on disposable storage consider a full-capacity '
++                    'write-and-verify test before relying on the USB. Do not repeat on a recovery patient.')
++                self.metric_labels['done'].setText(f'{verified} / {requested} sample passes')
++                self.metric_labels['errors'].setText(str(max(0,requested-verified)))
+             self.copy_summary_button.setEnabled(True)
+-            if self._pending_resume:
++            if self._last_job_kind=='capacity':
++                pass  # keep capacity-specific advice
++            elif self._pending_resume:
+                 self.next_action.setText('Reconnect the exact same drive for the saved read-only scan. Verify its identity first.')
+             elif self._last_job_kind in ('rescue','rescueimage'):
+                 self.next_action.setText('Keep the source unchanged. Inspect the image journal for missing ranges and validate important recovered files.')
+@@ -2596,7 +2717,7 @@ def launch():
+                 event.ignore()
+                 return
+             if self.proc and self.proc.state()!=QProcess.NotRunning:
+-                if self._last_job_kind in ('carefull','carequick','careresume'):
++                if self._last_job_kind in ('carefull','carequick','careresume','capacity'):
+                     answer=QMessageBox.question(self,'Physical write may be in progress',
+                         'The active transaction cannot be forcibly interrupted safely. '
+                         'Request a cooperative stop and keep DriveRepair open until the engine finishes?',
+@@ -2635,7 +2756,7 @@ def launch():
+             if self._stop_requested:
+                 return
+             self._stop_requested=True
+-            if self._last_job_kind in ('carefull','carequick','careresume'):
++            if self._last_job_kind in ('carefull','carequick','careresume','capacity'):
+                 self.proc.write(b'STOP\n')
+                 self.result.setText('Stop requested — waiting for safe transaction boundary')
+                 self.explain.setText('No write is interrupted mid-transaction. A blocked Windows read '
+diff --git a/desktop/driverepair_desktop/release_policy.py b/desktop/driverepair_desktop/release_policy.py
+index 2d387b8..15c0e90 100644
+--- a/desktop/driverepair_desktop/release_policy.py
++++ b/desktop/driverepair_desktop/release_policy.py
+@@ -10,11 +10,11 @@ PUBLIC_BETA_IMAGE_ONLY = False  # Source checkout / engineering distribution onl
+ REPAIR_BETA_GUARDED = False  # Only the explicit --repair-beta artifact enables this.
+ 
+ PHYSICAL_WRITE_COMMANDS = frozenset({
+-    'care-external', 'refresh-external', 'refresh-system',
++    'care-external', 'refresh-external', 'refresh-system', 'validate-usb-capacity',
+ })
+ # Image in-place refresh also writes the original source image. Public recovery
+ # is copy-out-only; work on a separately created clone in engineering builds.
+-IN_PLACE_WRITE_COMMANDS = PHYSICAL_WRITE_COMMANDS | {'care-image', 'refresh-image'}
++IN_PLACE_WRITE_COMMANDS = PHYSICAL_WRITE_COMMANDS | {'care-image', 'refresh-image', 'validate-image-capacity'}
+ 
+ 
+ def block_public_physical_writes(command: str | None, *, execute_optimization: bool = False) -> None:
+@@ -27,7 +27,7 @@ def block_public_physical_writes(command: str | None, *, execute_optimization: b
+             'Choose a read-only scan or rescue to a new image instead. '
+             'Hardware repair remains restricted to separately qualified engineering builds.'
+         )
+-    if REPAIR_BETA_GUARDED and direct_write and command != 'care-external':
++    if REPAIR_BETA_GUARDED and direct_write and command not in {'care-external','validate-usb-capacity'}:
+         raise ValueError(
+             'Direct media writes are unavailable in the guarded repair beta. '
+             'Use the guided care-external workflow with SMART evidence, identity '
+diff --git a/desktop/driverepair_desktop/workstation_ui.py b/desktop/driverepair_desktop/workstation_ui.py
+index e7b88fa..11fb887 100644
+--- a/desktop/driverepair_desktop/workstation_ui.py
++++ b/desktop/driverepair_desktop/workstation_ui.py
+@@ -56,6 +56,8 @@ def can_start(kind: str | None, *, device_selected: bool, image_exists: bool,
+     """
+     if running:
+         return False, 'An operation is already running. Stop it safely before starting another.'
++    if kind == 'capacity' and public_beta:
++        return False, 'USB capacity spot tests temporarily write to the source and are unavailable in the read-only public build.'
+     if kind in EXPERIMENTAL_OPERATIONS and public_beta:
+         return False, 'In-place repair is unavailable in the image-first public beta.'
+     if kind in IMAGE_OPERATIONS:
+@@ -72,6 +74,8 @@ def can_start(kind: str | None, *, device_selected: bool, image_exists: bool,
+ 
+ 
+ def operation_impact(kind: str | None) -> tuple[str, str]:
++    if kind == 'capacity':
++        return ('WRITES / RESTORES SOURCE', 'High-risk test. Temporarily writes sampled USB regions and tries to restore originals; full backup required.')
+     if kind in IMAGE_OPERATIONS:
+         return ('READ-ONLY SOURCE', 'Source image is read-only; a separate NEW image receives the recovered bytes.')
+     family = operation_family(kind)
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index f6c1ce6..b02a146 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b18"
++version = "0.3.3b19"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_capacity_report_and_auto.py b/desktop/tests/test_capacity_report_and_auto.py
+new file mode 100644
+index 0000000..00ec71d
+--- /dev/null
++++ b/desktop/tests/test_capacity_report_and_auto.py
+@@ -0,0 +1,193 @@
++"""No physical devices. Capacity spot test, interruption journal and report contract."""
++from __future__ import annotations
++
++import json
++import os
++from pathlib import Path
++import tempfile
++import unittest
++from unittest import mock
++
++from driverepair_desktop.capacity_validation import (
++    RegularImageWriter, planned_locations, latency_stats, restore_pending, validate_spots)
++from driverepair_desktop.drive_report import render_report, save_report
++from driverepair_desktop.automatic_maintenance import choose_maintenance
++from driverepair_desktop.workstation_ui import can_start, operation_impact
++
++
++class CorruptingWriter:
++    def __init__(self, source, *, mismatch=False, fail_restore=False):
++        self.inner=source
++        self.writes=0
++        self.mismatch=mismatch
++        self.fail_restore=fail_restore
++    def read_at(self, off, n):
++        return self.inner.read_at(off,n)
++    def write_at(self, off, data):
++        self.writes+=1
++        if self.fail_restore and self.writes==2:
++            raise OSError('restore denied')
++        if self.mismatch and self.writes==1:
++            return self.inner.write_at(off,bytes(len(data)))
++        return self.inner.write_at(off,data)
++    def flush(self):self.inner.flush()
++
++
++class CapacityTests(unittest.TestCase):
++    def test_locations_are_spaced_aligned_and_metadata_edges_untouched(self):
++        size=16*1024**3
++        offsets=planned_locations(size,512,samples=576)
++        self.assertEqual(len(offsets),len(set(offsets)))
++        self.assertGreaterEqual(offsets[0],16*1024**2)
++        self.assertLessEqual(offsets[-1]+4096,size-16*1024**2)
++        self.assertTrue(all(v%4096==0 for v in offsets))
++        with self.assertRaises(ValueError):
++            planned_locations(64*1024,512,samples=576)
++
++    def test_success_preserves_every_original_byte_and_latency_metrics(self):
++        with tempfile.TemporaryDirectory() as root:
++            image=Path(root)/'patient.img'
++            data=os.urandom(1024*1024)
++            image.write_bytes(data)
++            media=RegularImageWriter(str(image))
++            try:
++                result=validate_spots(media,size=media.size,sector=512,source_token=media.token,
++                    journal_dir=Path(root)/'safe-journal',samples=12,skip_edges=0)
++            finally:media.close()
++            self.assertEqual(image.read_bytes(),data)
++            self.assertEqual(result['status'],'SAMPLED_REGIONS_VERIFIED')
++            self.assertEqual(result['counters']['validated'],12)
++            self.assertEqual(result['read_latency']['samples'],24)
++            self.assertEqual(result['write_latency']['samples'],12)
++            self.assertTrue(all(x['original_restored_and_verified'] for x in result['regions']))
++            self.assertIn('do not certify',str(result['notes']).lower())
++
++    def test_alias_like_mismatch_is_not_pass_even_when_original_restored(self):
++        with tempfile.TemporaryDirectory() as root:
++            image=Path(root)/'fake.img';image.write_bytes(b'Z'*(512*1024))
++            media=RegularImageWriter(str(image))
++            try:
++                result=validate_spots(CorruptingWriter(media,mismatch=True),size=media.size,
++                    sector=512,source_token=media.token,journal_dir=Path(root)/'j',
++                    samples=8,skip_edges=0)
++            finally:media.close()
++            self.assertEqual(result['counters']['mismatch'],1)
++            self.assertEqual(result['status'],'CAPACITY_INTEGRITY_WARNINGS')
++            self.assertEqual(image.read_bytes(),b'Z'*(512*1024))
++
++    def test_failed_restoration_keeps_journal_and_can_be_recovered(self):
++        with tempfile.TemporaryDirectory() as root:
++            image=Path(root)/'fake.img';data=os.urandom(512*1024);image.write_bytes(data)
++            journal=Path(root)/'journal'
++            media=RegularImageWriter(str(image))
++            try:
++                with self.assertRaisesRegex(OSError,'CRITICAL'):
++                    validate_spots(CorruptingWriter(media,fail_restore=True),size=media.size,
++                        sector=512,source_token=media.token,journal_dir=journal,
++                        samples=8,skip_edges=0)
++                self.assertTrue((journal/'region.bin').is_file())
++                state=json.loads((journal/'meta.json').read_text())
++                self.assertEqual(state['state'],'RESTORE_FAILED')
++                outcome=restore_pending(media,journal,source_token=media.token,
++                    size=media.size,sector=512)
++                self.assertEqual(outcome['status'],'ORIGINAL_RESTORED_VERIFIED')
++                self.assertFalse((journal/'region.bin').exists())
++            finally:media.close()
++            self.assertEqual(image.read_bytes(),data)
++
++    def test_windows_fallback_without_pread_pwrite(self):
++        with tempfile.TemporaryDirectory() as root:
++            image=Path(root)/'image.img';image.write_bytes(os.urandom(512*1024))
++            original=image.read_bytes()
++            media=RegularImageWriter(str(image))
++            try:
++                with mock.patch('driverepair_desktop.capacity_validation.os.pread', None,create=True), \
++                     mock.patch('driverepair_desktop.capacity_validation.os.pwrite', None,create=True):
++                    outcome=validate_spots(media,size=media.size,sector=512,source_token=media.token,
++                        journal_dir=Path(root)/'journal',samples=8,skip_edges=0)
++                self.assertEqual(outcome['status'],'SAMPLED_REGIONS_VERIFIED')
++            finally:media.close()
++            self.assertEqual(image.read_bytes(),original)
++
++    def test_symlinked_journal_is_rejected(self):
++        with tempfile.TemporaryDirectory() as root:
++            image=Path(root)/'image.img';image.write_bytes(os.urandom(512*1024))
++            real=Path(root)/'real';real.mkdir()
++            alias=Path(root)/'alias'
++            try:alias.symlink_to(real,target_is_directory=True)
++            except (OSError,NotImplementedError):self.skipTest('Host cannot create symlinks')
++            media=RegularImageWriter(str(image))
++            try:
++                with self.assertRaises(PermissionError):
++                    validate_spots(media,size=media.size,sector=512,source_token=media.token,
++                        journal_dir=alias,samples=8,skip_edges=0)
++            finally:media.close()
++
++    def test_stop_between_regions_never_writes_remaining_samples(self):
++        with tempfile.TemporaryDirectory() as root:
++            image=Path(root)/'fake.img';image.write_bytes(b'A'*(512*1024))
++            media=RegularImageWriter(str(image))
++            count=[0]
++            try:
++                result=validate_spots(media,size=media.size,sector=512,source_token=media.token,
++                    journal_dir=Path(root)/'j',samples=8,skip_edges=0,
++                    stop_requested=lambda:count[0]>=3,
++                    progress=lambda _:count.__setitem__(0,count[0]+1))
++            finally:media.close()
++            self.assertEqual(result['status'],'STOPPED_INCOMPLETE')
++            self.assertEqual(result['counters']['untested'],5)
++            self.assertEqual(image.read_bytes(),b'A'*(512*1024))
++
++    def test_html_escapes_untrusted_media_and_does_not_fabricate_capacity(self):
++        result={'test_kind':'capacity_spot_write_restore','status':'CAPACITY_INTEGRITY_WARNINGS',
++                'declared_bytes':10**12,'samples_planned':2,'samples_completed':2,
++                'counters':{'validated':1,'mismatch':1},
++                'highest_verified_offset':12345,
++                'regions':[{'offset':0,'length':4096,'status':'validated'},
++                           {'offset':10**11,'length':4096,'status':'mismatch'}],
++                'read_latency':latency_stats([1.0,2.0,3.0]),
++                'write_latency':latency_stats([10.0,20.0])}
++        output=render_report(result,device={'model':'<script>alert(1)</script>'})
++        self.assertNotIn('<script>',output)
++        self.assertIn('&lt;script&gt;',output)
++        self.assertIn('Highest validated address',output)
++        self.assertIn('NOT contiguous validated capacity',output)
++        self.assertIn('Coefficient of variation',output)
++        self.assertIn('Mismatch',output)
++        with tempfile.TemporaryDirectory() as root:
++            path=Path(root)/'report.html'
++            save_report(path,result)
++            with self.assertRaises(ValueError):save_report(path,result)
++
++    def test_auto_policy_is_read_stress_selection_not_write_permission(self):
++        smr=choose_maintenance(model='ST1000LM048',bus='usb',
++                               snapshot={'reported_medium':'hdd'})
++        self.assertEqual(smr.level,2)
++        self.assertEqual(choose_maintenance(model='Disk',bus='nvme',
++                            snapshot={'reported_medium':'ssd'}).level,1)
++        self.assertEqual(choose_maintenance(model='ST1000LM048',bus='usb',
++                            snapshot={'reported_medium':'hdd'},read_errors=22).level,1)
++        allowed,note=can_start('capacity',device_selected=True,image_exists=False,
++                               running=False,public_beta=True)
++        self.assertFalse(allowed)
++        self.assertIn('WRITE',operation_impact('capacity')[0])
++
++    def test_public_policy_denies_in_place_image_capacity_writes(self):
++        from driverepair_desktop import release_policy
++        with mock.patch.object(release_policy,'PUBLIC_BETA_IMAGE_ONLY',True):
++            with self.assertRaisesRegex(ValueError,'In-place patient writes'):
++                release_policy.block_public_physical_writes('validate-image-capacity')
++
++    def test_cli_image_end_to_end_detailed_report(self):
++        from driverepair_desktop.cli import run
++        with tempfile.TemporaryDirectory() as td:
++            patient=Path(td)/'patient.img';patient.write_bytes(os.urandom(512*1024))
++            report=Path(td)/'result.html'
++            with mock.patch('builtins.print'):
++                exitcode=run(['validate-image-capacity','--image',str(patient),
++                    '--journal',str(Path(td)/'journal'),'--samples','72',
++                    '--report-html',str(report),'--json'])
++            self.assertEqual(exitcode,0)
++            self.assertIn('Sampled address map',report.read_text())
++
++if __name__=='__main__':unittest.main()
+diff --git a/docs/CAPACITY_AUTHENTICITY.md b/docs/CAPACITY_AUTHENTICITY.md
+new file mode 100644
+index 0000000..c8ff18c
+--- /dev/null
++++ b/docs/CAPACITY_AUTHENTICITY.md
+@@ -0,0 +1,45 @@
++# DriveRepair USB capacity-integrity spot testing
++
++## What it tests
++
++A counterfeit or defective USB flash drive can advertise more addressable space than its controller can actually store. DriveRepair samples a set of locations distributed over the claimed address space, temporarily writes 4 KiB of unpredictable test data, reads it back and attempts to restore its original contents. The original 4 KiB is saved first in a durable transaction journal on **a separate, healthy physical disk**. The result distinguishes successful sampled verification, read failures, write failures, mismatches, unstable original reads and failed restoration.
++
++The default is **144 sampled spots**. Additional CLI counts 72, 288 and 576 are available. By default the first and last 16 MiB are excluded to reduce risk to common disk metadata, **not** to guarantee file safety. The drive may lie about locations, remap addresses or alias different addresses to the same physical flash memory. A test that passes all samples cannot certify every byte or even a guaranteed minimum usable capacity; read-after-write from a counterfeit device can mislead.
++
++## Critical safety limitation
++
++**This is a destructive-risk test and should never be run on a data-recovery patient or any device containing irreplaceable data.** A malicious or broken controller can redirect a test write to an *untested* location, corrupting material the journal cannot identify or restore. The operating system, USB bridge, driver or power loss can also prevent restoration. A journal is a recovery aid, not an assurance that source data survives. A backup must be independently verified before using the test, even though the program attempts restoration. The public image-first beta disables this hardware test.
++
++## Novice workflow
++
++1. Select a disposable USB device with an independently verified backup; check the exact device fingerprint.
++2. In the Qt workstation choose **Diagnose → Verify USB capacity**. Review the written risk explanation and type the target-specific confirmation.
++3. Choose an empty journal location on a **different healthy physical disk**, and a new HTML report destination.
++4. Start the test. Leave the USB connected and avoid writes from other applications. Stop is cooperative between locations, not an immediate cancellation of blocked kernel calls.
++5. Open **View detailed report**. Green means a sampled region verified its temporary data and original restoration; red/orange indicates issues. Treat any abnormality as a reason not to trust the device.
++
++## Technical and lab workflow
++
++The `validate-image-capacity` command exercises the same engine on an existing disposable regular-file image. It changes and restores that **image**, never the contents of a physical patient device. Example:
++
++```bash
++python -m driverepair_desktop validate-image-capacity --image disposable.img --journal /another-disk/drive-test-journal --samples 144 --report-html /another-disk/drive-test.html --json
++```
++
++Guarded/engineering builds additionally expose `validate-usb-capacity` requiring a verified external USB selection, exact device fingerprint, `TEST <fingerprint>` confirmation, backup and data-loss acknowledgements, exclusive access and a durable journal on physically distinct storage. Run `--help` for the full set of flags. `--restore-only` exists for interrupted USB journal recovery and must match the device identity, size and sector geometry.
++
++If restoration is not verified, **stop**. Preserve the journal and seek specialist help rather than re-running a test. Never format, initialize, or stress a device after a failed restore.
++
++## Report interpretation
++
++- **Declared capacity:** what the device advertises, not proven writable space.
++- **Highest validated offset:** one sampled address only; not a contiguous validated range.
++- **Observed read coverage:** measured *read* addresses; not a byte-integrity certificate.
++- **Latency statistics:** small sampled operations with median, extrema, standard deviation and coefficient of variation, not full-drive speed or life expectancy.
++- **Unvisited locations:** explicitly unknown.
++
++This work was informed by the **level of evidence** in [GRC's ValiDrive Report](https://www.grc.com/validrive/the-report.htm) but uses DriveRepair's own workflows, visuals, terminology and cautious safety rules. It is not a claim of identical algorithms or certification.
++
++## Legacy GUI disposition
++
++The old Tk workstation contains specialist actions not yet fully present in Qt (e.g., deletion preview/recovery and several filesystem/clone operations). It remains until those actions are ported, tested and removed from any dependencies. Feature loss is not acceptable in a removal-only refactor.
