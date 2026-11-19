@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — finish landing workbench-20261118 unique commits (2026-11-19)
+
+- Port remaining unique `workbench-20261118` commits onto `main`: read-only surface consensus recovery, `choose_speed` finished-job average fallback (fixes stale Measuring…), and Windows GUI telemetry test diagnostics (GATE-012).
+- Do **not** re-apply the obsolete workstation UI megadiff from that branch; current `main` already supersedes it with b14–b18 guarded-repair / USB / statistical recovery work. Delete the stale branch after merge.
 ## Unreleased — surface recovery: consensus rereads, zone baselines, sector drilldown (2026-11-19)
 
 - Add read-only `surface_recovery` primitives modelled on publicly documented SpinRite behaviour (independent implementation, no proprietary code): majority consensus across rereads with varied read starts/head offsets, per-zone adaptive latency baselines, and bounded sector-level drilldown inside a failed chunk.
