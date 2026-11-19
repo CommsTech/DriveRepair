@@ -644,12 +644,13 @@ def launch():
             self.iso_button.clicked.connect(self.build_iso)
             # Keep the expert actions accessible inside the creator rather than
             # consuming the navigation with build-kit/ISO/flash distinctions.
-            self.sponsor_button=QPushButton('♡  Support DriveRepair')
+            # Segoe UI measures "Support DriveRepair" at 264 px, wider than the
+            # whole 214 px sidebar; only a short caption renders intact on both
+            # Linux and Windows, so the full wording lives in the tooltip.
+            self.sponsor_button=QPushButton('♡  Sponsor')
             self.sponsor_button.setObjectName('sponsor')
-            # The sidebar is only 214 px wide: 13 px text overflows the button and
-            # the trailing letters get clipped. One step down keeps it whole.
-            self.sponsor_button.setStyleSheet('font-size:12px; padding:6px 8px;')
-            self.sponsor_button.setToolTip('Opens the same GitHub Sponsors profile as Repository Detective. No telemetry or network request until clicked.')
+            self.sponsor_button.setToolTip('Support DriveRepair development on GitHub Sponsors. '
+                                           'No telemetry or network request until clicked.')
             self.sponsor_button.clicked.connect(lambda:QDesktopServices.openUrl(QUrl('https://github.com/sponsors/CommsTech')))
 
             self.flash_proc=None

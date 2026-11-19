@@ -80,6 +80,7 @@ class WorkstationUxTests(unittest.TestCase):
         needed = button.fontMetrics().horizontalAdvance(button.text())
         self.assertGreaterEqual(button.contentsRect().width() - 16, needed,
                                 'Support button text is clipped by the sidebar width')
+        self.assertIn('Sponsor', button.toolTip())
 
     def test_keyboard_start_is_gated_like_the_button(self):
         self.assertEqual(self.win.start_shortcut.key().toString(), 'Ctrl+Return')

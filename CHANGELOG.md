@@ -12,8 +12,9 @@
   "green button that does nothing" contradiction. It now greys out, verified by
   sampling the rendered button rather than the stylesheet string.
 - **No clipped labels:** the evidence tab caption is shortened to *Surface map*
-  with the full meaning in its tooltip, and the sidebar support button drops one
-  font step so its label is no longer cut off in a 214 px sidebar.
+  with the full meaning in its tooltip. The sidebar support button is shortened
+  to *Sponsor* because Segoe UI measures the full caption at 264 px inside a
+  214 px sidebar; the complete wording moves to its tooltip.
 - **Empty inventory explains itself:** with no external drive the selector is
   disabled, shows a placeholder, and the note tells the user to connect the drive
   and press Refresh instead of presenting a large unexplained empty dropdown.
