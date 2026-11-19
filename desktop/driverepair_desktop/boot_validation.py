@@ -98,8 +98,10 @@ def _eltorito_platforms(handle, size: int) -> tuple[bool, bool]:
         if record[0] in (0x90, 0x91):  # section header, platform ID
             platform = record[1]
         elif record[0] == 0x88 and int.from_bytes(record[8:12], 'little'):
-            if platform == 0: bios = True
-            if platform == 0xef: efi = True
+            if platform == 0:
+                bios = True
+            if platform == 0xef:
+                efi = True
     return bios, efi
 
 
@@ -128,11 +130,16 @@ def qualify_live_iso(source: str | os.PathLike[str]) -> dict:
         rootfs = any(p.endswith(('.squashfs', '.squashfs.img')) for p in files)
         bios, efi = _eltorito_platforms(handle, st.st_size)
     missing = []
-    if not kernel: missing.append('Linux kernel (vmlinuz)')
-    if not initrd: missing.append('initramfs')
-    if not rootfs: missing.append('live compressed root filesystem (squashfs)')
-    if not bios: missing.append('BIOS boot catalog entry')
-    if not efi: missing.append('UEFI boot catalog entry')
+    if not kernel:
+        missing.append('Linux kernel (vmlinuz)')
+    if not initrd:
+        missing.append('initramfs')
+    if not rootfs:
+        missing.append('live compressed root filesystem (squashfs)')
+    if not bios:
+        missing.append('BIOS boot catalog entry')
+    if not efi:
+        missing.append('UEFI boot catalog entry')
     if missing:
         raise ValueError('Not a usable DriveRepair recovery ISO: missing ' + ', '.join(missing) +
                          '. Do not flash this placeholder; build and boot-test the Debian live image.')

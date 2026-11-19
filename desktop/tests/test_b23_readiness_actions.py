@@ -47,6 +47,22 @@ class ReadinessNextActionTests(unittest.TestCase):
             self.assertFalse(out['ready'])
             self.assertEqual(out['action'],'rescue')
 
+    def test_known_ssd_model_routes_to_rescue_not_smart_retry(self):
+        """SanDisk SDSSDH3 must not keep offering SMART polls to unlock HDD repair."""
+        ssd={'identity_hint':'aaaaaaaaaaaa','serial_suffix':'***ssd1','bus':'usb',
+             'model':'SanDisk SDSSDH3 500G','sector_size':512}
+        # No SMART snapshot yet — model family alone is enough to refuse HDD rewrite.
+        out=readiness_next_action(ssd,'carequick',smartctl_available=True)
+        self.assertFalse(out['ready'])
+        self.assertEqual(out['action'],'rescue')
+        self.assertIn('Rescue data',out['label'])
+        # Windows HealthStatus fallback after a failed SMART probe must also
+        # stop looping on "Check drive SMART" for known SSD SKUs.
+        windows={'source':'windows_storage_healthstatus','status':'windows_health_limited',
+                 'smart_unavailable_reason':'SMART probe failed (status bits 1: command line did not parse)'}
+        out2=readiness_next_action(ssd,'carequick',windows,smartctl_available=True)
+        self.assertEqual(out2['action'],'rescue')
+
     def test_missing_serial_stays_fail_closed(self):
         d={**self.device,'serial_suffix':'unavailable'}
         self.assertEqual(readiness_next_action(d,'carequick',

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — 2026-11-19 known-SSD readiness stops SMART retry loops
+
+- Known SSD/NVMe/flash model families (for example SanDisk ``SDSSDH3``) now route
+  the HDD-maintenance next action to **Rescue data to an image** instead of
+  endlessly offering "Check drive SMART and identity". Targeted HDD region
+  rewrite remains fail-closed for flash; SMART polling cannot unlock it.
+- SMART probe failures decode smartctl bits 0–2 in plain language (parse /
+  open / ATA command) so USB bridge limits are clearer than ``status bits 1``.
+- Ruff E701 cleanup in ``boot_validation.py`` (Gitea #207 / #208).
+
 ## 0.3.3b23 — 2026-11-19: actionable repair readiness and USB SMART evidence
 
 - Consolidated the Qt repair preflight into one contextual action: choose a disk, enable SMART tools with consent if absent, retry read-only SMART/ATA identity, or route to image rescue. A disabled hardware-write button no longer leaves the user guessing about the next step.
