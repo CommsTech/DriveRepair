@@ -89,7 +89,7 @@ try {
     $probeLines = @()
     foreach ($device in $devices) {
         $rawPath = '\\.\' + (($device -split ':')[-1])
-        foreach ($type in @('auto', 'sat', 'sntjmicron', 'sntasmedia', 'sntrealtek', 'usbjmicron')) {
+        foreach ($type in @('auto', 'sat', 'sat,12', 'sntjmicron', 'sntasmedia', 'sntrealtek', 'usbjmicron', 'usbjmicron,0')) {
             $arguments = @('--json', '--all')
             if ($type -ne 'auto') { $arguments += @('-d', $type) }
             $arguments += $rawPath

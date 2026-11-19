@@ -19,8 +19,9 @@ from .devices import Device
 # A bounded, ordered list of smartmontools device types worth trying for USB
 # bridges. Order matters: plain SAT first (cheapest, most common), then the
 # vendor-specific passthroughs. Unknown types are simply skipped by smartctl.
-USB_DEVICE_TYPES = ('sat', 'sntasmedia', 'sntjmicron', 'sntrealtek', 'usbjmicron')
-MAX_EXTRA_DEVICE_PROBES = 4
+USB_DEVICE_TYPES = ('sat', 'sat,12', 'sntjmicron', 'sntasmedia',
+                    'sntrealtek', 'usbjmicron', 'usbjmicron,0')
+MAX_EXTRA_DEVICE_PROBES = 5
 EXTRA_PROBE_TIMEOUT_SECONDS = 5
 SMART_LOG_TIMEOUT_SECONDS = 5
 ATA_ATTRIBUTE_LIMIT = 64

@@ -114,7 +114,7 @@ class SmartBreadthTests(unittest.TestCase):
         runner, calls = make_runner(auto=auto)
         health_snapshot(self.device, run=runner)
         probe_calls = [c for c in calls if '-d' in c]
-        self.assertLessEqual(len(probe_calls), 4,
+        self.assertLessEqual(len(probe_calls), 5,
                              f'too many bridge probes: {len(probe_calls)}')
 
     def test_missing_logs_are_reported_not_invented(self):

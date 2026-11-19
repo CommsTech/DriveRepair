@@ -55,6 +55,15 @@ raw physical-drive reads for unelevated processes):
 | PhysicalDrive3 — Seagate ST1000LM048 1 TB HDD | completed_with_slow_regions | 25.2 MiB | 0 | one 110 ms first read at offset 0 (cold start), 0.69 s |
 | PhysicalDrive4 — 3.77 GB flash | completed | 23.4 MiB | 0 | 1.52 s |
 
+SMART follow-up on the same host: smartmontools 7.5 was installed, and each
+drive still reports health UNKNOWN. `smartctl` returns exit status 1 with
+`\\\\.\\PhysicalDriveN: Unable to detect device type` for auto-detection, and the
+same for the plain SAT probe. That is a **bridge limitation, not a parsing
+gap**: DriveRepair reports the specific reason instead of inventing a score.
+Next step for these enclosures is a parameterised or vendor passthrough type
+(`sat,12`, `usbjmicron,0`, `sntjmicron`) once an elevated probe is approved, or
+direct SATA. The probe script records every type's exit code and message.
+
 Coverage is a **24-sample spot check** (~0.005 % of each large drive), not a
 health or capacity certificate. SMART is UNKNOWN on this host (no smartmontools).
 
