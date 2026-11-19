@@ -14,7 +14,7 @@ import stat
 import time
 from typing import Callable
 
-from .compat import binary_open_flags, pwrite
+from .compat import binary_open_flags, pwrite, replace_with_retry
 from .scanner import Reader
 
 _FATAL = {errno.ENODEV, errno.EBADF, errno.EPERM, errno.EACCES,
@@ -47,7 +47,8 @@ def _state_save(path: str, state: dict) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
-    os.replace(temp, path)
+    # Windows AV/indexer can briefly deny replacing an existing meta.json.
+    replace_with_retry(temp, path)
     if os.name == 'posix':
         dirfd = os.open(os.path.dirname(path), os.O_RDONLY)
         try:
