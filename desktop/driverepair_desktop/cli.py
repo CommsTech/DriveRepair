@@ -175,6 +175,9 @@ def parser() -> argparse.ArgumentParser:
                          help='Advanced high-risk: confirmed CMR only, reread both sides before adding writes')
         cmd.add_argument('--repair-policy', choices=['preserve', 'balanced'], default='balanced',
                          help='Balanced retries read errors without rewriting unknown bytes')
+        cmd.add_argument('--maintenance-level', default='2',
+                         help='Statistical recovery ladder 1-5 or quick|normal|thorough|deep|extreme '
+                              '(investigation + refresh; fail-closed; not a SpinRite clone)')
         cmd.add_argument('--ack-media-warning', action='store_true',
                          help='Explicitly accept higher risk on a SMART media warning (not FAIL)')
         cmd.add_argument('--ack-risk', action='store_true')
@@ -387,6 +390,9 @@ def parser() -> argparse.ArgumentParser:
         cmd.add_argument('--max-errors', type=int, default=4096)
         cmd.add_argument('--consistency-reads', type=int, default=2,
                          help='Identical reads required before journaling a region (min 2)')
+        cmd.add_argument('--maintenance-level', default='1',
+                         help='Statistical recovery ladder 1-5 or quick|normal|thorough|deep|extreme '
+                              '(raises samples/settle; sector majority only at deep/extreme; fail-closed)')
         cmd.add_argument('--adaptive-samples', type=int, default=256)
         cmd.add_argument('--slow-multiplier', type=float, default=2.0,
                          help='Adaptive: refresh regions at/above median_latency * multiplier')
@@ -880,6 +886,13 @@ def _run_extras(args) -> int:
         is_system = args.command == 'refresh-system'
         if args.consistency_reads < 2:
             raise ValueError('--consistency-reads must be >= 2')
+        from .statistical_recovery import level_as_refresh_kwargs, resolve_maintenance_level, summarize_level
+        maintenance = resolve_maintenance_level(getattr(args, 'maintenance_level', '1'))
+        maintenance_kwargs = level_as_refresh_kwargs(maintenance)
+        # Explicit --consistency-reads wins as a floor when higher than the level default.
+        maintenance_kwargs['consistency_reads'] = max(
+            args.consistency_reads, int(maintenance_kwargs['consistency_reads']),
+        )
         if is_device and args.journal_backend not in {'disk', 'ramdisk', 'memory'}:
             raise ValueError('Physical refresh supports disk, verified Linux ramdisk, or explicitly accepted volatile RAM only')
         if args.journal_backend == 'memory':
@@ -1080,13 +1093,20 @@ def _run_extras(args) -> int:
                 media, size=size, sector=sector, source_token=source_token,
                 journal=args.journal or 'RAM_ONLY_NO_FILES', chunk=args.chunk_mib * 1024 * 1024,
                 mode=args.mode, verify=not args.no_verify, resume=args.resume,
-                max_errors=args.max_errors, consistency_reads=args.consistency_reads,
+                max_errors=args.max_errors, consistency_reads=maintenance_kwargs['consistency_reads'],
                 adaptive_samples=args.adaptive_samples, slow_multiplier=args.slow_multiplier,
                 journal_backend=args.journal_backend, auto_escalate=args.auto_escalate,
+                settle_ms=maintenance_kwargs['settle_ms'],
+                statistical_samples=maintenance_kwargs['statistical_samples'],
+                min_agreement=maintenance_kwargs['min_agreement'],
+                allow_sector_majority=maintenance_kwargs['allow_sector_majority'],
+                maintenance_level=maintenance_kwargs['maintenance_level'],
+                maintenance_level_name=maintenance_kwargs['maintenance_level_name'],
                 progress=check_progress, identity_check=identity_check,
                 pre_write_check=pre_write, stop_requested=stop_control.requested,
             )
             result['sensors'] = sensors.public_summary()
+            result['maintenance'] = summarize_level(maintenance)
             if not args.json:
                 dashboard.finish(result)
         finally:
@@ -1259,9 +1279,15 @@ def _run_care(args) -> int:
     This is *media refresh*, not arbitrary flipped-bit repair. The existing
     rolling-journal engine owns every write. No error-bearing source is rewritten.
     """
+    from .statistical_recovery import (
+        level_as_refresh_kwargs, resolve_maintenance_level, summarize_level,
+    )
+
     is_hardware = args.command == 'care-external'
     control = StopControl(bool(getattr(args, 'cooperative_stop_stdin', False)))
     ram_only = args.journal_backend == 'memory'
+    maintenance = resolve_maintenance_level(getattr(args, 'maintenance_level', '2'))
+    maintenance_kwargs = level_as_refresh_kwargs(maintenance)
     # An explicitly opted-in, small offsets-only history file is independent
     # of a RAM-only REGION journal. No sector bytes or recovery image are saved.
     if ram_only and args.resume:
@@ -1482,7 +1508,13 @@ def _run_care(args) -> int:
                     scan['error_investigation'] = investigate_failed_ranges(
                         reader, scan['read_error_ranges'], sector=sector,
                         max_reads=24, max_regions=8, max_elapsed_seconds=20.0,
-                        progress=investigation_progress)
+                        progress=investigation_progress,
+                        statistical_samples=maintenance_kwargs['statistical_samples'],
+                        settle_ms=maintenance_kwargs['settle_ms'],
+                        min_agreement=maintenance_kwargs['min_agreement'],
+                        allow_sector_majority=maintenance_kwargs['allow_sector_majority'],
+                    )
+                    scan['error_investigation']['maintenance'] = summarize_level(maintenance)
             finally:
                 reader.close()
             control.check_read_boundary()
@@ -1647,11 +1679,20 @@ def _run_care(args) -> int:
             repair = refresh_media(
                 writer, size=size, sector=sector, source_token=token,
                 journal=journal_path, chunk=chunk, mode='targeted', targets=targets,
-                journal_backend=args.journal_backend, consistency_reads=2, verify=True,
+                journal_backend=args.journal_backend,
+                consistency_reads=maintenance_kwargs['consistency_reads'],
+                settle_ms=maintenance_kwargs['settle_ms'],
+                statistical_samples=maintenance_kwargs['statistical_samples'],
+                min_agreement=maintenance_kwargs['min_agreement'],
+                allow_sector_majority=maintenance_kwargs['allow_sector_majority'],
+                maintenance_level=maintenance_kwargs['maintenance_level'],
+                maintenance_level_name=maintenance_kwargs['maintenance_level_name'],
+                verify=True,
                 resume=args.resume, max_errors=16, progress=progress,
                 identity_check=identity_check, pre_write_check=identity_check,
                 stop_requested=control.requested,
             )
+            repair['maintenance'] = summarize_level(maintenance)
         finally:
             writer.close()
         # Reopen read-only after releasing the writer's exclusive handles.
@@ -1666,7 +1707,12 @@ def _run_care(args) -> int:
                         assert_stable_identity(selected, select_external_device(args.device))
                     reopened = open_device_readonly(selected) if is_hardware else ImageReader(args.image)
                     try:
-                        postverify = verify_committed_regions(reopened, records, size=size, sector=sector)
+                        postverify_samples = 2 if maintenance.level < 4 else 3
+                        postverify = verify_committed_regions(
+                            reopened, records, size=size, sector=sector,
+                            settle_ms=maintenance_kwargs['settle_ms'],
+                            samples=postverify_samples,
+                        )
                     finally:
                         reopened.close()
                 except (OSError, RuntimeError, ValueError) as exc:

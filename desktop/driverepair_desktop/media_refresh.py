@@ -553,16 +553,65 @@ def _classify_os_error(exc: OSError) -> str:
     return "os_error"
 
 
-def _read_consistent(media: ReadWriter, offset: int, length: int, reads: int) -> bytes:
+def _read_consistent(
+    media: ReadWriter,
+    offset: int,
+    length: int,
+    reads: int,
+    *,
+    sector: int = 512,
+    settle_ms: int = 0,
+    statistical_samples: int = 0,
+    min_agreement: float = 1.0,
+    allow_sector_majority: bool = False,
+    telemetry: dict | None = None,
+) -> bytes:
+    """Require repeatable reads before journaling a rewrite candidate.
+
+    When ``statistical_samples`` > ``reads``, use the fail-closed statistical
+    sampler (settle delays + optional high-confidence sector majority).
+    Otherwise keep the classic dual/N identical-read path, optionally with settle.
+    """
     if reads < 2:
         raise ValueError("consistency_reads must be >= 2")
+    sample_budget = max(reads, int(statistical_samples or 0))
+    if sample_budget > reads or settle_ms > 0 or allow_sector_majority:
+        from .statistical_recovery import read_with_statistical_confidence
+
+        result = read_with_statistical_confidence(
+            media.read_at,
+            offset,
+            length,
+            samples=sample_budget,
+            settle_ms=settle_ms,
+            min_agreement=min_agreement,
+            allow_sector_majority=allow_sector_majority,
+            sector=sector,
+        )
+        if telemetry is not None:
+            telemetry["last_statistical_method"] = result.method
+            telemetry["last_statistical_agreement"] = result.agreement_ratio
+            telemetry["statistical_recoveries"] = int(telemetry.get("statistical_recoveries") or 0) + (
+                1 if result.method == "sector_majority" else 0
+            )
+            telemetry["unanimous_recoveries"] = int(telemetry.get("unanimous_recoveries") or 0) + (
+                1 if result.method == "unanimous" else 0
+            )
+        return result.data
+
     first = media.read_at(offset, length)
     if len(first) != length:
         raise OSError(errno.EIO, f"short read ({len(first)} of {length})")
     for _ in range(reads - 1):
+        if settle_ms > 0:
+            time.sleep(min(settle_ms, 500) / 1000.0)
         again = media.read_at(offset, length)
         if again != first:
             raise RuntimeError("inconsistent_reads")
+    if telemetry is not None:
+        telemetry["unanimous_recoveries"] = int(telemetry.get("unanimous_recoveries") or 0) + 1
+        telemetry["last_statistical_method"] = "unanimous"
+        telemetry["last_statistical_agreement"] = 1.0
     return first
 
 
@@ -897,6 +946,12 @@ def _default_meta(
     mode: str,
     verify: bool,
     consistency_reads: int,
+    settle_ms: int = 0,
+    statistical_samples: int = 0,
+    min_agreement: float = 1.0,
+    allow_sector_majority: bool = False,
+    maintenance_level: int = 1,
+    maintenance_level_name: str = "quick",
 ) -> dict:
     return {
         "schema": 2,
@@ -908,6 +963,14 @@ def _default_meta(
         "source_token": source_token,
         "verify": verify,
         "consistency_reads": consistency_reads,
+        "settle_ms": settle_ms,
+        "statistical_samples": statistical_samples,
+        "min_agreement": min_agreement,
+        "allow_sector_majority": allow_sector_majority,
+        "maintenance_level": maintenance_level,
+        "maintenance_level_name": maintenance_level_name,
+        "statistical_recoveries": 0,
+        "unanimous_recoveries": 0,
         "cursor": 0,
         "queue": [],
         "rewritten_bytes": 0,
@@ -920,7 +983,8 @@ def _default_meta(
         "status": "in_progress",
         "notes": (
             "Rolling journal protects only the active region (SAVED→WRITING→VERIFIED→COMMITTED). "
-            "Not a substitute for a full backup. Unreadable/inconsistent sectors are never rewritten."
+            "Not a substitute for a full backup. Unreadable/inconsistent sectors are never rewritten. "
+            "Statistical multi-sample reads may settle between attempts; sector majority is fail-closed."
         ),
     }
 
@@ -1064,6 +1128,12 @@ def refresh_media(
     slow_multiplier: float = 2.0,
     journal_backend: str = "disk",
     auto_escalate: bool = True,
+    settle_ms: int = 0,
+    statistical_samples: int = 0,
+    min_agreement: float = 1.0,
+    allow_sector_majority: bool = False,
+    maintenance_level: int = 1,
+    maintenance_level_name: str = "quick",
     progress: Callable[[dict], None] | None = None,
     identity_check: Callable[[], None] | None = None,
     pre_write_check: Callable[[], None] | None = None,
@@ -1077,6 +1147,12 @@ def refresh_media(
         raise ValueError("Invalid size/sector/chunk alignment for refresh")
     if not 1 <= max_errors <= 100000 or consistency_reads < 2:
         raise ValueError("Invalid max_errors or consistency_reads")
+    if statistical_samples and (statistical_samples < 2 or statistical_samples > 32):
+        raise ValueError("statistical_samples must be 0 (off) or 2–32")
+    if not 0.5 <= float(min_agreement) <= 1.0:
+        raise ValueError("min_agreement must be between 0.5 and 1.0")
+    if settle_ms < 0 or settle_ms > 500:
+        raise ValueError("settle_ms must be 0–500")
     if journal_backend == "memory" and resume:
         raise ValueError("Process-RAM journal cannot resume after exit; its original bytes are lost")
 
@@ -1119,6 +1195,13 @@ def refresh_media(
             raise RuntimeError("Journal sector/chunk/mode does not match this run")
         if meta.get("verify") != verify or meta.get("consistency_reads") != consistency_reads:
             raise RuntimeError("Verification/consistency settings changed on resume")
+        if (
+            int(meta.get("settle_ms") or 0) != int(settle_ms)
+            or int(meta.get("statistical_samples") or 0) != int(statistical_samples)
+            or float(meta.get("min_agreement") or 1.0) != float(min_agreement)
+            or bool(meta.get("allow_sector_majority")) != bool(allow_sector_majority)
+        ):
+            raise RuntimeError("Statistical recovery settings changed on resume")
         if meta.get("journal_backend") not in {None, journal_backend}:
             raise RuntimeError("Journal backend changed on resume")
         if mode == "targeted" and (meta.get("target_digest") is None or
@@ -1132,6 +1215,10 @@ def refresh_media(
         meta = _default_meta(
             source_token=source_token, size=size, sector=sector, chunk=chunk,
             mode=mode, verify=verify, consistency_reads=consistency_reads,
+            settle_ms=settle_ms, statistical_samples=statistical_samples,
+            min_agreement=min_agreement, allow_sector_majority=allow_sector_majority,
+            maintenance_level=maintenance_level,
+            maintenance_level_name=maintenance_level_name,
         )
         meta["journal_backend"] = journal_backend
         if mode == "targeted":
@@ -1270,7 +1357,14 @@ def refresh_media(
                 break
             offset, length = region
             try:
-                data = _read_consistent(media, offset, length, consistency_reads)
+                data = _read_consistent(
+                    media, offset, length, consistency_reads,
+                    sector=sector, settle_ms=settle_ms,
+                    statistical_samples=statistical_samples,
+                    min_agreement=min_agreement,
+                    allow_sector_majority=allow_sector_majority,
+                    telemetry=meta,
+                )
             except RuntimeError as exc:
                 if str(exc) != "inconsistent_reads":
                     raise
@@ -1348,11 +1442,21 @@ def refresh_media(
         "last_error_class": meta.get("last_error_class"),
         "verify": verify,
         "consistency_reads": consistency_reads,
+        "settle_ms": settle_ms,
+        "statistical_samples": statistical_samples,
+        "min_agreement": min_agreement,
+        "allow_sector_majority": allow_sector_majority,
+        "maintenance_level": maintenance_level,
+        "maintenance_level_name": maintenance_level_name,
+        "statistical_recoveries": int(meta.get("statistical_recoveries") or 0),
+        "unanimous_recoveries": int(meta.get("unanimous_recoveries") or 0),
+        "last_statistical_method": meta.get("last_statistical_method"),
         "elapsed_seconds": meta["elapsed_seconds"],
         "probe_elapsed_seconds": meta.get("probe_elapsed_seconds", probe_elapsed),
         "total_elapsed_seconds": round(time.monotonic() - started, 3),
         "notes": meta["notes"],
         "windows_admin_required": sys.platform == "win32",
+        "not_a_spinrite_clone": True,
     }
     for key in (
         "adaptive_samples_requested", "adaptive_samples_readable", "adaptive_probe_failures",

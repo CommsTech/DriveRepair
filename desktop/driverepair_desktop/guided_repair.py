@@ -50,17 +50,26 @@ def tuned_scan(*, size: int, sector: int, mode: str, bus: str = "",
 def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
                               max_reads: int = 96, max_regions: int = 16,
                               progress=None, max_elapsed_seconds: float = 20.0,
-                              max_probe_bytes: int = 64 * 1024) -> dict:
+                              max_probe_bytes: int = 64 * 1024,
+                              statistical_samples: int = 0,
+                              settle_ms: int = 0,
+                              min_agreement: float = 1.0,
+                              allow_sector_majority: bool = False) -> dict:
     """Try to re-read error chunks, splitting down to logical sectors.
 
-    Every candidate must match in TWO reads. This establishes repeatability,
-    NOT the original/correct bytes. On a real drive this is deliberately bounded
-    to avoid hammering failing media. Does not perform ANY writes.
+    Baseline: every candidate must match in TWO reads (repeatability, not
+    provenance). Optional statistical multi-sample recovery is used only at
+    sector size after dual-read disagreement, still fail-closed, read-only.
+    Does not perform ANY writes.
     """
     import time
+    from .statistical_recovery import read_with_statistical_confidence
+
     if (sector <= 0 or max_reads < 2 or max_regions < 1 or max_elapsed_seconds <= 0
             or max_probe_bytes < sector or max_probe_bytes % sector):
         raise ValueError('Invalid retry budget or sector size')
+    if statistical_samples and (statistical_samples < 2 or statistical_samples > 32):
+        raise ValueError('statistical_samples must be 0 or 2–32')
     started = time.monotonic()
     pending = deque()
     for raw in ranges[:max_regions]:
@@ -71,6 +80,7 @@ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
     consistent: list[dict] = []
     unresolved: list[dict] = []
     reads = 0
+    statistical_rescues = 0
     device_unstable = False
     while pending and reads < max_reads and time.monotonic() - started < max_elapsed_seconds:
         off, length = pending.popleft()
@@ -82,6 +92,7 @@ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
             pending.appendleft((off, max_probe_bytes))
             continue
         good = False
+        classification = 'repeatable_after_read_error_not_checksum_verified'
         try:
             # Charge BEFORE the call: a failed OS/USB read costs a real I/O
             # operation, sometimes many seconds. Never allow recursive splits
@@ -96,6 +107,27 @@ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
                 reads += 1
                 two = reader.read_at(off, length)
                 good = len(two) == length and one == two
+            # Sector-sized disagreement: optional statistical multi-sample pass.
+            if (not good and length == sector and statistical_samples >= 2
+                    and reads + statistical_samples <= max_reads
+                    and time.monotonic() - started < max_elapsed_seconds):
+                try:
+                    recovered = read_with_statistical_confidence(
+                        reader.read_at, off, length,
+                        samples=statistical_samples, settle_ms=settle_ms,
+                        min_agreement=min_agreement,
+                        allow_sector_majority=allow_sector_majority,
+                        sector=sector,
+                    )
+                    reads += statistical_samples
+                    good = True
+                    statistical_rescues += 1
+                    classification = (
+                        f'statistical_{recovered.method}_agreement_'
+                        f'{recovered.agreement_ratio:.2f}_not_checksum_verified'
+                    )
+                except (RuntimeError, OSError):
+                    reads += min(statistical_samples, max(0, max_reads - reads))
         except OSError as exc:
             # WinError 1117 is ERROR_IO_DEVICE, and Python may report errno=22.
             # The Win32 code takes precedence over the generic errno.
@@ -111,7 +143,7 @@ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
                 break
         if good:
             consistent.append({'offset': off, 'length': length,
-                               'classification': 'repeatable_after_read_error_not_checksum_verified'})
+                               'classification': classification})
         elif length > sector:
             # Sector-aligned binary bisection, with no unbounded recursion.
             left = ((length // sector) // 2) * sector
@@ -127,7 +159,8 @@ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
                       'resolved_regions': len(consistent),
                       'unresolved_regions': len(unresolved), 'pending_regions': len(pending),
                       'elapsed_seconds': time.monotonic() - started,
-                      'offset': off, 'length': length, 'state': 'probed'})
+                      'offset': off, 'length': length, 'state': 'probed',
+                      'statistical_rescues': statistical_rescues})
     unresolved.extend({'offset': a, 'length': b} for a, b in pending)
     # Input may be truncated at the budget. Never imply all source errors resolved.
     limited = len(ranges) > max_regions or bool(pending)
@@ -136,6 +169,7 @@ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
             'consistent_regions': consistent, 'unresolved_regions': unresolved,
             'read_calls': reads, 'budget_exhausted': limited,
             'device_unstable': device_unstable,
+            'statistical_rescues': statistical_rescues,
             'uninvestigated_original_ranges': max(0, len(ranges) - max_regions)}
 
 
