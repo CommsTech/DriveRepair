@@ -19,7 +19,9 @@ On a clean, isolated Debian trixie x86-64 build VM:
   sudo bash scripts/build_live_iso.sh /path/to/fresh/output
   bash scripts/check_live_iso.sh /path/to/fresh/output/*.iso
 
-The builder writes only ordinary files/ISO output, never a USB device.
+The builder writes only ordinary files/ISO output. A separate flash-usb command
+and Qt Flash bootable USB action can DESTRUCTIVELY write an ISO-hybrid to a
+confirmed sacrificial USB disk, followed by full byte readback verification.
 BIOS/UEFI VM and real hardware boot tests are MANDATORY before distribution.
 Never target patient disks when building or subsequently flashing media.
 Refer to docs/BOOT_RECOVERY.md for restrictions.

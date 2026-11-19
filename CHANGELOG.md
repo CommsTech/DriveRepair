@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — 2026-11-18 USB recovery-media flashing (hardware QA pending)
+
+- Add **Flash bootable USB** to the primary Qt workstation. Selecting an ISO, a specific USB whole disk, typing `ERASE <device-id>` and acknowledging permanent data loss are separate required steps. A final destructive confirmation is also required before launch.
+- Expose `flash-usb` CLI with the same destructive identity/approval gates, full image write, sector-aligned padding, flush and complete SHA-256 readback. Report byte-verified / boot-not-tested rather than treating writes as proof that a computer can boot the result.
+- Reject non-USB targets, missing/changed serial or fingerprint, system/boot drives through the Windows `Get-Disk` gate, mounted Linux media, insufficient capacity, source images on the selected USB, and malformed non-hybrid ISO markers. Windows uses guarded exclusive volume lock/dismount; Linux requires root and verifies mounts/holders before exclusive opening.
+- Add cooperative stop checkpoints between flash reads/writes, explicit incomplete-media errors, and synthetic short-write, mismatched-readback and stop tests. No drive is touched by the test suite.
+- **Native Windows USB flashing, Linux raw-device flashing and BIOS/UEFI boot are not yet hardware-tested.** Windows USB bridges can deny raw writes or hold disk I/O despite attempts to acquire locks; report this rather than bypassing the OS. See `docs/USB_FLASH_HARDWARE_QA_20261118.md`.
+
 ## Unreleased — workbench-20261118 hardening merge and qtgui lint cleanup (2026-11-18)
 
 - Port unique `workbench-20261118` repair-engine hardening onto current `main` without regressing guarded-repair / recovery-workbench features already landed via PRs #178–#183.
