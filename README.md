@@ -4,6 +4,14 @@
 
 > **Current source baseline: 0.3.3b13, with post-b13 beta hardening (unreleased). Not approved for unrestricted physical-drive repair.** The supplied source archive is an engineering build. Only the separately built `-public-beta.pyz` package has in-place image/physical-drive writes disabled by distribution policy. Do not distribute the engineering zipapp/wheel as a public safety-qualified release.
 
+## Workstation updates — November 18 (unreleased, requires native validation)
+
+The updated Qt workstation offers a 64×12 full-device evidence map with **aggregated successful-read spans** (no more systematically undercounting throttled scan results), clearer current-phase vs. whole-job progress, visual condition indicators, multi-drive read-only rescue queueing, and two boot-media actions: export a Debian live-ISO build kit or run the experimental ISO builder on a qualified Linux build host. The builder **does not flash USB devices** and the ISO is not boot-certified. On trusted Linux live recovery, users can opt into read-only imaging of offline internal disks.
+
+**Batch rescue is NOT batch repair.** Each source is revalidated, each output is a unique new image on healthy separate storage, and outcomes are logged. A Windows/USB kernel read can still stall; small I/O requests and worker supervision reduce but cannot eliminate this failure mode. The condition gauge is a **diagnostic evidence index**, never a warranty or remaining-life forecast. Exact-model vendor service-hour ratings may be entered manually; they are not auto-guessed from MTBF/AFR.
+
+See [workstation, batch, reliability and boot-handoff details](docs/MULTIDRIVE_CONDITION_AND_LIVE_UI_20261118.md) for completed changes, limitations and Windows testing checklist. **The new capabilities are source-level, not a hardware-certified release.**
+
 ## Start here — choose the safest workflow
 
 | Your situation | Start with | What the result means |

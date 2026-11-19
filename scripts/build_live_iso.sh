@@ -40,6 +40,9 @@ mkdir -p config/package-lists \
 cat > config/package-lists/driverepair.list.chroot <<'EOF'
 python3
 python3-tk
+python3-pyside6.qtcore
+python3-pyside6.qtgui
+python3-pyside6.qtwidgets
 smartmontools
 gddrescue
 testdisk

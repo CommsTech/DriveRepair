@@ -1,0 +1,2082 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index e468747..5d76e12 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,15 @@
+ # Changelog
+ 
++## Unreleased — multi-drive, condition evidence, live ISO and truthful Qt telemetry (2026-11-18)
++
++- Preserve aggregated successful and failed read spans across throttled progress messages, addressing the inaccurate GUI coverage map in the supplied Windows screenshots. Keep unobserved drive regions unknown.
++- Refine the Qt workstation with transparent labels, KPI tiles, higher-resolution 64×12 media visualization, improved throughput graph, phase-versus-job progress copy, a condition evidence gauge and operator-entered, documented model service-hours rating.
++- Add read-only, sequential **multi-device image rescue** with per-disk fingerprint checks, distinct unused image names, storage-capacity preflight, local durable batch manifest and append-only event log. Each CLI child still performs authoritative destination ancestry and identity checks; no unattended physical writes.
++- Add a 3-minute read-only diagnostic stalled-I/O watchdog and 4-minute queued-rescue timeout for isolating blocked child operations. Restrict Windows external-USB guided requests to at most 1 MiB to reduce prolonged-blocking risk. These are **not** OS-driver hard timeouts or guarantees of safe USB cancellation.
++- Expose Debian live-ISO build-kit export and optional Linux-root ISO builder from the Qt GUI; include PySide6 packages. Allow explicitly opted-in offline Linux internal-disk read-only rescue. **No USB flasher or boot certification is claimed.**
++- Include SMART/NVMe-based evidence index with UNKNOWN for missing/coarse telemetry, before/after condition comparison, confidence, available drive hours and optional documented rated hours. No predictive failure percentage, neural restoration, or claimed lifespan improvement.
++- Add synthetic regression tests and Windows/hardware/ISO handoff in `docs/MULTIDRIVE_CONDITION_AND_LIVE_UI_20261118.md`. Native PySide6 GUI interaction, hardware writes, boot image and Rust compilation remain untested here.
++
+ ## Unreleased — guarded HDD repair beta and independent post-write verification (2026-11-18)
+ 
+ - Add separate `--repair-beta` build with actual guarded `care-external` raw-disk write path, while preserving the original image-first public package. Reject unqualified direct raw-refresh commands in this artifact.
+diff --git a/README.md b/README.md
+index f558502..e7a5805 100644
+--- a/README.md
++++ b/README.md
+@@ -4,6 +4,14 @@
+ 
+ > **Current source baseline: 0.3.3b13, with post-b13 beta hardening (unreleased). Not approved for unrestricted physical-drive repair.** The supplied source archive is an engineering build. Only the separately built `-public-beta.pyz` package has in-place image/physical-drive writes disabled by distribution policy. Do not distribute the engineering zipapp/wheel as a public safety-qualified release.
+ 
++## Workstation updates — November 18 (unreleased, requires native validation)
++
++The updated Qt workstation offers a 64×12 full-device evidence map with **aggregated successful-read spans** (no more systematically undercounting throttled scan results), clearer current-phase vs. whole-job progress, visual condition indicators, multi-drive read-only rescue queueing, and two boot-media actions: export a Debian live-ISO build kit or run the experimental ISO builder on a qualified Linux build host. The builder **does not flash USB devices** and the ISO is not boot-certified. On trusted Linux live recovery, users can opt into read-only imaging of offline internal disks.
++
++**Batch rescue is NOT batch repair.** Each source is revalidated, each output is a unique new image on healthy separate storage, and outcomes are logged. A Windows/USB kernel read can still stall; small I/O requests and worker supervision reduce but cannot eliminate this failure mode. The condition gauge is a **diagnostic evidence index**, never a warranty or remaining-life forecast. Exact-model vendor service-hour ratings may be entered manually; they are not auto-guessed from MTBF/AFR.
++
++See [workstation, batch, reliability and boot-handoff details](docs/MULTIDRIVE_CONDITION_AND_LIVE_UI_20261118.md) for completed changes, limitations and Windows testing checklist. **The new capabilities are source-level, not a hardware-certified release.**
++
+ ## Start here — choose the safest workflow
+ 
+ | Your situation | Start with | What the result means |
+diff --git a/mnt/data/driverepair_work/patchbase/new/desktop/driverepair_desktop/boot_media.py b/desktop/driverepair_desktop/boot_media.py
+new file mode 100644
+index 0000000..fcbc4de
+--- /dev/null
++++ b/desktop/driverepair_desktop/boot_media.py
+@@ -0,0 +1,80 @@
++"""Export a standalone Debian live-ISO *build kit* from source or zipapp.
++
++Creates ordinary ZIP files only. No raw-device access or boot certification.
++Bundled recipe files permit the GUI button to work in a standalone .pyz.
++"""
++from __future__ import annotations
++
++from importlib import resources
++from pathlib import Path
++import os
++import zipfile
++
++
++_INSTRUCTIONS = '''EXPERIMENTAL / UNVERIFIED BOOT MEDIA
++
++On a clean, isolated Debian trixie x86-64 build VM:
++  sudo apt install live-build debootstrap xorriso
++  cd driverepair
++  sudo bash scripts/build_live_iso.sh /path/to/fresh/output
++  bash scripts/check_live_iso.sh /path/to/fresh/output/*.iso
++
++The builder writes only ordinary files/ISO output, never a USB device.
++BIOS/UEFI VM and real hardware boot tests are MANDATORY before distribution.
++Never target patient disks when building or subsequently flashing media.
++Refer to docs/BOOT_RECOVERY.md for restrictions.
++'''
++
++
++def export_build_kit(repo: str | Path | None, output: str | Path) -> dict:
++    root = Path(repo).resolve() if repo is not None else None
++    target = Path(output).resolve()
++    if target.exists() or target.is_symlink():
++        raise FileExistsError('Select a new build-kit ZIP path; existing files are never overwritten')
++    from_checkout = bool(root is not None and
++        (root / 'scripts' / 'build_live_iso.sh').is_file() and
++        (root / 'desktop' / 'driverepair_desktop' / '__main__.py').is_file())
++    if from_checkout and target.is_relative_to(root):
++        raise ValueError('Save the build kit OUTSIDE the source checkout')
++    target.parent.mkdir(parents=True, exist_ok=True)
++    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, 'O_BINARY', 0)
++    fd = os.open(target, flags, 0o600)
++    os.close(fd)
++    count = 0
++    try:
++        with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as z:
++            if from_checkout:
++                members = [root / 'scripts' / 'build_live_iso.sh',
++                    root / 'scripts' / 'check_live_iso.sh',
++                    root / 'docs' / 'BOOT_RECOVERY.md', root / 'README.md']
++                members.extend(sorted((root / 'desktop' / 'driverepair_desktop').glob('*.py')))
++                members.extend(sorted((root / 'desktop' / 'driverepair_desktop' / 'filesystems').glob('*.py')))
++                for path in members:
++                    z.write(path, 'driverepair/' + path.relative_to(root).as_posix())
++                    count += 1
++            else:
++                # importlib.resources works with Python zipapps and installed
++                # package trees; no temp extraction or network connection.
++                pkg = resources.files('driverepair_desktop')
++                for name in ('build_live_iso.sh','check_live_iso.sh','BOOT_RECOVERY.md','README.md'):
++                    member = pkg.joinpath('boot_resources',name)
++                    if not member.is_file():
++                        raise ValueError('Boot-media assets missing from application package')
++                    dst = ('scripts/' if name.endswith('.sh') else
++                           'docs/' if name == 'BOOT_RECOVERY.md' else '') + name
++                    z.writestr('driverepair/' + dst, member.read_bytes())
++                    count += 1
++                for folder in ('','filesystems'):
++                    source = pkg if not folder else pkg.joinpath(folder)
++                    for item in sorted(source.iterdir(), key=lambda t:t.name):
++                        if item.is_file() and item.name.endswith('.py'):
++                            loc = f'desktop/driverepair_desktop/{folder + "/" if folder else ""}{item.name}'
++                            z.writestr('driverepair/' + loc, item.read_bytes())
++                            count += 1
++            z.writestr('driverepair/BOOT_KIT_INSTRUCTIONS.txt',_INSTRUCTIONS)
++            count += 1
++    except BaseException:
++        target.unlink(missing_ok=True)
++        raise
++    return {'status':'UNVERIFIED_BUILD_KIT_CREATED','path':str(target),
++            'files':count,'notes':'Builder kit only; NOT a verified bootable ISO.'}
+diff --git a/mnt/data/driverepair_work/patchbase/new/desktop/driverepair_desktop/boot_resources/BOOT_RECOVERY.md b/desktop/driverepair_desktop/boot_resources/BOOT_RECOVERY.md
+new file mode 100644
+index 0000000..ccdc21f
+--- /dev/null
++++ b/desktop/driverepair_desktop/boot_resources/BOOT_RECOVERY.md
+@@ -0,0 +1,35 @@
++# Recovering a failed system / boot drive
++
++**Important:** The repository includes experimental BIOS/UEFI source, but no validated, universally bootable DriveRepair recovery image. A booted program that prints a success message does not prove it can enumerate or rescue NVMe/SATA/USB disks safely.
++
++## Supported fallback using an independently trusted live environment
++
++1. On a separate clean PC, prepare a trusted and verified Linux live USB from a maintained distribution. Follow the distribution's checksum/signature verification, not a homemade unsigned image.
++2. Boot the affected computer without mounting or repairing the failing system volume. If the drive is physically noisy/unstable, avoid retries and consult a specialist.
++3. Connect enough healthy destination space for an image; preferably a separate physical drive. Do not attempt to 'repair the only copy' by rewriting every sector.
++4. Run the validated diagnostic/read-only commands from a mounted DriveRepair portable source environment, or a known recovery program. The current direct-physical `rescue-external` workflow is Linux experimental and verifies source/destination ancestry. If unable to confirm safe destination, use a separately validated imaging tool.
++5. Preserve rescue maps and hash manifests off the patient. Analyze/repair a *copy* after acquisition.
++6. Restore verified recovered files or a known-good system backup to replacement media. Reinstall the OS when needed.
++
++Encryption: BitLocker, FileVault and LUKS require authorized credentials/keys; raw carving encrypted data usually yields false results. Secure Boot, RAID, vendor recovery partitions, BitLocker TPM binding and filesystem support must be tested individually.
++
++## Experimental hybrid live-ISO build recipe (NOT BOOT-VERIFIED)
++
++`./scripts/build_live_iso.sh /build/output` targets Debian trixie on x86-64
++with GRUB-PC and GRUB-EFI via live-build. The package includes DriveRepair,
++Python/Tk, smartctl, GNU ddrescue, testdisk and network mount tools.
++It does NOT write to USB or patient media. The output is explicitly
++`UNVERIFIED` until BIOS and UEFI VM and hardware boot tests pass. The
++separately included bare-metal Rust boot code is NOT an established recovery OS.
++
++See `ONE_DRIVE_RECOVERY.md` for the guided live-mode internal disk imaging
++workflow, explicit source identity, NAS/USB destination, resume, and limitations.
++
++## Future native boot goals (NOT IMPLEMENTED)
++
++- Reproducible UEFI and BIOS media build with SHA-256 and verified boot smoke tests.
++- Built-in OS storage drivers for NVMe, SATA, USB/UASP and SAS; no proprietary firmware bypass by default.
++- Explicit no-automount, no-write environment, source/destination physical identity, USB disconnect handling.
++- On-device manual recovery journal, encrypted report export and clear recovery/repair separation.
++
++Do not make an untested ISO or USB writer available to beta users as a complete recovery product.
+diff --git a/mnt/data/driverepair_work/patchbase/new/desktop/driverepair_desktop/boot_resources/README.md b/desktop/driverepair_desktop/boot_resources/README.md
+new file mode 100644
+index 0000000..e7a5805
+--- /dev/null
++++ b/desktop/driverepair_desktop/boot_resources/README.md
+@@ -0,0 +1,415 @@
++# DriveRepair
++
++**Drive diagnostics, image-first rescue, selective file extraction, clone-only filesystem repair and experimental original-media maintenance.** Privacy-first and local by default.
++
++> **Current source baseline: 0.3.3b13, with post-b13 beta hardening (unreleased). Not approved for unrestricted physical-drive repair.** The supplied source archive is an engineering build. Only the separately built `-public-beta.pyz` package has in-place image/physical-drive writes disabled by distribution policy. Do not distribute the engineering zipapp/wheel as a public safety-qualified release.
++
++## Workstation updates — November 18 (unreleased, requires native validation)
++
++The updated Qt workstation offers a 64×12 full-device evidence map with **aggregated successful-read spans** (no more systematically undercounting throttled scan results), clearer current-phase vs. whole-job progress, visual condition indicators, multi-drive read-only rescue queueing, and two boot-media actions: export a Debian live-ISO build kit or run the experimental ISO builder on a qualified Linux build host. The builder **does not flash USB devices** and the ISO is not boot-certified. On trusted Linux live recovery, users can opt into read-only imaging of offline internal disks.
++
++**Batch rescue is NOT batch repair.** Each source is revalidated, each output is a unique new image on healthy separate storage, and outcomes are logged. A Windows/USB kernel read can still stall; small I/O requests and worker supervision reduce but cannot eliminate this failure mode. The condition gauge is a **diagnostic evidence index**, never a warranty or remaining-life forecast. Exact-model vendor service-hour ratings may be entered manually; they are not auto-guessed from MTBF/AFR.
++
++See [workstation, batch, reliability and boot-handoff details](docs/MULTIDRIVE_CONDITION_AND_LIVE_UI_20261118.md) for completed changes, limitations and Windows testing checklist. **The new capabilities are source-level, not a hardware-certified release.**
++
++## Start here — choose the safest workflow
++
++| Your situation | Start with | What the result means |
++|---|---|---|
++| A drive is slow, unreadable or making errors | **Rescue data → Rescue selected external drive** to a NEW image on a separate healthy disk, then diagnose if the source can tolerate more reads | Source is not written; rescued data is not checksum-certified and bad sectors remain marked missing |
++| You have a disk image and need another copy | **Rescue data → Recover from existing disk image** (new destination) | The rescue map records readable and missing regions; an apparent full-size sparse file is not proof of recovery |
++| Files were deleted or a filesystem is damaged | Work from a **copy of the image** using FAT32/TSK/extraction or ext clone-repair tools | Results are limited, may be incomplete and do not guarantee original file contents |
++| You want to refresh/repair the original image or physical drive in place | **Guarded `-repair-beta.pyz` build permits guided HDD-targeted writes; the image-first public build remains read-only** | Experimental. Requires SMART, separate durable journal, identity and exclusive-access checks, explicit consent and hardware validation |
++
++### Installation and first run (Python 3.10+)
++
++The desktop interface uses Python, optional PySide6 (Qt UI), and a Tk fallback. **No native Windows/macOS/Linux installer or certified boot image is provided.** With Python installed, build the public image-first zipapp from a vetted source checkout:
++
++```sh
++python scripts/build_desktop.py --public-beta --no-wheel
++python dist/DriveRepair-0.3.3b13-public-beta.pyz gui
++```
++
++For a CLI image-only example, use a source **regular file** and an unused output path:
++
++```sh
++python dist/DriveRepair-0.3.3b13-public-beta.pyz scan-image --image source.img --mode triage --json
++python dist/DriveRepair-0.3.3b13-public-beta.pyz rescue-image --image source.img --output recovered.img --json
++python dist/DriveRepair-0.3.3b13-public-beta.pyz rescue-status --output recovered.img --json
++```
++
++For experimental **actual guided HDD repair** using a *separate*, explicitly restricted build, run:
++
++```sh
++python scripts/build_desktop.py --repair-beta --no-wheel
++python dist/DriveRepair-0.3.3b13-repair-beta.pyz qt-gui
++```
++
++This build enables **guided `care-external` physical writes** (not unconditional write commands). It requires smartctl evidence of an HDD, separate disk-backed journal, fingerprint confirmation and exclusive locking; unknown/SSD/NVMe media are not rewrite targets. The GUI requests explicit data-loss and SMART-warning consent. This is for *sacrificial hardware testing*, not qualification for valuable media. See [repair-beta engineering and hardware handoff](docs/REPAIR_BETA_ENGINEERING_20261118.md).
++
++Never use the patient disk as the recovery destination. If data is irreplaceable or hardware is rapidly failing, minimize further reads, prefer a validated imaging workflow, and consider a professional lab. No software can reliably reconstruct bytes never read or already overwritten.
++
++### Platform and capability status (not a certification)
++
++| Capability | Windows | Linux | macOS |
++|---|---|---|---|
++| Regular image scanning and image-based recovery | Implemented in Python; synthetic tests | Implemented; local synthetic tests | Implemented in Python; native execution unverified here |
++| Physical-drive inventory / read-only scan | Implementation present; USB/dock fault testing remains open | Implementation present; privileged device QA open | Discovery/read-only path present; native hardware QA open |
++| Physical in-place sector writes | Engineering path and guarded HDD repair-beta available; image-first public beta blocked | Engineering path and guarded HDD repair-beta available; physical hardware unverified | Disabled pending volume-lock qualification |
++| Standalone Rust core | Optional **regular-image rescue** backend only; OS parity not proven in this review | Optional regular-image rescue; Cargo build unavailable in this review | Optional source backend; OS parity not proven in this review |
++| UEFI/BIOS/ISO boot environment | Experimental source/recipe, not qualified | Experimental source/recipe, not qualified | Not a validated recovery environment |
++
++**Stop and recovery rules:** read-only Stop requests are honored at completed I/O boundaries; Windows/USB drivers can stall inside a kernel read. In-place operations never intentionally abort a transaction mid-write; a disk-backed journal holds only the active region, not a backup. Volatile RAM and hybrid modes cannot provide durable in-flight restoration. SMART HealthStatus lacking attributes is **UNKNOWN**, not a clean bill of health. A quick 10% sample is not whole-drive verification.
++
++**Build and release authority:** `docs/RELEASE_STATUS.md` is the current capability/release gate. The historical sections below document previous engineering changes and are **not** statements that those operations are public-ready. For exact incremental changes after b13 see `CHANGELOG.md` → Unreleased. No speed or recovery superiority over SpinRite, DiskGenius or Acronis has been independently benchmarked.
++
++## Workstation and rescue retry improvements (unreleased, November 18, 2026)
++
++The optional Qt workstation provides a three-step workflow, keyboard-focus styling,
++scrollable layout, highlighted goal selection, live patient-to-image rescue, and a
++journal-backed rescue map/status that distinguishes bytes **saved** from source
++**errors**. The default **Rescue data** operation now copies the selected external
++drive to a **new** image on a different healthy physical disk; the existing
++image-to-image operation remains separately available. Physical-drive rescue
++requires an explicit risk confirmation and source identity checks in the CLI.
++
++A targeted second pass can split unreadable requests to logical sectors, retry
++a failing sector with at most 0–2 extra reads (`--retry-sector-attempts`, default
++1), and require **two identical reads** before copying data newly recovered in
++the second pass. Mismatched bytes remain unresolved in the journal instead of
++being invented. This is an evidence-driven adaptive recovery method **not** a
++trained neural model, a CRC/cryptographic source proof, or a guarantee of
++successful restoration.
++
++Engineering-only in-place repair planning now prioritizes repeatably readable
++error areas and then high-latency weak areas when the operator's bounded
++candidate count is exceeded. The existing journal, exclusive access, device
++identity, preimage preservation, and read-back verification still gate every
++write. Public image-first packages keep physical writes blocked.
++
++See [engineering validation and handoff](docs/UI_RESCUE_ENGINE_HANDOFF_2026-11-18.md)
++for tests, limitations, and manual release gates. **No real-drive repair or
++neural-model success has been demonstrated by this code update.**
++
++## Windows access and read-only Stop (0.3.3b13)
++
++A partition without an accessible Windows volume handle blocks physical writes; an unpartitioned disk is not equivalent to an inaccessible partition. Guided scans retain findings on a pre-write lock failure. Read-only Qt scans now request cooperative cancellation, escalating only if the OS call remains unresponsive. See [Windows volume access and Stop](docs/WINDOWS_VOLUME_ACCESS_AND_STOP_0.3.3b13.md).
++
++## Reliability and safe cancellation (0.3.3b12)
++
++The Qt interface now separates current phase from estimated whole-job progress. Follow-up read errors consume actual retry attempts (including failures) and expose the currently investigated offset. Stop is cooperative during guided repair, never a mid-write abort. SMR and flash media use smaller bounded logical rewrite transactions; these are conservative, **not** factory-media rejuvenation. Full details and Windows testing instructions: [Bounded I/O and safe Stop](docs/BOUNDED_IO_AND_SAFE_STOP_0.3.3b12.md).
++
++## Windows mounted-volume preparation and read-error boundaries (0.3.3b11)
++
++The Qt Fix workflow can request a **temporary exclusive lock/dismount** of an external Windows volume with a drive letter. This is never done without the operation's explicit physical-write confirmation. Windows must establish exclusive access; in-use, unknown or system volumes remain off-limits. No forced dismount or permanent drive-letter removal is performed. Read-error investigations now look on both logical sides of failed requests with a strict additional-probe budget. These inspections are read-only and **do not establish physical damage or recover missing bytes**. See `docs/WINDOWS_VOLUME_PREPARATION_AND_ERROR_BOUNDARIES.md`. Windows USB repair remains hardware-unverified.
++
++## Qt interface, honest coverage and reconnect work (0.3.3b10)
++
++- Quick Repair and the Qt quick read-only check sample **at least 10% of the entire disk** via seeded, distributed locations—not a sequential 10% prefix. This can take many minutes on an HDD. New seeds permit successive investigations to cover different areas. Complete verification still requires a full scan.
++- The new full-drive surface map shows **fractional coverage inside each fixed cell**. Tiny samples cannot paint a multi-GB cell entirely green. Failed-read markers report observations, not proven damaged sectors. Hover cells and use the new help icons for explanations.
++- The Qt sampled-scan percentage bug is fixed (`100%` of planned work used to show `1%`). A time-left metric is back, distinct from recent transfer speed and job average.
++- Qt now filters operations by Fix / Recover / Check goal and has **Drive details ⓘ** for read-only native OS data. Windows uses a separate `DeviceIoControl` inspector for read-only facts when PowerShell is slow, but that inspector **never authorizes writes**.
++- Full **read-only** scans can be set to watch for USB reconnection and resume with a saved, offsets-only checkpoint and a freshly matched identity. RAM-only physical writes **cannot** be auto-resumed after loss of their active journal.
++- Rust includes a small read-only firmware-vendor inspection interface. No vendor-specific unlocks, service-area writes, firmware flashing, or simulated AI reconstruction are enabled.
++
++See [Qt/reconnect and vendor safety guide](docs/QT_UI_AND_HARDWARE_RELIABILITY_B10.md).
++
++## Media-aware scanning and simplified workflows (0.3.3b8)
++
++- **Quick Repair checks at least 10% of unique logical addresses**, using
++  deterministic stratified-random positions across the *entire* selected disk.
++  It is not a sub-minute check: a 1 TB disk requires reading at least 100 GB.
++  Do not interpret that 10% sample as proof of health in the other 90%.
++- **Full Repair uses bounded adaptive read sizes.** It checks a few early,
++  sequential regions to select an initial read size, increases on good areas,
++  and defers bad requests for budget-limited smaller reads. Windows I/O error
++  1117 is an I/O error, not proof of physical platter damage.
++- The exact manufacturer-listed `ST1000LM048` model has **SMR** recording.
++  The software avoids interpreting USB as a media type and does not automatically
++  extend rewrites to adjacent SMR logical regions (logical adjacency is not
++  physical adjacency). A CMR-only advanced neighbor rewrite option requires
++  explicit recording confirmation and independently repeated reads.
++- The main Diagnose page hides most expert settings by default. Choose a disk,
++  choose a goal, review storage, then click **Start job**. SMART installation
++  is offered only when missing; nothing installs silently.
++- Device identity must be independently verified before any patient write.
++  Windows selected-disk inventory first tries a bounded `Get-Disk -Number`
++  query instead of repeatedly enumerating every disk. If this hangs, writes
++  remain blocked; read-only findings are still reported rather than discarded.
++- Persistent anomaly hints are optional, metadata-only, and **never authorize writes**. RAM-only
++  operations create no rescue journal and cannot resume after a crash.
++
++See [media-aware scanning guide](docs/MEDIA_AWARE_SCANNING_0.3.3b8.md).
++
++## Direct disk repair without a backup image (0.3.3b4)
++
++Open **Diagnose / Rescue**, select the external drive by model, capacity and
++fingerprint, then use **Quick repair** (sample and investigate suspicious
++regions) or **Full repair** (read the full surface before selecting safe
++refresh targets). The primary screen now offers **Volatile RAM only (no recovery image/journal)** or a disk-backed journal. No recovery image or copy is created during
++in-place maintenance. For a whole-drive rewrite, use **In-place refresh** and
++select `full`; this is significantly riskier, particularly on failing hardware.
++
++- RAM-only holds the current sector-region and transaction state **in the
++  running process**. It writes **no patient bytes to any backup image or
++  journal files**. It also has **NO resume** after application crash/reboot;
++  a partial write could be unrecoverable. A UPS does not fix this limitation.
++- Windows and Linux have experimental in-place raw-device access with explicit
++  device, risk and volatile-journal confirmation. The patient must be offline,
++  unmounted and exclusive to this tool. macOS destructive hardware access is
++  disabled pending safe volume locking and physical QA.
++- **Recoverable error areas:** Quick/Full repair now perform bounded, read-only retries of known error regions, splitting a failed read into smaller aligned regions. Two identical recovered reads can qualify the region for a separately journaled rewrite after the writer again confirms the bytes. This does **not** establish their original correctness.
++- **Still-unreadable or inconsistent data:** never overwritten automatically. Such regions remain UNKNOWN and produce a partial/not-success result. Separate destructive logical-sector reinitialization is NOT implemented or approved on physical hardware.
++- **Hardware safeguards:** unstable USB transport/identity, critical SMART failure and unknown error offsets still block writes. A SMART warning requires an additional explicit risk acknowledgment. If repeated errors persist, stop and rescue/replace.
++- Successful readback means the new recording matches the bytes just read;
++  it **does not** prove original file correctness or restore hardware lifespan.
++- The code has been tested on synthetic images only. **Do not run RAM-only
++  repair on valuable, sole-copy data or a failing disk for public beta.**
++
++See [direct repair and RAM-only operations](docs/NO_IMAGE_RAM_REPAIR.md).
++
++## Guided repair policies and scan dashboard (0.3.3b5)
++
++The external-drive page provides two tested repair policies:
++
++- **Preserve**: refresh only slow, consistently readable regions outside known error chunks.
++- **Balanced** (default): in addition, re-investigate known error chunks with a strict limit on read requests. A portion that returns identical bytes twice may be scheduled for the journaled writer, which checks again before writing and verifies after writing.
++
++If the scan reaches the **16-read-error safety limit**, it stops further surface probing instead of repeatedly stressing the drive. **Balanced** guided repair can still investigate the known error offsets with bounded split/retry reads and refresh separately confirmed, readable regions. Any unscanned space is **unknown**, so the result is **partial** and not a whole-drive repair. A diagnostic scan remains strictly read-only.
++
++A detected read error alone is **not** authority to erase, invent, or zero-fill unknown bytes. An unresolved sector remains unknown. A partial refresh returns a nonzero exit status and a warning, even if other regions were verified. A transport failure, critical SMART condition, missing error coordinates, or active filesystem is not a recoverable sector and remains a blocker. The separate `--ack-media-warning` and `--ack-unknown-health` flags acknowledge higher-risk operations; neither is a certification.
++
++**GUI telemetry:** scan data cards display *actual bytes successfully read*, failed chunk count, measured throughput and ETA for the current operation (sampled Quick mode does not claim to read the entire surface). During refresh the cards show bytes rewritten and verified. The map uses explicit color swatches for unscanned, readable, in-progress, slow, investigation and failed/unknown regions. The map is an approximate visualization, not a complete bad-sector map or integrity certification.
++
++For synthetic-image testing only:
++
++```sh
++python -m driverepair_desktop care-image --image synthetic.img \
++  --journal /safe-storage/unique-guided-journal --mode quick \
++  --repair-policy balanced --ack-risk --ack-destructive \
++  --ack-no-backup --ack-data-loss-risk --json
++```
++
++**For public beta:** Do not perform unvalidated physical-drive in-place writes on valuable media. Windows USB-dock writes, unplug/replug, crashes, and stale power states still require sacrificial hardware tests.
++
++## Graphical recovery dashboard (0.3.2b1)
++
++Run `python3 -m driverepair_desktop gui` to launch the guided interface. Image,
++external-device, and offline-system-drive rescue jobs now send **structured,
++throttled rescue progress events** from the committed recovery map instead of
++flooding PowerShell with raw offsets. The persistent dashboard shows a
++progress bar, data saved, unreadable bytes, current/average throughput,
++forward-pass ETA, an approximate activity map, destination free space and
++incomplete-recovery warnings. Completed means the source reads were copied;
++**it does not mean the original files are correct or verified**.
++
++Use **Advanced details / engine log** to inspect technical output. Workflow
++pages scroll on smaller screens; **Stop job** stays visible. Interrupted
++image/external/system-drive rescues may be resumed with the corresponding
++**Resume** action, provided the source and destination identity matches the
++journal. Use **Retry gaps** only after the first pass is complete. Output
++images, recovered files and maps are never automatically deleted by the UI.
++
++For automation, rescue commands accept `--progress-jsonl --no-live-dashboard`.
++JSONL events go to stderr; final result JSON remains on stdout. CLI terminal
++output is now a compact single-line status on interactive terminals, or sparse
++log milestones if redirected.
++
++## Workflows
++
++| Goal | Operation | Data at risk | Implementation |
++|---|---|---|---|
++| Identify a USB/external drive | `list` | No patient writes | Windows, Linux, macOS inventory (physical QA pending) |
++| Find suspicious areas quickly | `scan --mode triage` | Read stress only | Deterministic stratified sample and bounded neighboring probes |
++| Full surface readability | `scan --mode full --ack-risk` | Read stress only | Entire readable address space, no data correctness proof |
++| Rescue data first | `rescue-image --multi-pass`, `rescue-external` | Source read-only; output written | Python imaging/resume; direct physical rescue currently Linux experimental |
++| Recover selected deleted files | `list-deleted-fat32` → `undelete-fat32 --file-id ...` | Source image read-only | Conservative FAT32 contiguous candidate extraction |
++| Recover across more filesystems | `list-deleted-tsk` → `recover-selected-tsk --file-id ...` | Source image read-only | Optional Sleuth Kit (`fls`, `icat`) binary; OS/filesystem support depends on installation |
++| Salvage identifiable files | `carve-image`, `salvage-zip` | Source image read-only | PNG/JPEG and CRC-valid ZIP members (limited, no universal reconstruction) |
++| Repair an ext filesystem | `check-ext-image`, `repair-ext-image` | Writes a NEW copy only | `e2fsck` required; original preserved |
++| Monitor deterioration on schedule | `monitor-external` | SMART only by default; optional read stress | Private local trend history; never auto-refreshes |
++| Capture forensic hashes | `evidence-image` | Source image read-only | SHA-256 + minimal privacy-preserving JSON report; not a chain-of-custody certification |
++| Rejuvenate readable media in place | `refresh-image`, `refresh-external` | **CAN PERMANENTLY LOSE DATA** | Private hardware experiment; separate journal and explicit approvals |
++| Sanitize before disposal | Not yet enabled | Intentional destruction | Implement media-appropriate validated methods; no unsupported DoD certification |
++| Recover broken boot/system disk | Trusted Linux live USB → `list-all-linux`, `plan-system-recovery`, `rescue-system` | Source read-only; output separate | NEW offline Linux internal-disk rescue path; physical QA still required |
++
++## Offline system-drive / one-internal-disk recovery
++
++A broken OS drive cannot host its own rescue environment or a complete safety
++copy. Boot a verified Linux live USB, provide separate USB/NAS storage, identify
++the *unmounted* internal disk and choose the new **Recover OS drive** guided GUI
++workflow (or `list-all-linux` → `plan-system-recovery` → `rescue-system`). Network
++image targets can be mounted NFS/NFS4/CIFS/SMB/SSHFS shares; ambiguous local or
++RAM destinations fail closed. Full details: [one-drive guide](docs/ONE_DRIVE_RECOVERY.md).
++
++An **experimental** Debian BIOS/UEFI hybrid ISO *build recipe* is now provided,
++but no built and boot-tested DriveRepair ISO is supplied. The original custom
++firmware stubs are still not validated bootable recovery tools. Read
++[boot instructions](docs/BOOT_RECOVERY.md) and
++[final release gates](docs/FINAL_RELEASE_SECURITY_REVIEW.md).
++
++## Install
++
++```sh
++cd desktop
++python3 -m pip install .
++python3 -m driverepair_desktop gui
++# or: driverepair-gui
++```
++
++A portable `.pyz` is also produced by `python scripts/build_desktop.py`. The GUI requires Tk. No cloud, account, or telemetry is required. `smartctl`, `e2fsck`, and The Sleuth Kit are optional local programs for their corresponding functions.
++
++### Quick sample scan
++
++```sh
++python3 -m driverepair_desktop list --json
++python3 -m driverepair_desktop scan --device linux:/dev/sdX --mode triage --samples 128 --json
++# Scan IDs are returned by `list`; do not guess disk names or paths.
++```
++
++A triage scan is only a **spot check**: even a clean result says nothing about unsampled sectors. If symptoms are severe, image before scanning repeatedly.
++
++### Restore only selected deleted files
++
++```sh
++python3 -m driverepair_desktop list-deleted-fat32 --image safe-copy.img --json
++python3 -m driverepair_desktop undelete-fat32 --image safe-copy.img \
++  --output-dir new-recovered-folder --file-id CATALOG_ID --json
++```
++
++The GUI's **Recover deleted files** tab supports multi-selection and previews candidates before extraction. FAT32 uses reconstructed partial 8.3 names and assumes contiguous unallocated clusters. For NTFS/ext/exFAT and other TSK-supported volumes, install `fls` and `icat`, choose the Sleuth Kit backend and the partition's start offset **in sectors**, then select files. Even a metadata entry or a SHA-256 of the extracted file cannot prove recovered original content.
++
++### Multipass image rescue
++
++```sh
++python3 -m driverepair_desktop rescue-image --image input.img \
++  --output rescued.img --multi-pass --json
++# If interrupted, repeat with --resume --multi-pass.
++```
++
++The first pass prioritizes readable regions, and the optional second pass tries missing regions in smaller pieces. The Python map is `rescued.img.rescue.json`; **unreadable areas are not silently certified as recovered**. The experimental Rust core uses its own incompatible `.rmap` map, so never interchange engines on the same job.
++
++### Optional Rust recovery core
++
++```sh
++cargo test --manifest-path rust/recovery-core/Cargo.toml
++cargo build --release --manifest-path rust/recovery-core/Cargo.toml
++# Set DRIVEREPAIR_RUST_CORE to the compiled executable or place it on PATH.
++python3 -m driverepair_desktop rescue-image --engine rust \
++  --image input.img --output new-rust-rescue.img --json
++```
++
++The standalone Rust core currently handles **regular images only**, not raw physical disks. It uses bounded buffers, a forward pass and a reverse split-retry pass, plus an fsynced progress log. Windows Rust-core resume is disabled pending hard-link identity protections; use the Python engine for Windows resume. **Rust builds have not been run in the analysis environment**; the CI job will compile and test this crate after it is pushed. The existing legacy boot/disk driver code is not a verified native desktop engine. See [architecture](docs/ARCHITECTURE_CURRENT.md).
++
++### Forensic / scheduled monitoring
++
++```sh
++python3 -m driverepair_desktop evidence-image --image safe-copy.img \
++  --output new-manifest.json --case-ref CASE-001
++python3 -m driverepair_desktop monitor-external --device linux:/dev/sdX \
++  --expect-fingerprint FINGERPRINT12 --state /healthy-storage/drive-health.json --json
++# Optional bounded read sampling: --triage --ack-read-stress
++```
++
++See [scheduled monitoring](docs/SCHEDULED_MONITORING.md) and [release and safety gates](docs/PUBLIC_BETA_GATES.md).
++
++## Reliability and limits
++
++- Source disk operations are read-only by default. Linux direct-disk rescue verifies separate destination physical ancestry; other operating systems support image workflows until equivalently safe raw-device isolation is proven.
++- Device selection uses model, capacity, bus, location hints, masked serial and a short fingerprint. Revalidate immediately before any raw-device write. USB docks can obscure or change identifiers.
++- In-place media refresh is **experimental, explicitly destructive**. Its disk journal is recommended; optional Linux RAM-file-system journaling requires power telemetry and explicit volatility acceptance. A UPS is not a disk backup, and cannot reverse physical wear.
++- Scheduled monitoring raises an alert for nonzero media-fault counters on the
++  **first sample**, rather than labeling a suspect drive an uneventful baseline.
++  It never rewrites patient data autonomously. See
++  [trust and preventive maintenance](docs/TRUSTED_PREVENTIVE_MAINTENANCE.md).
++- No claim of universal deleted-file restoration, physical-wear reversal, repaired damaged heads/platters, firmware repair, or government-certified sanitization is made.
++- Read success is not proof of file correctness. Forensics requires suitable acquisition controls, provenance, evidence retention and independent review.
++- This project does not transmit disk contents or telemetry to external services by default.
++- Modern SSD sanitization cannot be reduced to seven sequential overwrites. See NIST SP 800-88 Revision 2 and organization-approved media-specific requirements.
++- **Physical USB unplug, power-loss, and platform tests remain release blockers.** See [public beta gates](docs/PUBLIC_BETA_GATES.md).
++
++## Documentation
++
++- [Desktop installation and commands](desktop/README.md)
++- [Current architecture and Rust migration](docs/ARCHITECTURE_CURRENT.md)
++- [Guided system/boot recovery](docs/BOOT_RECOVERY.md)
++- [Scheduled health checks](docs/SCHEDULED_MONITORING.md)
++- [Competitor and laboratory benchmark protocol](docs/BENCHMARK_PROTOCOL.md)
++- [Public beta readiness gates](docs/PUBLIC_BETA_GATES.md)
++- [Project status](docs/PROJECT_STATUS.md)
++
++## Build and tests
++
++```sh
++cd desktop
++python3 -m unittest discover -s tests -v
++cd ..
++python3 scripts/build_desktop.py
++# Rust tools are separately verified in CI when Cargo is available.
++```
++
++## License / privacy / contribution
++
++MIT, see [LICENSE](LICENSE). No proprietary recovery algorithms or source code are bundled. Consult [SECURITY.md](SECURITY.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before reporting test results or opening issues. Never publish patient serial numbers, file contents, authentication tokens, or recovery maps containing private paths without redaction.
++
++
++### Integrity and verified-copy restoration (0.3.3b1)
++
++The desktop GUI now offers an **Integrity / bit errors** tab. It compares
++SHA-256 chunk hashes against a previously captured baseline, distinguishes
++unreadable data from mismatches, and can build a **new** corrected image from
++verified reference chunks. Baselines created after corruption are not proof of
++original correctness. See [Integrity Recovery](docs/INTEGRITY_RECOVERY.md).
++
++This release does **not** introduce automatic on-disk bit correction.
++
++### Reliable progress and Windows lab safety (0.3.3b2)
++
++The image's **logical file size is not recovery progress**. Inspect the journal:
++
++```sh
++python -m driverepair_desktop rescue-status --output PATH/TO/recovery.img --json
++```
++
++The `clean_rescue_complete` field is authoritative for *completed OS reads*, not independent file-content integrity. Windows lab scripts no longer chain physical refresh automatically. See [rescue progress and lab safety](docs/RESCUE_PROGRESS_AND_LAB_SAFETY.md).
++
++### Guided GUI reliability hotfix (0.3.3b4)
++
++- Fixed all seven **Start here** workflow buttons. The old callbacks attempted
++  to select nested Tk Canvas frames, which are not notebook-managed tabs.
++- Hide unused recovery telemetry until a job starts; users can toggle the
++  dashboard at any time. On small windows, scroll individual workflow pages.
++- Portable Python zipapps now launch image rescues from their own archive.
++- Unexpected interface callbacks produce visible error messages and log details.
++- Verified actual button invocation, navigation, image rescue, and byte-exact
++  output under a virtual Tk display; no physical disks were modified.
++- Windows/macOS physical-drive workflows and Rust/boot components remain
++  outside the scope of this GUI-only fix and are not release-certified.
++
++For reproducing and verifying the Windows workflow-button fix, see [GUI acceptance tests](docs/GUI_QA.md).
++
++
++### Drive maintenance, firmware inventory, and remembered preferences (0.3.3b6)
++
++The Diagnose page now offers read-only **Firmware info**, **Optimize advice** and a bounded **Investigate a failed offset** workflow, avoiding another lengthy full scan to examine a known problem. User journal and repair policy choices are remembered locally, but destructive risk acknowledgments never are. Drive optimization uses Windows native tools only on qualified healthy volumes. Firmware reporting is inventory-only: **NO firmware downloads or flashing.** See [Maintenance and Firmware](docs/MAINTENANCE_AND_FIRMWARE.md) for exact commands and test limitations.
++
++### Adaptive scanning and staged desktop jobs (0.3.3b8)
++
++Full surface scans now adapt sector-aligned read request sizes, defer difficult areas for bounded smaller reads, and continue to healthy regions after isolated Windows I/O errors. A local **opt-in** anomaly history can prioritize known weak offsets on subsequent quick scans. The desktop GUI stages the job and asks the user to press **Start job** before I/O; it also checks optional health-tool prerequisites and offers a consent-based WinGet installer on Windows. See [Adaptive scanning and setup](docs/ADAPTIVE_SCANNING_AND_SETUP.md). This is not yet certified for physical-drive repair or public beta on valuable disks.
++
++**RAM-only versus history:** RAM-only keeps sector data and transaction state in process RAM and never saves a recovery image or sector journal. An independently selected “Remember bad/slow locations” option may save a small, local, offsets-only diagnostic history on the host computer. It stores no sector bytes, file contents, or write authorization. Disable it when absolutely no diagnostic files are desired.
++
++**Repeat Quick Repair:** Each physical-drive session uses a new recorded random sampling seed. The selected locations are stratified across the disk and processed in address order; a repeat run can inspect different areas. Saved anomaly locations (when enabled) are rechecked separately. A new seed does not establish full-disk integrity. Synthetic image tests retain deterministic sampling.
++
++#### Rescue journal compatibility and image identity
++
++New rescue journals bind progress to the destination file's filesystem identity
++(device and file/inode number), not just its path and size. Resume and status
++refuse legacy Python journals without that identity; Rust-core V1 maps are also
++refused. Preserve those images and journals and start a new rescue to a new
++output rather than attaching old progress to an unverified file. Filesystems
++without a usable file identifier are not supported for Python rescue; Rust-core
++resume is supported only on Unix. Filesystem identity is not a content hash:
++in-place changes, identifier reuse, adversarial changes, and some network or
++unusual filesystem behavior may not be detected. Keep the output and journal
++on reliable storage and protect them from modification during and between runs.
+diff --git a/mnt/data/driverepair_work/patchbase/new/desktop/driverepair_desktop/boot_resources/build_live_iso.sh b/desktop/driverepair_desktop/boot_resources/build_live_iso.sh
+new file mode 100644
+index 0000000..df60af6
+--- /dev/null
++++ b/desktop/driverepair_desktop/boot_resources/build_live_iso.sh
+@@ -0,0 +1,103 @@
++#!/usr/bin/env bash
++# Builds a Debian-based DriveRepair live ISO. NEVER writes to physical disks.
++# Needs a Debian trixie build host with live-build, debootstrap and root privileges.
++set -euo pipefail
++REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++OUT="${1:-$REPO/dist-live}"
++if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
++  echo 'ERROR: Debian live-build requires root in an isolated build VM.' >&2
++  exit 2
++fi
++for tool in lb debootstrap sha256sum; do
++  if ! command -v "$tool" >/dev/null; then
++    echo "ERROR: missing $tool; on Debian install live-build debootstrap" >&2
++    exit 2
++  fi
++done
++if [[ "$(uname -m)" != x86_64 ]]; then
++  echo 'ERROR: initial live image recipe targets x86_64 only.' >&2
++  exit 2
++fi
++mkdir -p "$OUT"
++OUT="$(cd "$OUT" && pwd)"
++if [[ "$OUT" == "$REPO" || "$OUT" == '/' ]]; then
++  echo 'ERROR: use a dedicated destination folder' >&2
++  exit 2
++fi
++WORK="$(mktemp -d "${TMPDIR:-/tmp}/driverepair-live.XXXXXXXX")"
++printf 'Build workspace: %s\n' "$WORK"
++cd "$WORK"
++# Per Debian live-build: GRUB PC plus GRUB EFI on a hybrid ISO (build MUST
++# subsequently be boot-tested on both BIOS and UEFI before release).
++lb config --mode debian --distribution trixie --architecture amd64 \
++  --binary-images iso-hybrid --bootloaders 'grub-pc grub-efi' \
++  --archive-areas 'main non-free-firmware' --apt-recommends false
++mkdir -p config/package-lists \
++  config/includes.chroot/opt/driverepair/desktop \
++  config/includes.chroot/usr/local/bin \
++  config/includes.chroot/usr/share/applications \
++  config/includes.chroot/etc/systemd/system
++cat > config/package-lists/driverepair.list.chroot <<'EOF'
++python3
++python3-tk
++python3-pyside6.qtcore
++python3-pyside6.qtgui
++python3-pyside6.qtwidgets
++smartmontools
++gddrescue
++testdisk
++e2fsprogs
++ntfs-3g
++exfatprogs
++cryptsetup
++openssh-client
++nfs-common
++cifs-utils
++network-manager
++xfce4
++lightdm
++xserver-xorg
++sudo
++EOF
++cp -R "$REPO/desktop/driverepair_desktop" config/includes.chroot/opt/driverepair/desktop/
++find config/includes.chroot/opt/driverepair/desktop -type d -name '__pycache__' -prune -exec rm -rf '{}' +
++cat > config/includes.chroot/usr/local/bin/driverepair <<'EOF'
++#!/bin/sh
++cd /opt/driverepair/desktop || exit 1
++exec python3 -m driverepair_desktop "$@"
++EOF
++chmod 0755 config/includes.chroot/usr/local/bin/driverepair
++cat > config/includes.chroot/usr/local/bin/driverepair-gui <<'EOF'
++#!/bin/sh
++exec /usr/local/bin/driverepair gui "$@"
++EOF
++chmod 0755 config/includes.chroot/usr/local/bin/driverepair-gui
++cat > config/includes.chroot/usr/share/applications/driverepair.desktop <<'EOF'
++[Desktop Entry]
++Type=Application
++Name=DriveRepair
++Comment=Offline recovery workstation; source is read-only by default
++Exec=/usr/local/bin/driverepair-gui
++Terminal=false
++Icon=drive-harddisk
++Categories=System;Utility;
++EOF
++# A live rescue environment should NOT automatically mount patient media.
++# Manual mounting of separate network/USB destinations remains possible.
++ln -s /dev/null config/includes.chroot/etc/systemd/system/udisks2.service
++lb build
++ISO="$(find . -maxdepth 1 -type f -name '*.iso' -print -quit)"
++if [[ -z "$ISO" || ! -s "$ISO" ]]; then
++  echo 'ERROR: live-build did not produce an ISO' >&2
++  exit 1
++fi
++TARGET="$OUT/DriveRepair-Live-amd64-UNVERIFIED.iso"
++if [[ -e "$TARGET" ]]; then
++  echo 'ERROR: output ISO already exists; use a fresh destination directory' >&2
++  exit 1
++fi
++cp -- "$ISO" "$TARGET"
++( cd "$OUT" && sha256sum -- "$(basename "$TARGET")" > "$(basename "$TARGET").sha256" )
++echo "Built: $TARGET"
++echo 'MANDATORY: BIOS+UEFI VM smoke tests, physical boot tests and write-safety checks before distribution.'
++echo "Build workspace retained for provenance: $WORK"
+diff --git a/mnt/data/driverepair_work/patchbase/new/desktop/driverepair_desktop/boot_resources/check_live_iso.sh b/desktop/driverepair_desktop/boot_resources/check_live_iso.sh
+new file mode 100644
+index 0000000..551bd7f
+--- /dev/null
++++ b/desktop/driverepair_desktop/boot_resources/check_live_iso.sh
+@@ -0,0 +1,15 @@
++#!/usr/bin/env bash
++# Read-only structural validation. Does NOT prove that the kernel boots.
++set -euo pipefail
++ISO="${1:?Usage: check_live_iso.sh DriveRepair-Live-amd64-UNVERIFIED.iso}"
++[[ -f "$ISO" ]] || { echo 'ISO not found' >&2; exit 2; }
++command -v xorriso >/dev/null || { echo 'xorriso required for ISO catalog inspection' >&2; exit 2; }
++CATALOG="$(xorriso -indev "$ISO" -report_el_torito plain 2>&1)"
++printf '%s\n' "$CATALOG"
++if ! grep -Eqi 'BIOS|x86.*PC' <<< "$CATALOG"; then
++  echo 'BIOS El Torito entry not demonstrated' >&2; exit 1
++fi
++if ! grep -Eqi 'UEFI|EFI' <<< "$CATALOG"; then
++  echo 'UEFI El Torito entry not demonstrated' >&2; exit 1
++fi
++echo 'Structural BIOS+UEFI catalog entries detected; booting still NOT_PROVEN.'
+diff --git a/desktop/driverepair_desktop/cli.py b/desktop/driverepair_desktop/cli.py
+index e72a998..ec0e706 100644
+--- a/desktop/driverepair_desktop/cli.py
++++ b/desktop/driverepair_desktop/cli.py
+@@ -1347,6 +1347,19 @@ def _run_care(args) -> int:
+                                   model=selected.model if is_hardware else '',
+                                   media_type=(snapshot or {}).get('reported_medium', ''),
+                                   recording='' if args.recording == 'auto' else args.recording)
++            # Win32 USB bridges can hold an individual synchronous ReadFile for
++            # many minutes. A 6-16 MiB request multiplies the bytes at risk of
++            # a driver stall. Bound requests to 1 MiB on Windows USB, including
++            # adaptive calibration and follow-up; this does not GUARANTEE a
++            # hung USB driver will ever return or honor cancellation.
++            if is_hardware and sys.platform == 'win32' and selected.bus.lower() in {
++                    'usb', 'thunderbolt', 'firewire'}:
++                settings['max_chunk'] = min(int(settings.get('max_chunk') or 1024*1024), 1024*1024)
++                settings['min_chunk'] = min(int(settings.get('min_chunk') or 1024*1024),
++                                            settings['max_chunk'])
++                settings['chunk'] = min(int(settings['chunk']), settings['max_chunk'])
++                settings['io_watchdog_note'] = ('Bounded to 1 MiB logical reads for Windows external-device triage. '
++                    'A blocked kernel I/O may still require reconnecting the USB bridge OFFLINE.')
+             chunk = settings['chunk']
+             # Large read requests identify weak areas; rewrite only a small,
+             # separately verified and journaled subregion (SMR write amplification).
+@@ -1651,6 +1664,8 @@ def _run_care(args) -> int:
+         from .health_deltas import compare_health
+         health_after = try_health_snapshot(selected) if is_hardware else None
+         health_delta = compare_health(snapshot, health_after) if is_hardware else None
++        from .reliability_score import compare_assessments
++        condition_comparison = compare_assessments(snapshot, health_after) if is_hardware else None
+         if ram_only:
+             repair['journal'] = None
+         result = {'status': ('repair_postverify_failed' if postverify and
+@@ -1667,6 +1682,9 @@ def _run_care(args) -> int:
+                   'repair_plan': plan, 'repair': repair,
+                   'postverification': postverify,
+                   'smart_health_comparison': health_delta,
++                  'condition_comparison': condition_comparison,
++                  'health_before': snapshot if is_hardware else None,
++                  'health_after': health_after if is_hardware else None,
+                   'volatile_ram_only': ram_only,
+                   'notes': 'Rewriting consistently readable regions does not restore unreadable files or physical lifespan.'}
+         print(json.dumps(result, indent=2) if args.json else result, flush=True)
+diff --git a/desktop/driverepair_desktop/health.py b/desktop/driverepair_desktop/health.py
+index 786ef5e..bc26cda 100644
+--- a/desktop/driverepair_desktop/health.py
++++ b/desktop/driverepair_desktop/health.py
+@@ -49,11 +49,11 @@ def health_snapshot(device: Device,
+     ata = raw.get('ata_smart_attributes') or {}
+     attrs = []
+     for item in ata.get('table', []):
+-        if item.get('id') not in {5, 187, 188, 197, 198, 199}:
++        if item.get('id') not in {5, 9, 187, 188, 197, 198, 199}:
+             continue
+         attrs.append({'id': item.get('id'), 'name': item.get('name'),
+                       'raw_value': (item.get('raw') or {}).get('value')})
+-    return {
++    result = {
+         'status': status,
+         'device': device.public(),
+         'smartctl_exit_status': proc.returncode,
+@@ -70,6 +70,9 @@ def health_snapshot(device: Device,
+                  'SMART pass does not rule out media defects or future failure. '
+                  'No self-test, erase, remap, refresh, or repair was started.',
+     }
++    from .reliability_score import assess
++    result['condition_assessment'] = assess(result)
++    return result
+ 
+ 
+ def windows_storage_health(device: Device,
+diff --git a/desktop/driverepair_desktop/progress_events.py b/desktop/driverepair_desktop/progress_events.py
+index 06b586d..336212d 100644
+--- a/desktop/driverepair_desktop/progress_events.py
++++ b/desktop/driverepair_desktop/progress_events.py
+@@ -23,15 +23,39 @@ class ProgressEmitter:
+         self.stream = stream or sys.stderr
+         self.min_interval_s = min_interval_s
+         self._last = 0.0
++        # Preserve read evidence across throttled messages. Otherwise the UI
++        # falsely shows 15% coverage after a full 100% sequential read.
++        self._read_spans: list[list] = []
++        self._read_phase: str | None = None
+ 
+     def emit(self, event: dict, *, force: bool = False) -> None:
+         if not self.enabled:
+             return
+         now = time.monotonic()
+-        if not force and (now - self._last) < self.min_interval_s:
++        phase = str(event.get('phase') or '')
++        if phase != self._read_phase:
++            # A phase transition must not associate old read spans with a
++            # different operation (e.g. completed scan -> writing). A final
++            # forced SCANNING event flushes all buffered evidence.
++            self._read_spans.clear()
++            self._read_phase = phase
++        if phase == 'SCANNING':
++            offset, length = event.get('offset'), event.get('read_length')
++            if type(offset) is int and type(length) is int and offset >= 0 and length > 0:
++                failed = bool(event.get('failed'))
++                slow = bool(event.get('slow'))
++                prior = self._read_spans[-1] if self._read_spans else None
++                if prior and prior[0] + prior[1] == offset and prior[2:] == [failed, slow]:
++                    prior[1] += length
++                else:
++                    self._read_spans.append([offset, length, failed, slow])
++        if not force and now - self._last < self.min_interval_s and len(self._read_spans) < 512:
+             return
+         self._last = now
+         payload = {"type": "progress", "ts": round(time.time(), 3), **event}
++        if self._read_spans:
++            payload['observed_read_spans'] = self._read_spans
++            self._read_spans = []
+         try:
+             self.stream.write(json.dumps(payload, separators=(",", ":")) + "\n")
+             self.stream.flush()
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+index deb452d..c0059b1 100644
+--- a/desktop/driverepair_desktop/qtgui.py
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -146,11 +146,11 @@ def _qt_debug_log_path() -> Path | None:
+ def launch():
+     try:
+         from PySide6.QtCore import Qt, QProcess, QTimer, QRectF, QPointF
+-        from PySide6.QtGui import QColor, QFont, QPainter, QKeySequence, QShortcut, QPen, QPainterPath
++        from PySide6.QtGui import QColor, QFont, QPainter, QKeySequence, QShortcut, QPen, QPainterPath, QLinearGradient
+         from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+             QLabel, QPushButton, QFrame, QProgressBar, QComboBox, QLineEdit, QFileDialog,
+             QPlainTextEdit, QMessageBox, QCheckBox, QToolButton, QScrollArea, QGridLayout,
+-            QDialog, QListWidget, QSizePolicy)
++            QDialog, QListWidget, QSizePolicy, QAbstractItemView)
+     except ImportError as exc:
+         raise RuntimeError('Qt workstation requires the optional PySide6 package: python -m pip install PySide6') from exc
+ 
+@@ -175,14 +175,16 @@ def launch():
+          'orange':'#f1b45e', 'red':'#f07e87', 'yellow':'#e6ca75'}
+     css = f'''QWidget {{ background:{C['bg']}; color:{C['text']}; font-family:'Segoe UI',sans-serif; font-size:13px; }}
+         QFrame#sidebar {{ background:{C['sidebar']}; border-right:1px solid {C['line']}; }}
+-        QFrame#card {{ background:{C['panel']}; border:1px solid {C['line']}; border-radius:11px; }}
++        QFrame#card {{ background:{C['panel']}; border:1px solid {C['line']}; border-radius:14px; }}
++        QFrame#statTile {{ background:#1a2d42; border:1px solid #29435c; border-radius:10px; }}
+         QFrame#actionDock {{ background:{C['sidebar']}; border-top:1px solid {C['line']}; }}
+         QScrollArea {{ border:0; }}
+         QScrollBar:vertical {{ background:{C['bg']}; width:10px; }}
+         QScrollBar::handle:vertical {{background:#344961; border-radius:5px;min-height:32px;}}
++        QLabel {{ background:transparent; }}
+         QLabel#muted {{ color:{C['muted']}; }}
+-        QLabel#heading {{ font-size:24px; font-weight:750; }}
+-        QLabel#metric {{ font-size:21px; font-weight:700; }}
++        QLabel#heading {{ font-size:27px; font-weight:750; }}
++        QLabel#metric {{ font-size:23px; font-weight:700; color:#f6fcff; }}
+         QLabel#eyebrow {{ color:{C['muted']}; font-size:11px; font-weight:700; }}
+         QLabel#section {{ font-size:16px; font-weight:700; }}
+         QLabel#riskTag {{ color:{C['accent']}; background:#183b40; border:1px solid #285e60; border-radius:7px; padding:6px 10px; font-weight:700; }}
+@@ -230,8 +232,8 @@ def launch():
+         """Fixed full-drive map; sparse samples never paint whole cells healthy."""
+         def __init__(self):
+             super().__init__()
+-            self.setMinimumHeight(130)
+-            self.coverage = SurfaceCoverage()
++            self.setMinimumHeight(190)
++            self.coverage = SurfaceCoverage(cells=768)
+             self.rescue_map = ''
+             self.setMouseTracking(True)
+ 
+@@ -259,22 +261,31 @@ def launch():
+                 return
+             if size != self.total:
+                 self.reset(size)
+-            offset = int(event.get('offset') or 0)
+-            length = int(event.get('read_length') or event.get('length') or 0)
+-            if length <= 0:
+-                return
+-            slow = ((event.get('latency_ms') or 0) >
+-                    max(500, (event.get('median_ms') or 0) * 4))
+-            self.coverage.observe(offset, length, failed=bool(event.get('failed')),
+-                                  slow=slow)
++            spans = event.get('observed_read_spans')
++            if isinstance(spans, list):
++                for item in spans[:512]:
++                    if (isinstance(item, list) and len(item) == 4 and
++                            type(item[0]) is int and type(item[1]) is int and
++                            0 <= item[0] < size and 0 < item[1] <= size):
++                        self.coverage.observe(item[0], item[1],
++                            failed=bool(item[2]), slow=bool(item[3]))
++            else:
++                offset = int(event.get('offset') or 0)
++                length = int(event.get('read_length') or event.get('length') or 0)
++                if length <= 0:
++                    return
++                slow = ((event.get('latency_ms') or 0) >
++                        max(500, (event.get('median_ms') or 0) * 4))
++                self.coverage.observe(offset, length, failed=bool(event.get('failed')),
++                                      slow=slow)
+             self.update()
+ 
+         def paintEvent(self, _):
+             p = QPainter(self)
+             p.setRenderHint(QPainter.Antialiasing)
+-            cols = 48
+-            rows = 8
+-            gap = 3
++            cols = 64
++            rows = 12
++            gap = 2
+             width = max(3, (self.width() - gap * (cols - 1)) / cols)
+             height = max(5, (self.height() - gap * (rows - 1)) / rows)
+             p.setPen(Qt.NoPen)
+@@ -311,12 +322,12 @@ def launch():
+             p.end()
+ 
+         def mouseMoveEvent(self, event):
+-            cols, gap = 48, 3
++            cols, rows, gap = 64, 12, 2
+             width = max(3, (self.width() - gap * (cols - 1)) / cols)
+-            height = max(5, (self.height() - gap * 7) / 8)
++            height = max(5, (self.height() - gap * (rows - 1)) / rows)
+             col = int(event.position().x() // (width + gap))
+             row = int(event.position().y() // (height + gap))
+-            if 0 <= col < 48 and 0 <= row < 8:
++            if 0 <= col < 64 and 0 <= row < 12:
+                 if self.rescue_map:
+                     self.setToolTip('Approximate rescue journal: green = copied from a readable source, '
+                                     'red = unreadable source range, amber = partial work, dark = unprocessed. '
+@@ -337,7 +348,7 @@ def launch():
+         """
+         def __init__(self):
+             super().__init__()
+-            self.setMinimumHeight(70)
++            self.setMinimumHeight(108)
+             self.samples=deque(maxlen=180)
+             self._last_sample_at=0.0
+             self.setToolTip('Observed throughput over roughly the last 45 seconds. '
+@@ -385,10 +396,60 @@ def launch():
+                 y=rect.bottom()-(v/ymax)*rect.height()*.88
+                 if i==0: path.moveTo(x,y)
+                 else: path.lineTo(x,y)
+-            painter.setPen(QPen(QColor('#4ad8bd'),2.2))
++            if len(visible) > 1:
++                area=QPainterPath(path)
++                area.lineTo(rect.right(),rect.bottom())
++                area.lineTo(rect.left(),rect.bottom())
++                area.closeSubpath()
++                grad=QLinearGradient(0,rect.top(),0,rect.bottom())
++                grad.setColorAt(0,QColor(64,207,181,85))
++                grad.setColorAt(1,QColor(64,207,181,0))
++                painter.fillPath(area,grad)
++            painter.setPen(QPen(QColor('#42e9d1'),2.4))
+             painter.drawPath(path)
+             painter.end()
+ 
++    class ConditionGauge(QWidget):
++        """A condition-indicator gauge, NOT a probability of survival."""
++        def __init__(self):
++            super().__init__()
++            self.setMinimumSize(164,122)
++            self.setMaximumWidth(205)
++            self.score=None
++            self.caption='NO SMART SCORE'
++            self.setToolTip('Evidence-based condition indicator, not remaining life or an assurance of reliability.')
++
++        def set_assessment(self, report):
++            self.score=report.get('score') if isinstance(report,dict) else None
++            self.caption=str(report.get('band') or 'UNKNOWN') if isinstance(report,dict) else 'UNKNOWN'
++            self.update()
++
++        def paintEvent(self, event):
++            painter=QPainter(self)
++            painter.setRenderHint(QPainter.Antialiasing)
++            x,y=12,6
++            diameter=min(self.width()-24,106)
++            frame=QRectF(x,y,diameter,diameter)
++            painter.setPen(QPen(QColor('#304b62'),10,Qt.SolidLine,Qt.RoundCap))
++            painter.drawArc(frame, 210*16, -240*16)
++            if type(self.score) in (int,float):
++                value=max(0,min(100,float(self.score)))
++                color=('#e96e7b' if value<35 else '#f5b85e' if value<85 else '#41dbc0')
++                painter.setPen(QPen(QColor(color),10,Qt.SolidLine,Qt.RoundCap))
++                painter.drawArc(frame,210*16,round(-240*16*value/100))
++            painter.setPen(QColor('#f2f7fc'))
++            font=painter.font()
++            font.setBold(True)
++            font.setPixelSize(30)
++            painter.setFont(font)
++            number='—' if self.score is None else str(self.score)
++            painter.drawText(QRectF(x,y+24,diameter,48),Qt.AlignCenter,number)
++            font.setPixelSize(10)
++            painter.setFont(font)
++            painter.setPen(QColor('#b3c9dc'))
++            painter.drawText(QRectF(x,y+76,diameter,30),Qt.AlignCenter,self.caption)
++            painter.end()
++
+     class Workstation(QMainWindow):
+         def __init__(self):
+             super().__init__()
+@@ -412,6 +473,15 @@ def launch():
+             self._last_io_offset=0
+             self._last_io_length=0
+             self._stop_requested=False
++            self._batch_queue=[]
++            self._batch_current=None
++            self._batch_manifest=None
++            self._batch_results=[]
++            self._batch_running=False
++            self._batch_sleep_prevented=False
++            self._manufacturer_rated_hours={}
++            self._last_health_snapshot=None
++            self._stall_terminated=False
+             self._rescue_started_at=None
+             self._rescue_sample=None
+             self._heartbeat=QTimer(self)
+@@ -472,6 +542,18 @@ def launch():
+             self.legacy.setObjectName('nav')
+             self.legacy.clicked.connect(self.open_legacy)
+             nav.addWidget(self.legacy)
++            self.boot_button=QPushButton('Bootable media builder')
++            self.boot_button.setObjectName('nav')
++            self.boot_button.setToolTip('Export a complete Linux live-ISO build kit; boot testing is required.')
++            self.boot_button.clicked.connect(self.export_boot_kit)
++            nav.addWidget(self.boot_button)
++            self.iso_button=QPushButton('Build live ISO (Linux)')
++            self.iso_button.setObjectName('nav')
++            self.iso_button.setToolTip('Build an UNVERIFIED ISO on a prepared Debian x86-64 root session; never writes USB disks.')
++            self.iso_button.clicked.connect(self.build_iso)
++            nav.addWidget(self.iso_button)
++            self.iso_proc=None
++            self._iso_build_temp=None
+             nav.addStretch()
+             channel=QLabel('IMAGE-FIRST PUBLIC BETA' if PUBLIC_BETA_IMAGE_ONLY
+                            else 'GUIDED HDD REPAIR BETA' if REPAIR_BETA_GUARDED
+@@ -556,13 +638,17 @@ def launch():
+             total_row.addWidget(self.overall_label)
+             hero.addWidget(self.progress)
+             metrics=QGridLayout()
+-            metrics.setHorizontalSpacing(18)
+-            metrics.setVerticalSpacing(14)
++            metrics.setHorizontalSpacing(10)
++            metrics.setVerticalSpacing(10)
+             hero.addLayout(metrics)
+             self.metric_labels={}
+             self.metric_headers={}
+-            for metric_index,(key,title) in enumerate([('done','JOB PROGRESS'),('read','DATA READ'),('rate','RECENT SPEED'),('avg','JOB AVERAGE'),('errors','READ ERRORS'),('eta','TIME LEFT')]):
+-                area=QVBoxLayout()
++            for metric_index,(key,title) in enumerate([('done','CURRENT PHASE'),('read','DATA READ'),('rate','RECENT SPEED'),('avg','JOB AVERAGE'),('errors','READ ERRORS'),('eta','TIME LEFT')]):
++                tile=QFrame()
++                tile.setObjectName('statTile')
++                area=QVBoxLayout(tile)
++                area.setContentsMargins(13,10,13,10)
++                area.setSpacing(4)
+                 m=QLabel(title)
+                 m.setObjectName('eyebrow')
+                 descriptions={'done':'Percent of planned scan work. Quick Scan samples 10% of the drive; this is not full-device coverage.',
+@@ -577,7 +663,7 @@ def launch():
+                 v=QLabel('—')
+                 v.setObjectName('metric')
+                 area.addWidget(v)
+-                metrics.addLayout(area, metric_index//3, metric_index%3)
++                metrics.addWidget(tile, metric_index//3, metric_index%3)
+                 self.metric_labels[key]=v
+             body=QHBoxLayout()
+             root.addLayout(body,1)
+@@ -605,6 +691,13 @@ def launch():
+             self.device_box.setMinimumContentsLength(14)
+             self.device_box.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+             drive_panel.addWidget(self.device_box)
++            self.offline_devices=QCheckBox('Offline Linux: show internal disks for read-only rescue')
++            self.offline_devices.setToolTip('Only when booted from a trusted, separate Linux recovery OS. '
++                'The engine still requires unmounted source disks, a separate destination, and verified identity. '
++                'Internal disks can never be queued for physical repair here.')
++            self.offline_devices.setVisible(sys.platform=='linux')
++            self.offline_devices.toggled.connect(lambda _:self.refresh_devices())
++            drive_panel.addWidget(self.offline_devices)
+             drive_panel.addWidget(help_icon('Check the model, capacity and serial suffix before starting. USB bridge numbers can change on reconnect. Physical writes always require renewed identity verification; read-only scans can resume using a stable media fingerprint.'))
+             self.device_note=QLabel('The selected disk will be identified again before physical writes.')
+             self.device_note.setWordWrap(True)
+@@ -642,6 +735,14 @@ def launch():
+             }
+             self.job_box.currentIndexChanged.connect(self.choice_changed)
+             workflow.addWidget(self.job_box)
++            self.batch_button=QPushButton('Queue multiple drives for rescue  +')
++            self.batch_button.setToolTip('Serial read-only imaging of multiple selected sources. Each destination is a unique NEW image on separate healthy storage.')
++            self.batch_button.clicked.connect(self.queue_rescue)
++            workflow.addWidget(self.batch_button)
++            self.batch_status=QLabel('One drive at a time · independent recovery journals · no automatic physical rewrites')
++            self.batch_status.setObjectName('muted')
++            self.batch_status.setWordWrap(True)
++            workflow.addWidget(self.batch_status)
+             help_row=QHBoxLayout()
+             workflow.addLayout(help_row)
+             help_row.addWidget(help_icon('Repair: suitable HDDs only in the guarded beta, with SMART evidence, a separate journal and exclusive disk access. Rescue: new image. Diagnose: reads only.'))
+@@ -649,6 +750,10 @@ def launch():
+             self.auto_resume.setChecked(True)
+             self.auto_resume.setToolTip('Only a read-only full scan with a saved checkpoint can restart automatically. No in-place writes or RAM-only transactions restart after a disconnect.')
+             help_row.addWidget(self.auto_resume,1)
++            self.auto_pause=QCheckBox('Stop unresponsive read-only scan after 3 minutes')
++            self.auto_pause.setChecked(True)
++            self.auto_pause.setToolTip('Supervises the read-only child, not the kernel driver. A forced stop might not release a hung USB device. Never applied to physical writes.')
++            workflow.addWidget(self.auto_pause)
+             self.dest=QLineEdit()
+             self.dest.setPlaceholderText('Choose an existing source image…')
+             self.browse=QPushButton('Choose image…')
+@@ -706,6 +811,25 @@ def launch():
+             results_heading=QLabel('03  Results and next action')
+             results_heading.setStyleSheet('font-size:15px;font-weight:700;')
+             result_card.addWidget(results_heading)
++            condition_row=QHBoxLayout()
++            self.condition_gauge=ConditionGauge()
++            condition_row.addWidget(self.condition_gauge)
++            condition_summary=QVBoxLayout()
++            self.condition_title=QLabel('Drive condition · not measured')
++            self.condition_title.setObjectName('section')
++            self.condition_title.setWordWrap(True)
++            condition_summary.addWidget(self.condition_title)
++            self.condition_evidence=QLabel('Run Check disk health for SMART-based indicators. Unknown is not healthy.')
++            self.condition_evidence.setWordWrap(True)
++            self.condition_evidence.setObjectName('muted')
++            condition_summary.addWidget(self.condition_evidence)
++            condition_summary.addStretch()
++            condition_row.addLayout(condition_summary,1)
++            result_card.addLayout(condition_row)
++            self.spec_button=QPushButton('Compare with documented service-hour rating…')
++            self.spec_button.setToolTip('Only supply a published model-specific operating-hour rating. Fleet MTBF is not a failure prediction.')
++            self.spec_button.clicked.connect(self.enter_manufacturer_specs)
++            result_card.addWidget(self.spec_button)
+             self.result=QLabel('No job running')
+             self.result.setTextFormat(Qt.PlainText)
+             self.result.setWordWrap(True)
+@@ -833,6 +957,31 @@ def launch():
+                 self.explain.setText(f'Last request: byte offset {self._last_io_offset:,} · '
+                     f'length {self._last_io_length:,} bytes · {elapsed}s without a result. '
+                     'Check Expert details for the most recent observations.')
++                self.metric_labels['eta'].setText('Unknown · stalled')
++                self.phase_caption.setText('I/O pending · completion not confirmed')
++                if (elapsed >= 180 and self.auto_pause.isChecked()
++                        and self._last_job_kind in {'scanquick','scanfull','resume'}
++                        and not self._stop_requested):
++                    self.note_log('Read-only scan watchdog: no result in 180s. Requesting cooperative stop; '
++                        'the Windows storage driver may still ignore cancellation.')
++                    self._stall_terminated=True
++                    self.stop_job()
++                if (elapsed >= 240 and self._batch_running and self._batch_current
++                        and self._last_job_kind == 'rescue' and not self._stall_terminated):
++                    self._stall_terminated=True
++                    self.batch_status.setText('One queued rescue timed out waiting on the storage driver. '
++                        'Stopping its read-only worker; output is incomplete and must be checked before use.')
++                    self.note_log('Queue watchdog: 240s with no progress; terminating isolated rescue process. '
++                        'Do not treat an incomplete image or journal as a finished recovery.')
++                    child=self.proc
++                    child.terminate()
++                    QTimer.singleShot(6000,lambda c=child:self._force_stalled_batch_child(c))
++        def _force_stalled_batch_child(self, child):
++            if self._stall_terminated and child.state()!=QProcess.NotRunning:
++                self.note_log('Queue watchdog: read-only rescue subprocess did not exit; killing worker. '
++                    'USB controller cancellation may still fail; verify output journal.')
++                child.kill()
++
+         def show_details(self, yes): self.log.setVisible(yes)
+         def note_log(self, text: str) -> None:
+             self.log.appendPlainText(text)
+@@ -850,6 +999,15 @@ def launch():
+             self.browse.setVisible(is_image)
+             self.drive_panel.setVisible(not is_image)
+             self.auto_resume.setVisible(kind in {'scanfull','resume','carefull'})
++            self.auto_pause.setVisible(kind in {'scanquick','scanfull','resume'})
++            self.batch_button.setVisible(kind == 'rescue')
++            self.batch_status.setVisible(kind == 'rescue')
++            self.offline_devices.setVisible(sys.platform=='linux' and kind == 'rescue')
++            if kind != 'rescue' and self.offline_devices.isChecked():
++                self.offline_devices.blockSignals(True)
++                self.offline_devices.setChecked(False)
++                self.offline_devices.blockSignals(False)
++                QTimer.singleShot(0,self.refresh_devices)
+             hints={'health':'Reads SMART attributes where available; no physical writes.',
+                    'scanquick':'Samples at least 10% of the entire drive with distributed random locations; no writes.',
+                    'scanfull':'Reads the full address space, saving a resumable local checkpoint.',
+@@ -910,7 +1068,7 @@ def launch():
+ 
+         def update_action_state(self, *_):
+             kind=self.job_box.currentData()
+-            running=bool(self.proc and self.proc.state()!=QProcess.NotRunning)
++            running=self._batch_running or bool(self.proc and self.proc.state()!=QProcess.NotRunning)
+             enabled, advice=can_start(kind, device_selected=bool(self.selected()),
+                 image_exists=bool(self.dest.text().strip() and Path(self.dest.text().strip()).is_file()),
+                 running=running, public_beta=PUBLIC_BETA_IMAGE_ONLY)
+@@ -921,8 +1079,12 @@ def launch():
+             self.ready_note.setText(advice)
+             self.start.setToolTip(advice)
+             self.device_box.setEnabled(not running)
++            self.offline_devices.setEnabled(not running)
+             self.job_box.setEnabled(not running)
+             self.browse.setEnabled(not running)
++            self.batch_button.setEnabled(not running)
++            self.boot_button.setEnabled(not running)
++            self.iso_button.setEnabled(not running and not (self.iso_proc and self.iso_proc.state()!=QProcess.NotRunning))
+             for family, button in self.nav_buttons.items():
+                 button.setEnabled(not running and (family != 'fix' or not PUBLIC_BETA_IMAGE_ONLY))
+             self.refresh_button.setEnabled(not running)
+@@ -941,13 +1103,272 @@ def launch():
+             self.copy_summary_button.setText('Copied to clipboard')
+             QTimer.singleShot(2500,lambda:self.copy_summary_button.setText('Copy operator summary'))
+ 
++        def enter_manufacturer_specs(self):
++            from PySide6.QtWidgets import QInputDialog
++            d=self._last_good_device or self.selected()
++            if not d:
++                QMessageBox.warning(self,'Select a drive','Select a specific drive first.')
++                return
++            hours,ok=QInputDialog.getInt(self,'Documented model rating',
++                'Manufacturer-published service-hour limit for this exact model (NOT MTBF).\n'
++                'Only enter a value from the model datasheet.',
++                0,0,10000000,1000)
++            if not ok or hours==0:
++                return
++            self._manufacturer_rated_hours[d.get('identity_hint')]=hours
++            if self._last_health_snapshot:
++                from .reliability_score import assess
++                self.show_condition(assess(self._last_health_snapshot,
++                    manufacturer_specs={'rated_power_on_hours':hours}))
++            self.note_log('Operator entered a purported model datasheet rating. '
++                'DriveRepair cannot independently verify it or predict drive lifespan.')
++
++        def show_condition(self, report, *, previous=None):
++            if not isinstance(report,dict):
++                return
++            self.condition_gauge.set_assessment(report)
++            score=report.get('score')
++            confidence=report.get('confidence') or 'unknown'
++            self.condition_title.setText('Condition index: ' +
++                ('Unknown' if score is None else f"{score}/100 · {report.get('band','UNKNOWN')}") +
++                f'  ({confidence} evidence)')
++            reasons=report.get('reasons') or []
++            statement='; '.join(str(t) for t in reasons[:3])
++            hours=report.get('power_on_hours')
++            if type(hours) is int:
++                statement+=f' · {hours:,} power-on hours'
++            if previous and previous.get('score') is not None and score is not None:
++                statement+=f" · Before {previous['score']}/100 → after {score}/100"
++            self.condition_evidence.setText(statement +
++                '\nCondition scores reflect observed warning signs, NOT remaining life or repair success.')
++
++        def export_boot_kit(self):
++            """Make the existing Linux ISO builder discoverable without writing a USB."""
++            from .boot_media import export_build_kit
++            repo=Path(__file__).resolve().parents[2]
++            output,_=QFileDialog.getSaveFileName(self,'Export Linux live-ISO build kit',
++                'DriveRepair-Live-Build-Kit.zip','ZIP archives (*.zip)')
++            if not output:
++                return
++            try:
++                info=export_build_kit(repo,output)
++            except (OSError,ValueError) as exc:
++                QMessageBox.warning(self,'Boot kit not created',str(exc))
++                return
++            QMessageBox.information(self,'Build kit ready — NOT an ISO',
++                f"Created {info['path']}\n\n"
++                'Extract on a clean Debian trixie x86-64 build VM. Read BOOT_KIT_INSTRUCTIONS.txt, '
++                'build the ISO, then verify BIOS and UEFI boot and patient read-only behavior. '
++                'The builder does not automatically write USB media.')
++
++        def build_iso(self):
++            """Opt-in Debian live-build job, no USB device writing.
++
++            Prerequisites are deliberately strict because build failures must
++            not be sold as distributable recovery media.
++            """
++            import shutil
++            if sys.platform!='linux' or not hasattr(os,'geteuid') or os.geteuid()!=0:
++                QMessageBox.information(self,'Build requires isolated Debian Linux VM',
++                    'Build ISO requires a prepared Debian trixie x86-64 build environment with root '
++                    'and live-build/debootstrap. On Windows, choose Bootable media builder to export '
++                    'the complete build kit. No USB drive is written by either action.')
++                return
++            if not all(shutil.which(tool) for tool in ('lb','debootstrap','sha256sum')):
++                QMessageBox.warning(self,'Missing Debian build tools',
++                    'Install live-build, debootstrap, xorriso and prerequisites in a disposable Debian VM.')
++                return
++            script=Path(__file__).resolve().parents[2]/'scripts'/'build_live_iso.sh'
++            if not script.is_file():
++                import tempfile
++                import zipfile
++                from .boot_media import export_build_kit
++                self._iso_build_temp=tempfile.TemporaryDirectory(prefix='driverepair-iso-kit-')
++                temporary=Path(self._iso_build_temp.name)
++                try:
++                    kit=temporary/'builder.zip'
++                    export_build_kit(None,kit)
++                    with zipfile.ZipFile(kit) as z:
++                        z.extractall(temporary)
++                    script=temporary/'driverepair'/'scripts'/'build_live_iso.sh'
++                except (OSError,ValueError,zipfile.BadZipFile) as exc:
++                    self._iso_build_temp.cleanup()
++                    self._iso_build_temp=None
++                    QMessageBox.warning(self,'Builder unavailable',str(exc))
++                    return
++            folder=QFileDialog.getExistingDirectory(self,'Select EMPTY output directory on the build VM')
++            if not folder:
++                return
++            if any(Path(folder).iterdir()):
++                QMessageBox.warning(self,'Not an empty output folder','Choose an empty, dedicated output folder.')
++                return
++            approval=QMessageBox.question(self,'Build experimental ISO',
++                'The Debian live-build recipe is NOT boot-verified. It downloads packages, uses root '
++                'inside the isolated build VM and writes ONLY ordinary build files and ISO output. '
++                'It does not write USB media. Continue?',
++                QMessageBox.Yes | QMessageBox.No,QMessageBox.No)
++            if approval!=QMessageBox.Yes:
++                return
++            self.iso_proc=QProcess(self)
++            self.iso_proc.setProgram('bash')
++            self.iso_proc.setArguments([str(script),str(Path(folder).resolve())])
++            self.iso_proc.readyReadStandardOutput.connect(lambda:self.note_log(
++                bytes(self.iso_proc.readAllStandardOutput()).decode('utf-8','replace')[-1200:]))
++            self.iso_proc.readyReadStandardError.connect(lambda:self.note_log(
++                bytes(self.iso_proc.readAllStandardError()).decode('utf-8','replace')[-1200:]))
++            self.iso_proc.finished.connect(lambda code,status:self.iso_finished(code))
++            self.details_button.setChecked(True)
++            self.note_log('UNVERIFIED ISO build started. Wait for native tool completion and SHA-256 receipt.')
++            self.iso_button.setEnabled(False)
++            self.iso_proc.start()
++
++        def iso_finished(self,code):
++            self.note_log('ISO builder exited with status '+str(code)+
++                '. Both BIOS and UEFI boot tests are required before distribution.')
++            self.iso_proc=None
++            if self._iso_build_temp is not None:
++                self._iso_build_temp.cleanup()
++                self._iso_build_temp=None
++            self.update_action_state()
++            QMessageBox.information(self,'ISO builder finished' if code==0 else 'ISO build failed',
++                'The builder exited with '+str(code)+'. Check Expert log and verify checksum, BIOS, '
++                'UEFI, device enumeration, no-automount and read-only behavior. '
++                'An ISO output is NOT a validated bootable recovery product.')
++
++        def _keep_host_awake(self, enabled):
++            """Best effort Windows OS system-sleep inhibition for an active queue."""
++            if sys.platform != 'win32':
++                return
++            try:
++                import ctypes
++                kernel=ctypes.WinDLL('kernel32', use_last_error=True)
++                kernel.SetThreadExecutionState.argtypes=[ctypes.c_uint32]
++                kernel.SetThreadExecutionState.restype=ctypes.c_uint32
++                # ES_CONTINUOUS | ES_SYSTEM_REQUIRED. Does not override lid,
++                # forced sleep, shutdown, firmware or power-loss conditions.
++                state=0x80000001 if enabled else 0x80000000
++                prior=kernel.SetThreadExecutionState(state)
++                self._batch_sleep_prevented=bool(enabled and prior)
++                if enabled and not prior:
++                    self.note_log('WARNING: could not inhibit Windows system sleep; unattended rescue may pause.')
++            except (OSError,AttributeError):
++                self.note_log('Windows sleep-inhibition unavailable; monitor system power policy.')
++
++        def queue_rescue(self):
++            """Require per-source selection and new destinations before unattended reads."""
++            if self._batch_running or (self.proc and self.proc.state()!=QProcess.NotRunning):
++                return
++            if not self._devices:
++                QMessageBox.warning(self,'No source drives','Refresh the device inventory first.')
++                return
++            dialog=QDialog(self)
++            dialog.setWindowTitle('Queue read-only imaging — multiple drives')
++            dialog.resize(650,430)
++            layout=QVBoxLayout(dialog)
++            layout.addWidget(QLabel('Select one or more source drives. Each will be reidentified by the engine.\n'
++                'Images are created sequentially, never in parallel. No physical repair writes are queued.'))
++            drive_list=QListWidget()
++            drive_list.setSelectionMode(QAbstractItemView.MultiSelection)
++            for d in self._devices:
++                drive_list.addItem(f"{d.get('model','Unknown')}  ·  {display_size(d.get('size_bytes') or 0)}  "
++                    f"·  {d.get('identity_hint','unknown')}")
++            layout.addWidget(drive_list)
++            accept=QPushButton('Continue with selected drives')
++            accept.setObjectName('primary')
++            accept.clicked.connect(dialog.accept)
++            layout.addWidget(accept)
++            if dialog.exec()!=QDialog.Accepted:
++                return
++            drives=[self._devices[i.row()] for i in drive_list.selectedIndexes()]
++            if not drives:
++                QMessageBox.warning(self,'No drives selected','Select at least one source drive.')
++                return
++            folder=QFileDialog.getExistingDirectory(self,'Select a folder on a DIFFERENT, healthy destination disk')
++            if not folder:
++                return
++            from .unattended import plan_rescue_batch, batch_manifest_path, store_manifest
++            try:
++                jobs=plan_rescue_batch(drives,folder)
++            except (ValueError, OSError) as exc:
++                QMessageBox.warning(self,'Unsafe rescue plan',str(exc))
++                return
++            question=QMessageBox.question(self,'Authorize unattended READ-ONLY rescue',
++                f'{len(jobs)} drives, {display_size(sum(j["size_bytes"] for j in jobs))} total source bytes.\n'
++                f'Destination: {folder}\n\n'
++                'Each output will be a NEW file. The engine checks device identity and destination ancestry '
++                'before imaging. A drive failure does not authorize writes and the next selected drive '
++                'will be attempted. Repeated read errors can stress failing media.\n\n'
++                'You must personally verify that the destination is healthy separate physical storage. Proceed?',
++                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
++            if question!=QMessageBox.Yes:
++                return
++            manifest=batch_manifest_path(folder)
++            try:
++                store_manifest(manifest,jobs)
++            except (OSError,ValueError) as exc:
++                QMessageBox.warning(self,'Could not persist queue',str(exc))
++                return
++            self._batch_queue=jobs
++            self._batch_results=[]
++            self._batch_manifest=manifest
++            self._batch_current=None
++            self.select_goal('rescue')
++            self._batch_running=True
++            self._keep_host_awake(True)
++            self._launch_next_batch()
++
++        def _launch_next_batch(self):
++            if not self._batch_running:
++                return
++            if not self._batch_queue:
++                self._batch_running=False
++                self._keep_host_awake(False)
++                good=sum(x['status']=='COMPLETE' for x in self._batch_results)
++                self.batch_status.setText(f'Batch finished: {good}/{len(self._batch_results)} image jobs returned success. '
++                    'Inspect each .rescue.json journal for missing ranges.')
++                self.result.setText('Batch finished · review each journal')
++                self.stop.setEnabled(False)
++                self.update_action_state()
++                return
++            self._batch_current=self._batch_queue.pop(0)
++            job=self._batch_current
++            matching=[d for d in self._devices if d.get('id')==job['device_id'] and
++                      d.get('identity_hint')==job['fingerprint']]
++            if len(matching)!=1:
++                job['status']='SKIPPED_IDENTITY_CHANGED'
++                self._batch_results.append(job)
++                from .unattended import append_batch_event
++                append_batch_event(self._batch_manifest,job)
++                self._batch_current=None
++                QTimer.singleShot(0,self._launch_next_batch)
++                return
++            d=matching[0]
++            for i in range(self.device_box.count()):
++                if (self.device_box.itemData(i) or {}).get('id')==job['device_id']:
++                    self.device_box.setCurrentIndex(i)
++                    break
++            self._last_good_device=d
++            self._last_job_kind='rescue'
++            self.batch_status.setText(f'Imaging {len(self._batch_results)+1} of '
++                f'{len(self._batch_results)+len(self._batch_queue)+1}: {job["model"]}\n'
++                f'Output: {job["output"]}')
++            args=['rescue-external','--device',job['device_id'],'--output',job['output'],
++                '--ack-risk','--multi-pass','--progress-jsonl','--no-live-dashboard','--json']
++            if sys.platform=='linux' and self.offline_devices.isChecked():
++                args=['rescue-system','--device',job['device_id'],'--output',job['output'],
++                    '--ack-risk','--ack-offline-system','--expect-fingerprint',job['fingerprint'],
++                    '--multi-pass','--progress-jsonl','--no-live-dashboard','--json']
++            self.run_command(args)
++
+         def refresh_devices(self):
+             if self.inventory_proc and self.inventory_proc.state()!=QProcess.NotRunning:
+                 return
+             self.device_note.setText('Looking for external drives…')
+             self.inventory_proc=QProcess(self)
+             self.inventory_proc.setProgram(cli_prefix()[0])
+-            self.inventory_proc.setArguments(cli_prefix()[1:]+['list','--json'])
++            self.inventory_proc.setArguments(cli_prefix()[1:]+[
++                'list-all-linux' if (sys.platform=='linux' and self.offline_devices.isChecked())
++                else 'list','--json'])
+             self.inventory_proc.finished.connect(self.inventory_done)
+             self.inventory_proc.start()
+         def inventory_done(self,code,_status):
+@@ -976,7 +1397,8 @@ def launch():
+                     if d.get('id')==prev.get('id') and d.get('identity_hint')==prev.get('identity_hint'):
+                         self.device_box.setCurrentIndex(i)
+                         break
+-            self.device_note.setText(f'{len(data)} external drive(s) available. Fresh identity required before writes.')
++            self.device_note.setText(f'{len(data)} whole disk(s) available (offline Linux)' if self.offline_devices.isChecked() else
++                f'{len(data)} external drive(s) available. Fresh identity required before writes.')
+             self.update_action_state()
+             pending=self._pending_resume
+             if pending and self.auto_resume.isChecked() and not (self.proc and self.proc.state()!=QProcess.NotRunning):
+@@ -1076,7 +1498,11 @@ def launch():
+                         QMessageBox.Yes | QMessageBox.No)
+                     if question != QMessageBox.Yes:
+                         return
+-                    args=['rescue-external','--device',d['id'],'--output',out,'--ack-risk']
++                    if sys.platform=='linux' and self.offline_devices.isChecked():
++                        args=['rescue-system','--device',d['id'],'--output',out,'--ack-risk',
++                            '--ack-offline-system','--expect-fingerprint',d['identity_hint']]
++                    else:
++                        args=['rescue-external','--device',d['id'],'--output',out,'--ack-risk']
+                 args+=['--multi-pass','--progress-jsonl','--no-live-dashboard','--json']
+             else:
+                 if not d:
+@@ -1235,10 +1661,11 @@ def launch():
+                 if self._last_job_kind in {'rescue','rescueimage'} else
+                 'Estimated whole-job progress · staged estimate, not disk coverage')
+             self._stop_requested=False
++            self._stall_terminated=False
+             # Image rescue must never inherit the size of an unrelated drive
+             # that happens to remain selected in the (hidden) drive picker.
+             source_size=(0 if self._last_job_kind == 'rescueimage' else
+-                         int((self.selected() or {}).get('size_bytes') or 0))
++                         int((self._last_good_device or self.selected() or {}).get('size_bytes') or 0))
+             self.map.reset(source_size)
+             self.speed_graph.clear()
+             self.coverage_label.setText('MEASURED COVERAGE  ·  0.00%')
+@@ -1334,7 +1761,7 @@ def launch():
+             self.progress.setValue(max(0,min(1000,round(10*overall))))
+             self.overall_label.setText(f'{overall:.1f}% estimated' if self._last_job_kind.startswith('care')
+                                       else f'{overall:.1f}% of current job')
+-            self.metric_labels['done'].setText(f'{pct:.1f}%')
++            self.metric_labels['done'].setText(f'{pct:.1f}% · {phase.lower()}')
+             self.metric_labels['eta'].setText(format_eta(event.get('eta_seconds')))
+             if event.get('attempted_bytes') is not None:
+                 self.metric_labels['read'].setText(display_size(event['attempted_bytes']))
+@@ -1367,7 +1794,7 @@ def launch():
+             self.overall_label.setText(f'{pct:.1f}% of '+('retry pass' if phase == 'RETRY' else 'source visited'))
+             self.metric_headers['read'].setText('SAVED TO IMAGE')
+             self.metric_headers['errors'].setText('MISSING DATA')
+-            self.metric_labels['done'].setText(f'{pct:.1f}%')
++            self.metric_labels['done'].setText(f'{pct:.1f}% · {phase.lower()}')
+             self.metric_labels['read'].setText(display_size(event.get('recovered_bytes') or 0))
+             self.metric_labels['errors'].setText(display_size(event.get('unreadable_bytes') or 0))
+             now=time.monotonic()
+@@ -1410,7 +1837,7 @@ def launch():
+             self.metric_labels['eta'].setText('—')
+             self.proc=None
+             self._stop_requested=False
+-            if exit_code==0:
++            if exit_code==0 and self._final_stdout.strip():
+                 self.progress.setValue(1000)
+                 self.phase_progress.setValue(1000)
+                 self.overall_label.setText('100% of planned job · review findings')
+@@ -1422,6 +1849,24 @@ def launch():
+                     self.note_log(self._final_stdout[-3000:])
+             if not isinstance(result,dict):
+                 result={}
++            condition_report = result.get('condition_comparison') or {}
++            if isinstance(result.get('health_after'),dict):
++                self._last_health_snapshot=result['health_after']
++            elif isinstance(result.get('ata_selected_raw_attributes'),list) or isinstance(result.get('nvme'),dict):
++                self._last_health_snapshot=result
++            rating=self._manufacturer_rated_hours.get(
++                (self._last_good_device or {}).get('identity_hint'))
++            if rating and self._last_health_snapshot:
++                from .reliability_score import assess
++                before=result.get('health_before')
++                self.show_condition(assess(self._last_health_snapshot,
++                    manufacturer_specs={'rated_power_on_hours':rating}),
++                    previous=assess(before,manufacturer_specs={'rated_power_on_hours':rating})
++                    if isinstance(before,dict) else None)
++            elif isinstance(condition_report,dict) and condition_report.get('after'):
++                self.show_condition(condition_report['after'], previous=condition_report.get('before'))
++            elif isinstance(result.get('condition_assessment'),dict):
++                self.show_condition(result['condition_assessment'])
+             text=str(result.get('status') or ('Completed' if exit_code==0 else 'Stopped / failed'))
+             self.status.setText(text.replace('_',' ').title())
+             if user_stop_requested and exit_code!=0:
+@@ -1480,6 +1925,8 @@ def launch():
+                     self.metric_labels['read'].setText(display_size(scan['readable_bytes']))
+                 if scan.get('read_error_chunks') is not None:
+                     self.metric_labels['errors'].setText(str(scan['read_error_chunks']))
++                self.next_action.setText('Do not bypass Windows volume locks. Save a rescue image, '
++                    'or use a separately verified offline Linux recovery environment to inspect the drive.')
+             elif 'device' in text or 'identity' in text or 'access' in text or 'discon' in text or result.get('scan',{}).get('status')=='aborted_device_or_access_error':
+                 self.result.setText('Drive connection interrupted')
+                 self.explain.setText('Reconnect the same drive, refresh the list, and select “Continue interrupted full scan”. Reverification is mandatory; no write restarts automatically.')
+@@ -1523,12 +1970,33 @@ def launch():
+                 self.next_action.setText('Reconnect the exact same drive for the saved read-only scan. Verify its identity first.')
+             elif self._last_job_kind in ('rescue','rescueimage'):
+                 self.next_action.setText('Keep the source unchanged. Inspect the image journal for missing ranges and validate important recovered files.')
++            elif result.get('status')=='repair_blocked_prewrite_access':
++                self.next_action.setText('Keep the patient unchanged. Check Windows Administrator rights, '
++                    'mounted/RAW partitions and the Expert log. Prefer offline rescue before further writes.')
+             elif exit_code == 0:
+                 self.next_action.setText('Review measured coverage and error evidence. For important data, make a separate recovery image before any further intervention.')
+             else:
+                 self.next_action.setText('Review the reported failure and Expert log before retrying. Do not bypass volume locks or identity verification.')
++            if self._batch_running and self._batch_current:
++                finished=dict(self._batch_current)
++                finished['status']='COMPLETE' if exit_code == 0 else ('STALLED_OR_INTERRUPTED' if self._stall_terminated else 'FAILED')
++                finished['exit_code']=int(exit_code)
++                self._batch_results.append(finished)
++                self.batch_status.setText(f"{finished['model']} → {finished['status']}; "
++                    f"{len(self._batch_queue)} jobs remaining. Check output journal for missing data.")
++                from .unattended import append_batch_event
++                append_batch_event(self._batch_manifest, finished)
++                self._batch_current=None
++                self._stall_terminated=False
++                QTimer.singleShot(0,self._launch_next_batch)
+             self.update_action_state()
+         def closeEvent(self, event):
++            if self.iso_proc and self.iso_proc.state()!=QProcess.NotRunning:
++                QMessageBox.warning(self,'ISO build in progress',
++                    'The experimental ISO builder is still running on this build VM. '
++                    'Review Expert log before stopping a privileged build.')
++                event.ignore()
++                return
+             if self.proc and self.proc.state()!=QProcess.NotRunning:
+                 if self._last_job_kind in ('carefull','carequick','careresume'):
+                     answer=QMessageBox.question(self,'Physical write may be in progress',
+@@ -1546,6 +2014,17 @@ def launch():
+             event.accept()
+ 
+         def stop_job(self):
++            if self._batch_running:
++                self._batch_queue.clear()
++                self.batch_status.setText('Queued jobs cancelled; current read-only imaging continues to its journal boundary.')
++                if self.proc and self.proc.state()!=QProcess.NotRunning:
++                    self.result.setText('Queue cancelled · current rescue still running')
++                    self.stop.setEnabled(False)
++                    return
++                self._batch_running=False
++                self._keep_host_awake(False)
++                self.update_action_state()
++                return
+             if self._pending_resume:
+                 self._pending_resume=None
+                 self._reconnect_timer.stop()
+diff --git a/mnt/data/driverepair_work/patchbase/new/desktop/driverepair_desktop/reliability_score.py b/desktop/driverepair_desktop/reliability_score.py
+new file mode 100644
+index 0000000..6f016cd
+--- /dev/null
++++ b/desktop/driverepair_desktop/reliability_score.py
+@@ -0,0 +1,129 @@
++"""Evidence-based drive condition index, not a prediction of future survival.
++
++Missing SMART evidence is not scored as healthy. Vendor-specific raw ATA values
++are not interpreted as a universal percentage of life remaining. An optional
++manufacturer rating is only used when explicitly supplied by the operator.
++"""
++from __future__ import annotations
++
++from typing import Any
++
++
++def _number(value: Any) -> int | None:
++    return value if type(value) is int and value >= 0 else None
++
++
++def assess(snapshot: dict | None, *, scan: dict | None = None,
++           manufacturer_specs: dict | None = None) -> dict:
++    if not isinstance(snapshot, dict):
++        return {'score': None, 'band': 'UNKNOWN', 'confidence': 'none',
++                'reasons': ['SMART telemetry unavailable'], 'power_on_hours': None,
++                'notes': 'No score is safer than falsely certifying a drive.'}
++    nvme = snapshot.get('nvme') if isinstance(snapshot.get('nvme'), dict) else {}
++    ata = {x['id']: x.get('raw_value') for x in snapshot.get('ata_selected_raw_attributes', [])
++           if isinstance(x, dict) and type(x.get('id')) is int}
++    hours = _number(nvme.get('power_on_hours'))
++    if hours is None:
++        hours = _number(ata.get(9))
++    if snapshot.get('source') == 'windows_storage_healthstatus':
++        return {'score': None, 'band': 'UNKNOWN', 'confidence': 'low',
++                'reasons': ['Windows HealthStatus is not a detailed SMART health baseline'],
++                'power_on_hours': None, 'notes': 'Use smartctl with USB bridge support for detailed evidence.'}
++    observed = []
++    reasons = []
++    value = 100
++    if snapshot.get('status') == 'failure_reported' or snapshot.get('smart_status_passed') is False:
++        value -= 65
++        reasons.append('Controller reports failed health')
++        observed.append('controller_failure')
++    elif snapshot.get('smart_status_passed') is True:
++        observed.append('controller_pass')
++    for attr, label, impact in ((5, 'Reallocated sectors', 12), (187, 'Reported uncorrectable errors', 18),
++                                (197, 'Pending sectors', 24), (198, 'Offline uncorrectable', 24),
++                                (199, 'Interface CRC errors / connection', 8)):
++        number = _number(ata.get(attr))
++        if number is not None:
++            observed.append(f'ata_{attr}')
++            if number > 0:
++                value -= impact
++                reasons.append(f'{label}: {number} (raw, vendor-defined)')
++    if nvme:
++        critical = _number(nvme.get('critical_warning'))
++        if critical is not None:
++            observed.append('nvme_critical_warning')
++            if critical:
++                value -= 45
++                reasons.append(f'NVMe critical warning bitmask: {critical}')
++        errors = _number(nvme.get('media_errors'))
++        if errors is not None:
++            observed.append('nvme_media_errors')
++            if errors:
++                value -= 24
++                reasons.append(f'NVMe lifetime media/data integrity errors: {errors}')
++        spare = _number(nvme.get('available_spare'))
++        threshold = _number(nvme.get('available_spare_threshold'))
++        if spare is not None and threshold is not None:
++            observed.append('nvme_spare')
++            if spare <= threshold:
++                value -= 25
++                reasons.append(f'NVMe spare {spare}% at/below threshold {threshold}%')
++        used = _number(nvme.get('percentage_used'))
++        if used is not None:
++            observed.append('nvme_percentage_used')
++            if used >= 100:
++                value -= 22
++                reasons.append(f'NVMe vendor life-use estimate {used}% (not failure prediction)')
++            elif used >= 80:
++                value -= 10
++                reasons.append(f'NVMe estimated life used: {used}%')
++    if scan:
++        # A failed request is neither a confirmed bad physical sector nor a proof
++        # that the transport rather than the media is at fault.
++        failures = _number(scan.get('read_error_chunks'))
++        if failures is not None:
++            observed.append('surface_probe')
++            if failures:
++                value -= min(30, 8 + 2 * failures)
++                reasons.append(f'{failures} failed read requests (source unknown)')
++    specs = manufacturer_specs or {}
++    rated_hours = _number(specs.get('rated_power_on_hours'))
++    if rated_hours and hours is not None:
++        observed.append('documented_rated_hours')
++        if hours >= rated_hours:
++            reasons.append(f'Power-on hours {hours:,} meet/exceed supplied {rated_hours:,}-hour rating')
++            value -= 10
++    if hours is not None:
++        observed.append('power_on_hours')
++    # No numeric score without at least one meaningful controller health
++    # verdict, wear counter or explicit surface read evidence.
++    meaningful = {'controller_pass', 'controller_failure', 'surface_probe',
++                  'nvme_critical_warning', 'nvme_media_errors', 'nvme_spare'}
++    meaningful.update(f'ata_{x}' for x in (5, 187, 197, 198, 199))
++    if set(observed).issubset({'controller_pass','power_on_hours'}):
++        return {'score': None, 'band': 'UNKNOWN', 'confidence': 'limited',
++                'reasons': ['SMART pass alone does not establish media reliability'],
++                'power_on_hours': hours, 'notes': 'Acquire additional SMART attributes or NVMe wear counters.'}
++    if not set(observed) & meaningful:
++        return {'score': None, 'band': 'UNKNOWN', 'confidence': 'low',
++                'reasons': ['No comparable health or read evidence available'],
++                'power_on_hours': hours,
++                'notes': 'Manufacturer MTBF/AFR is fleet-level, not an individual remaining-life forecast.'}
++    value = max(0, min(100, value))
++    confidence = ('high' if len(observed) >= 5 and 'surface_probe' in observed else
++                  'moderate' if len(observed) >= 3 else 'limited')
++    band = 'CRITICAL' if value < 35 else 'AT RISK' if value < 65 else 'WATCH' if value < 85 else 'NO MAJOR SIGNALS'
++    if not reasons:
++        reasons.append('No major warning in the available telemetry; untested failure modes remain')
++    return {'score': value, 'band': band, 'confidence': confidence,
++            'reasons': reasons, 'power_on_hours': hours,
++            'evidence_fields': sorted(set(observed)),
++            'notes': ('Condition index is diagnostic triage, NOT likelihood of survival or manufacturer certification. '
++                      'A repair does not reset wear, SMART history, or media age.')}
++
++
++def compare_assessments(before: dict | None, after: dict | None) -> dict:
++    a, b = assess(before), assess(after)
++    delta = (b['score'] - a['score'] if a['score'] is not None and b['score'] is not None else None)
++    return {'before': a, 'after': b, 'delta': delta,
++            'interpretation': ('Change in observed condition indicators, not improvement in future drive lifespan. '
++                               'Do not erase or discount historical error counters after a successful rewrite.')}
+diff --git a/mnt/data/driverepair_work/patchbase/new/desktop/driverepair_desktop/unattended.py b/desktop/driverepair_desktop/unattended.py
+new file mode 100644
+index 0000000..50fc95f
+--- /dev/null
++++ b/desktop/driverepair_desktop/unattended.py
+@@ -0,0 +1,100 @@
++"""Safe, serialized read-only multi-device rescue planning.
++
++The actual CLI still performs the authoritative source/destination ancestry,
++identity and capacity verification at the time each job starts.
++"""
++from __future__ import annotations
++
++import hashlib
++import json
++import os
++from pathlib import Path
++import re
++
++
++def plan_rescue_batch(devices: list[dict], destination: str, *, free_bytes: int | None = None) -> list[dict]:
++    target = Path(destination).resolve(strict=True)
++    if not target.is_dir():
++        raise ValueError('Choose an existing destination folder on separate healthy storage')
++    if not devices:
++        raise ValueError('Select at least one source drive')
++    if free_bytes is None:
++        free_bytes = __import__('shutil').disk_usage(target).free
++    plans = []
++    seen_ids = set()
++    seen_fingerprints = set()
++    needed = 0
++    for d in devices:
++        device_id, fingerprint = d.get('id'), d.get('identity_hint')
++        size = d.get('size_bytes')
++        if (not isinstance(device_id, str) or not device_id or
++                not isinstance(fingerprint, str) or len(fingerprint) < 8 or
++                type(size) is not int or size <= 0):
++            raise ValueError('Each drive must have a fresh device ID, fingerprint and positive capacity')
++        if device_id in seen_ids or fingerprint in seen_fingerprints:
++            raise ValueError('A drive was selected twice or has an ambiguous fingerprint')
++        seen_ids.add(device_id)
++        seen_fingerprints.add(fingerprint)
++        model = re.sub(r'[^A-Za-z0-9-]+', '-', str(d.get('model') or 'drive')).strip('-')[:35] or 'drive'
++        token = hashlib.sha256((fingerprint + ':' + str(size)).encode()).hexdigest()[:12]
++        output = target / f'DriveRepair-{model}-{token}.img'
++        if output.exists() or output.is_symlink() or Path(str(output) + '.rescue.json').exists():
++            raise FileExistsError(f'Existing output or rescue journal: {output.name}')
++        # Reserve 5% headroom and filesystem metadata; actual safety check is
++        # made by the CLI immediately before creating any image.
++        needed += size
++        plans.append({'device_id': device_id, 'fingerprint': fingerprint, 'size_bytes': size,
++                      'model': str(d.get('model') or 'Unknown'), 'output': str(output),
++                      'status': 'PENDING'})
++    if free_bytes < needed + max(512 * 1024 * 1024, needed // 20):
++        raise ValueError('Not enough free space for all full-disk images plus safety headroom')
++    return plans
++
++
++def batch_manifest_path(destination: str) -> Path:
++    """Keep queue metadata AWAY from the patient and unverified destination.
++
++    The engine validates destination ancestry before writing the image. A
++    manifest saved into the destination folder *before* that check could itself
++    alter the source media, which would violate our read-only rescue promise.
++    """
++    import secrets
++    from datetime import datetime, timezone
++    import tempfile
++    if os.name == 'nt':
++        home = Path(os.environ.get('LOCALAPPDATA') or tempfile.gettempdir())
++    else:
++        home = Path(os.environ.get('XDG_STATE_HOME') or Path.home()/'.local'/'state')
++    folder = home / 'DriveRepair' / 'batches'
++    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
++    timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
++    return folder / f'batch-{timestamp}-{secrets.token_hex(4)}.json'
++
++
++def store_manifest(path: Path, items: list[dict]) -> None:
++    """Create a private initial manifest; never overwrite old operator evidence."""
++    payload = {'version': 1, 'mode': 'serialized_read_only_rescue', 'jobs': items,
++               'note': 'Not a repair authorization. Read-only source; validate every rescue image separately.'}
++    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, 'O_BINARY', 0)
++    fd = os.open(path, flags, 0o600)
++    try:
++        with os.fdopen(fd, 'w', encoding='utf-8') as f:
++            json.dump(payload, f, indent=2)
++            f.flush()
++            os.fsync(f.fileno())
++    except BaseException:
++        path.unlink(missing_ok=True)
++        raise
++
++
++def append_batch_event(manifest: Path, event: dict) -> None:
++    """Append-only durable outcomes; preserves original manifest for recovery."""
++    if manifest is None or not manifest.is_file():
++        raise ValueError('A durable batch manifest is required')
++    path=Path(str(manifest)+'.events.jsonl')
++    flags=os.O_APPEND | os.O_CREAT | os.O_WRONLY | getattr(os,'O_BINARY',0)
++    fd=os.open(path, flags, 0o600)
++    with os.fdopen(fd, 'a', encoding='utf-8') as f:
++        f.write(json.dumps(event, sort_keys=True) + '\n')
++        f.flush()
++        os.fsync(f.fileno())
+diff --git a/mnt/data/driverepair_work/patchbase/new/desktop/tests/test_operator_reliability_batch_boot.py b/desktop/tests/test_operator_reliability_batch_boot.py
+new file mode 100644
+index 0000000..3eea7e1
+--- /dev/null
++++ b/desktop/tests/test_operator_reliability_batch_boot.py
+@@ -0,0 +1,136 @@
++"""Offline guarantees for condition scoring, batch preflight and ISO kit."""
++import io
++import json
++import os
++from pathlib import Path
++import tempfile
++import unittest
++import zipfile
++from unittest.mock import patch
++
++from driverepair_desktop.reliability_score import assess, compare_assessments
++from driverepair_desktop.unattended import plan_rescue_batch, store_manifest, append_batch_event
++from driverepair_desktop.boot_media import export_build_kit
++from driverepair_desktop.progress_events import ProgressEmitter
++from driverepair_desktop.surface_map import SurfaceCoverage
++
++
++class ConditionTests(unittest.TestCase):
++    def test_unknown_and_coarse_windows_health_never_get_numeric_score(self):
++        self.assertIsNone(assess(None)['score'])
++        self.assertIsNone(assess({'source': 'windows_storage_healthstatus', 'status': 'windows_health_limited'})['score'])
++        self.assertIsNone(assess({'status': 'smart_passed_limited'})['score'])
++
++    def test_raw_ata_media_warnings_decrease_condition_index(self):
++        baseline={'status':'smart_passed_limited', 'smart_status_passed': True,
++                  'ata_selected_raw_attributes':[
++                     {'id':5,'raw_value':0}, {'id':9,'raw_value':10000},
++                     {'id':197,'raw_value':0}, {'id':198,'raw_value':0}]}
++        worsening={**baseline, 'ata_selected_raw_attributes': [
++            {'id':5,'raw_value':4}, {'id':9,'raw_value':10001},
++            {'id':197,'raw_value':2}, {'id':198,'raw_value':1}]}
++        good=assess(baseline)
++        bad=assess(worsening)
++        self.assertEqual(good['power_on_hours'],10000)
++        self.assertLess(bad['score'],good['score'])
++        self.assertLess(compare_assessments(baseline,worsening)['delta'],0)
++
++    def test_nvme_critical_warn_and_exhausted_spare(self):
++        snap={'status':'failure_reported','nvme':{'critical_warning':1,
++              'media_errors':10,'available_spare':5, 'available_spare_threshold':10,
++              'percentage_used':110,'power_on_hours':15000}}
++        view=assess(snap)
++        self.assertLess(view['score'],35)
++        self.assertIn('CRITICAL',view['band'])
++
++    def test_only_explicit_manufacturer_rating_applies(self):
++        snap={'smart_status_passed':True,'ata_selected_raw_attributes':[
++             {'id':5,'raw_value':0},{'id':197,'raw_value':0},{'id':9,'raw_value':30000}]}
++        self.assertEqual(assess(snap)['score'],100)
++        self.assertEqual(assess(snap,manufacturer_specs={'rated_power_on_hours':20000})['score'],90)
++
++
++class BatchTests(unittest.TestCase):
++    def setUp(self):
++        self.temp=tempfile.TemporaryDirectory()
++        self.addCleanup(self.temp.cleanup)
++        self.devices=[{'id':f'usb:{i}', 'identity_hint':f'0123456789{i:02d}',
++                       'size_bytes':4096,'model':f'Sample Disk {i}'} for i in (1,2)]
++
++    def test_unique_new_destinations_and_durable_manifest(self):
++        planned=plan_rescue_batch(self.devices,self.temp.name,free_bytes=2*1024**3)
++        self.assertEqual(len({p['output'] for p in planned}),2)
++        path=Path(self.temp.name)/'manifest.json'
++        store_manifest(path,planned)
++        self.assertTrue(path.is_file())
++        append_batch_event(path,dict(planned[0],status='FAILED',exit_code=2))
++        self.assertIn('FAILED', Path(str(path)+'.events.jsonl').read_text())
++        with self.assertRaises(FileExistsError):
++            store_manifest(path,planned)
++
++    def test_reject_existing_output_duplicate_identity_and_low_space(self):
++        with self.assertRaises(ValueError):
++            plan_rescue_batch(self.devices*2,self.temp.name,free_bytes=2*1024**3)
++        with self.assertRaises(ValueError):
++            plan_rescue_batch(self.devices,self.temp.name,free_bytes=512)
++        target=plan_rescue_batch(self.devices,self.temp.name,free_bytes=2*1024**3)[0]['output']
++        Path(target).touch()
++        with self.assertRaises(FileExistsError):
++            plan_rescue_batch(self.devices,self.temp.name,free_bytes=2*1024**3)
++
++
++class EvidenceTests(unittest.TestCase):
++    def test_throttling_does_not_discard_completed_read_spans(self):
++        buffer=io.StringIO()
++        emitter=ProgressEmitter(enabled=True,stream=buffer,min_interval_s=60)
++        with patch('driverepair_desktop.progress_events.time.monotonic',side_effect=[100,101,102,103]):
++            for i in range(4):
++                emitter.emit({'phase':'SCANNING','offset':i*256,'read_length':256,
++                              'size':1024,'failed':i == 2},force=i==3)
++        out=[json.loads(line) for line in buffer.getvalue().splitlines()]
++        spans=[span for event in out for span in event.get('observed_read_spans',[])]
++        cov=SurfaceCoverage(1024,cells=4)
++        for off,length,failed,slow in spans:
++            cov.observe(off,length,failed=failed,slow=slow)
++        self.assertEqual(cov.checked_bytes,768)
++        self.assertEqual(sum(c.read_errors for c in cov.cells),1)
++
++    def test_sequential_reads_merge_and_cover_full_device(self):
++        buffer=io.StringIO()
++        emitter=ProgressEmitter(enabled=True,stream=buffer,min_interval_s=10000)
++        with patch('driverepair_desktop.progress_events.time.monotonic',return_value=10):
++            for i in range(500):
++                emitter.emit({'phase':'SCANNING','offset':i*2048,'read_length':2048,
++                              'size':500*2048,'failed':False},force=(i==499))
++        events=[json.loads(line) for line in buffer.getvalue().splitlines()]
++        spans=[span for event in events for span in event.get('observed_read_spans',[])]
++        self.assertEqual(spans,[[0,1024000,False,False]])
++
++
++class BootKitTests(unittest.TestCase):
++    def test_build_kit_has_recipe_and_never_writes_raw_media(self):
++        root=Path(__file__).resolve().parents[2]
++        with tempfile.TemporaryDirectory() as folder:
++            target=Path(folder)/'builder.zip'
++            result=export_build_kit(root,target)
++            self.assertEqual(result['status'],'UNVERIFIED_BUILD_KIT_CREATED')
++            with zipfile.ZipFile(target) as archive:
++                paths=set(archive.namelist())
++            self.assertIn('driverepair/scripts/build_live_iso.sh',paths)
++            self.assertIn('driverepair/desktop/driverepair_desktop/qtgui.py',paths)
++            self.assertIn('driverepair/BOOT_KIT_INSTRUCTIONS.txt',paths)
++            with self.assertRaises(FileExistsError):
++                export_build_kit(root,target)
++
++    def test_standalone_resource_fallback(self):
++        with tempfile.TemporaryDirectory() as folder:
++            output=Path(folder)/'portable-kit.zip'
++            result=export_build_kit(None,output)
++            self.assertEqual(result['status'],'UNVERIFIED_BUILD_KIT_CREATED')
++            with zipfile.ZipFile(output) as archive:
++                self.assertIn('driverepair/scripts/build_live_iso.sh',archive.namelist())
++                self.assertIn('driverepair/desktop/driverepair_desktop/qtgui.py',archive.namelist())
++
++
++if __name__=='__main__':
++    unittest.main()
+diff --git a/mnt/data/driverepair_work/patchbase/new/docs/MULTIDRIVE_CONDITION_AND_LIVE_UI_20261118.md b/docs/MULTIDRIVE_CONDITION_AND_LIVE_UI_20261118.md
+new file mode 100644
+index 0000000..baa2859
+--- /dev/null
++++ b/docs/MULTIDRIVE_CONDITION_AND_LIVE_UI_20261118.md
+@@ -0,0 +1,42 @@
++# DriveRepair — November 18 workstation, condition and offline-recovery update
++
++**Status:** Source implementation and synthetic testing complete. Native Windows Qt, USB fault-injection, physical HDD repair, and ISO boot qualification **not performed** in this environment. No public hardware qualification is claimed.
++
++## What the screenshots revealed
++
++1. Progress telemetry is intentionally throttled, but the GUI used to plot only the last read in each emitted notification. Whole-drive map coverage was therefore not comparable to attempted/processed bytes. `ProgressEmitter` now accumulates contiguous successful read spans and failed read spans between emitted notifications; the Qt map consumes all reported spans. If the engine lacks evidence, untested remains dark.
++2. The screenshot's SanDisk/USB I/O request near byte 500,099,186,688 remained blocked for hundreds of seconds. The Python synchronous Win32 reader cannot guarantee a timeout, and canceling kernel I/O depends on driver cooperation. On Windows external USB guided scans we now cap read requests at **1 MiB** including calibration. The Qt UI labels pending I/O explicitly; opt-in auto-stop supervises **read-only diagnostic** child processes after three minutes with no result. This is not a hard device timeout and does not reset the drive. For a queued read-only rescue, a 240-second watchdog terminates the child, records an incomplete outcome, and advances to the next drive. An image from a stalled job must be checked, not trusted as complete.
++3. A GUIDED REPAIR scan reaching 100% scanning phase is **not** 100% repaired. We renamed the metric CURRENT PHASE and retain a separate staged job estimate. A completed phase may still be awaiting a follow-up request or later repair steps.
++4. Windows `WinError 5` is physical-drive access denial. A mounted, inaccessible or RAW volume with no lockable volume handle is not a reason to bypass exclusive-access checks. Windows may require elevation, closing applications, or verified offline operation. Nothing here removes those safety gates.
++
++## New controls
++
++- **Rescue data -> Queue multiple drives for rescue:** select multiple freshly enumerated external sources, or Linux offline whole disks when explicitly enabled. Choose a destination directory on a separate healthy disk, confirm the entire plan, then allow sequential read-only, journaled image rescues. Distinct source fingerprints and output names prevent accidental collisions. The authoritative engine verifies source/destination physical isolation and identity before each image is created. Queue decisions, including child failure and timeouts, are appended to durable local event records in the DriveRepair state directory. `COMPLETE` means the command succeeded; inspect each `.rescue.json` for missing ranges before trusting the contents.
++- **Bootable media builder:** exports the original Debian trixie live-ISO builder and desktop Python source into a self-contained ZIP kit. **Build live ISO (Linux)** runs the existing `build_live_iso.sh` only on a prepared Linux root session with live-build/debootstrap installed. Qt dependencies are now included in the live-build package list. The builder never writes physical USB devices. The ISO remains `UNVERIFIED` until BIOS, UEFI, storage enumeration, source no-mount, isolation, and recovery tests pass.
++- **Offline Linux rescue:** an explicit checkbox allows `list-all-linux` and `rescue-system` for internal disks after booting a separate trusted recovery environment. The CLI still requires a stable serial, fingerprint, an unmounted source and separate destination. It does not enable unattended in-place repair on internal drives.
++- **Condition evidence gauge:** the `reliability_score` module summarizes available ATA SMART raw error indicators, NVMe critical warnings, spare/endurance counters, drive power-on hours, optional observed scan failures, and optional manually documented model-specific service-hour rating. It reports confidence and reasons. Missing SMART data returns **UNKNOWN**, not 100/100. The before/after result records controller health assessment and counter deltas; rewriting readable sectors does not reset lifetime wear.
++- **Refined visual hierarchy:** transparent Qt labels remove misleading dark label bars, six styled metrics tiles replace dense text, an enhanced 64x12 evidence map and filled throughput trend improve glanceability, and visible status distinguishes phase completion from job completion.
++
++## What this is NOT
++
++- Not a predictive failure-probability model or official manufacturer certification. NVMe percentage-used is a vendor estimate. HDD AFR/MTBF are fleet statistics and cannot be applied as exact remaining-life predictions. Optional manufacturer service-hour comparisons are operator-provided, not independently checked.
++- Not a device-driver fix for hung USB bridges. A single synchronous Windows I/O may remain in kernel indefinitely; process termination may not make the adapter responsive. A Linux live OS with separately tested storage drivers is a follow-on recovery route, not guaranteed repair.
++- Not a neural reconstruction engine. DriveRepair has deterministic adaptive reads/retries and guarded region writes, **not** a validated learned model that reconstructs unreadable bytes.
++- Not proof that guarded HDD in-place rewrite works on all Windows volumes: RAW partitions, mounted volumes, and missing exclusive access remain explicit blockers.
++- Not an automatically created boot USB. The GUI builds/exports an experimental *ISO builder*; it does not flash removable disks or claim that an ISO has booted.
++
++## Validation to hand off to a Windows/hardware-capable agent
++
++1. Install PySide6; inspect 100%, 125%, 150% and 200% scaling in a live GUI. Verify the 64x12 map, gauge, labels, keyboard controls, progress labels and queue dialogs. No native Qt package was installed in the build environment.
++2. On a healthy sacrificial USB HDD with a dedicated destination on another physical disk, queue two external rescues. Confirm each source's identity, no source writes, independent unique output images, independently readable rescue journals, sequential processing, and batch events. Unplug the first drive mid-scan and verify failure isolation allows the next job to start.
++3. Force Win32 raw-read delays, WinError 5, ACCESS_DENIED, inconsistent sector geometry, PowerShell/Get-Disk discovery timeouts, and USB resets. Verify watcher triggers on the read-only worker only and does not abort a journaled write transaction. Record actual last progress timestamp and adapter recovery behavior.
++4. Run guided HDD repair only on sacrificial media with a separate journal. Verify all exclusive lock gates, SMART qualification, explicit consent, postwrite SHA-256 readback and independent reopening. The existing repair beta policy must continue blocking generic SSD/NVMe rewrite.
++5. Validate condition index against real smartctl JSON for ATA, USB-SAT, NVMe and drives exposing only coarse Windows health. Test hour-counter changes, raw attribute vendor quirks, missing SMART, score and confidence before/after. **Do not make claims of restored lifespan from a higher score.**
++6. Build ISO from the GUI on an isolated Debian VM, verify SHA-256 and El Torito entries, then boot BIOS and UEFI VMs, then separate real hardware with NVMe/SATA/USB. Confirm source stays unmounted/read-only until operator explicitly chooses rescue, and a destination is a different physical medium.
++7. Run the same tests on 4Kn drives, USB enclosures, SMR HDDs, thin-provisioned destinations and NTFS/RAW cases, and verify diagnostic copy is understandable to both consumer and expert users.
++
++## Tested locally
++
++- `PYTHONPATH=desktop pytest -q desktop/tests`: **360 passed, 11 skipped; 19 subtests passed.** The skipped tests include Qt and other environment-dependent features.
++- `python -m compileall -q desktop/driverepair_desktop`: passed.
++- Buildable source and patch provided separately; **Cargo, native Windows raw-disk I/O, real HDD SMART/postwrite verification and full ISO boot were not validated here**.
+diff --git a/scripts/build_live_iso.sh b/scripts/build_live_iso.sh
+index cd51ef9..df60af6 100644
+--- a/scripts/build_live_iso.sh
++++ b/scripts/build_live_iso.sh
+@@ -40,6 +40,9 @@ mkdir -p config/package-lists \
+ cat > config/package-lists/driverepair.list.chroot <<'EOF'
+ python3
+ python3-tk
++python3-pyside6.qtcore
++python3-pyside6.qtgui
++python3-pyside6.qtwidgets
+ smartmontools
+ gddrescue
+ testdisk

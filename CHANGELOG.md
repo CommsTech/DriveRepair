@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — multi-drive, condition evidence, live ISO and truthful Qt telemetry (2026-11-18)
+
+- Preserve aggregated successful and failed read spans across throttled progress messages, addressing the inaccurate GUI coverage map in the supplied Windows screenshots. Keep unobserved drive regions unknown.
+- Refine the Qt workstation with transparent labels, KPI tiles, higher-resolution 64×12 media visualization, improved throughput graph, phase-versus-job progress copy, a condition evidence gauge and operator-entered, documented model service-hours rating.
+- Add read-only, sequential **multi-device image rescue** with per-disk fingerprint checks, distinct unused image names, storage-capacity preflight, local durable batch manifest and append-only event log. Each CLI child still performs authoritative destination ancestry and identity checks; no unattended physical writes.
+- Add a 3-minute read-only diagnostic stalled-I/O watchdog and 4-minute queued-rescue timeout for isolating blocked child operations. Restrict Windows external-USB guided requests to at most 1 MiB to reduce prolonged-blocking risk. These are **not** OS-driver hard timeouts or guarantees of safe USB cancellation.
+- Expose Debian live-ISO build-kit export and optional Linux-root ISO builder from the Qt GUI; include PySide6 packages. Allow explicitly opted-in offline Linux internal-disk read-only rescue. **No USB flasher or boot certification is claimed.**
+- Include SMART/NVMe-based evidence index with UNKNOWN for missing/coarse telemetry, before/after condition comparison, confidence, available drive hours and optional documented rated hours. No predictive failure percentage, neural restoration, or claimed lifespan improvement.
+- Add synthetic regression tests and Windows/hardware/ISO handoff in `docs/MULTIDRIVE_CONDITION_AND_LIVE_UI_20261118.md`. Native PySide6 GUI interaction, hardware writes, boot image and Rust compilation remain untested here.
+
 ## Unreleased — guarded HDD repair beta and independent post-write verification (2026-11-18)
 
 - Add separate `--repair-beta` build with actual guarded `care-external` raw-disk write path, while preserving the original image-first public package. Reject unqualified direct raw-refresh commands in this artifact.
