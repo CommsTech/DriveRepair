@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — surface recovery: consensus rereads, zone baselines, sector drilldown (2026-11-19)
+
+- Add read-only `surface_recovery` primitives modelled on publicly documented SpinRite behaviour (independent implementation, no proprietary code): majority consensus across rereads with varied read starts/head offsets, per-zone adaptive latency baselines, and bounded sector-level drilldown inside a failed chunk.
+- Triage results gain `consensus_candidates`, `sector_drilldown`, `sector_probe_reads`, and `marginal_probes`. Disagreement remains reported as UNKNOWN bytes: a majority is a candidate only and is never auto-written.
+- Sector drilldown runs only on non-aborted scans, is budgeted in sectors and seconds, and issues reads only. Verified read-back refresh remains the sole write path.
+
 ## Unreleased — 2026-11-19 product README, USB flash acknowledgement and SMART discovery (0.3.3b18)
 
 - Rewrite the top-level README as a product guide with setup, workspaces, file rescue, hardware requirements, boot USB, safety boundaries and troubleshooting; move previous verbose README notes to `docs/README_ENGINEERING_HISTORY.md`.

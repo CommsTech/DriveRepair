@@ -375,12 +375,16 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
     # Extra targeted reads are optional: discrepancies flag instability, NOT the
     # original/correct value. Only revisit suspicious samples, not all LBAs.
     inconsistent_reads: list[dict] = []
+    consensus_candidates: list[dict] = []
     repeated_read_errors = 0
     repeat_probe_failed_ranges: list[dict] = []
     # Keep the result schema stable when an abort skips optional follow-up
     # reads. The caller still needs the abort evidence, not an exception.
     extra_attempts = 0
     if compare_suspects and mode == 'triage' and not status.startswith('aborted'):
+        # Majority reread with varied read starts. Disagreement is still
+        # reported as UNKNOWN; a majority is only a candidate, never proof.
+        from .surface_recovery import consensus_read
         candidates = sorted(set(anomalous_indices))[:min(12, samples)]
         followup_deadline = time.monotonic() + 15.0
         for index in candidates:
@@ -388,23 +392,64 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
                 break
             off = index * chunk
             length = min(chunk, size - off)
-            try:
-                first = reader.read_at(off, length)
-                extra_attempts += 1
-                second = reader.read_at(off, length)
-                extra_attempts += 1
-                if len(first) != length or len(second) != length:
-                    repeated_read_errors += 1
-                    repeat_probe_failed_ranges.append({'offset': off, 'length': length})
-                elif first != second:
-                    inconsistent_reads.append({'offset': off, 'length': length,
-                                               'interpretation': 'Inconsistent repeated reads; correct bytes UNKNOWN'})
-            except OSError:
-                extra_attempts += 1
+            outcome = consensus_read(reader, off, length, sector=sector,
+                                     attempts=3, shifts=(-1, 0, 1),
+                                     deadline=followup_deadline)
+            extra_attempts += outcome['attempts']
+            if outcome['successful_reads'] == 0:
+                repeated_read_errors += 1
+                repeat_probe_failed_ranges.append({'offset': off, 'length': length})
+                continue
+            if outcome['distinct_blocks'] > 1:
+                inconsistent_reads.append({
+                    'offset': off, 'length': length,
+                    'distinct_blocks': outcome['distinct_blocks'],
+                    'agreeing_bytes_pct': outcome['agreeing_bytes_pct'],
+                    'interpretation': 'Inconsistent repeated reads; correct bytes UNKNOWN'})
+                if outcome['status'] == 'consensus':
+                    consensus_candidates.append({
+                        'offset': off, 'length': length,
+                        'attempts': outcome['attempts'],
+                        'agreeing_bytes_pct': outcome['agreeing_bytes_pct'],
+                        'interpretation': ('Majority reread candidate only; not verified against '
+                                           'any filesystem checksum and never auto-written.')})
+            elif outcome['status'] != 'consensus':
                 repeated_read_errors += 1
                 repeat_probe_failed_ranges.append({'offset': off, 'length': length})
         if inconsistent_reads and status == 'completed':
             status = 'completed_with_inconsistent_reads'
+    # Narrow failed chunks down to the sectors that actually fail. A failed
+    # 1 MiB read only identifies an unknown range until sectors are probed.
+    sector_probes: list[dict] = []
+    sector_probe_reads = 0
+    if failed_ranges and not status.startswith('aborted'):
+        from .surface_recovery import sector_drilldown
+        probe_deadline = time.monotonic() + 10.0
+        for item in failed_ranges[:3]:
+            remaining = probe_deadline - time.monotonic()
+            if remaining <= 0.5:
+                break
+            outcome = sector_drilldown(reader, item['offset'], item['length'],
+                                       sector=sector, max_sectors=48,
+                                       max_elapsed_seconds=min(4.0, remaining))
+            sector_probe_reads += outcome['sectors_probed']
+            sector_probes.append({
+                'offset': outcome['offset'],
+                'sectors_probed': outcome['sectors_probed'],
+                'failed_sector_count': outcome['failed_sector_count'],
+                'failed_sectors': outcome['failed_sectors'][:16],
+                'median_ms': outcome['median_ms']})
+    # Per-zone adaptive baselines: outer tracks are not the inner tracks.
+    marginal_probes: list[dict] = []
+    if mode == 'triage' and probe_latencies:
+        from .surface_recovery import ZoneLatencyBaselines
+        zones = ZoneLatencyBaselines()
+        for off, latency in probe_latencies:
+            zones.observe(off, latency)
+        for off, latency in probe_latencies:
+            info = zones.classify(off, latency)
+            if info.get('state') == 'marginal' and len(marginal_probes) < 100:
+                marginal_probes.append({'offset': off, **info})
     boundary_investigation = None
     if failed_ranges and status != 'aborted_device_or_access_error':
         from .guided_repair import inspect_failed_boundaries
@@ -435,6 +480,10 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
         'slow_region_count': max(slow_region_count, len(slow_regions)),
         'slow_regions_truncated': slow_region_count > 1000,
         'inconsistent_reads': inconsistent_reads,
+        'consensus_candidates': consensus_candidates,
+        'sector_drilldown': sector_probes,
+        'sector_probe_reads': sector_probe_reads,
+        'marginal_probes': marginal_probes,
         'repeat_probe_failures': repeated_read_errors,
         'repeat_probe_failed_ranges': repeat_probe_failed_ranges,
         'extra_suspect_reads': extra_attempts if compare_suspects and mode == 'triage' else 0,
@@ -448,5 +497,7 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
                  'Readability only; no sector repaired, no writes, no correctness guarantee. '
                  'Errors locate affected CHUNKS, not defective individual sectors. ' +
                  ('Optional repeated-suspect checks can detect inconsistency but cannot establish correct bits.'
-                  if compare_suspects else ''),
+                  if compare_suspects else '') +
+                 (' Majority rereads with varied read starts are candidates only, never verification.'
+                  if consensus_candidates else ''),
     }
