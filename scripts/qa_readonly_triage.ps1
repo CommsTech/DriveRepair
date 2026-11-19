@@ -1,7 +1,8 @@
 # Read-only hardware QA sweep for Windows.
 #
 # Runs DriveRepair's bounded triage scan against external whole disks and writes
-# one JSON result per disk. Reads only: no refresh, no capacity test, no writes.
+# one JSON result per disk plus a transcript. Reads only: no refresh, no capacity
+# test, no writes.
 #
 # Physical-drive access requires an elevated process on Windows, so run this from
 # an Administrator console (or approve the UAC prompt when launched with -Verb RunAs).
@@ -12,28 +13,54 @@
 param(
     [string[]]$Devices = @(),
     [int]$Samples = 24,
-    [string]$OutputDir = "$env:USERPROFILE\dr_results"
+    [string]$OutputDir = "$env:USERPROFILE\dr_results",
+    [string]$PythonExe = ''
 )
 
 $ErrorActionPreference = 'Continue'
 $repoDesktop = Split-Path -Parent $PSScriptRoot
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
+$logPath = Join-Path $OutputDir '_run.log'
+try { Start-Transcript -Path $logPath -Append | Out-Null } catch { }
+
+function Resolve-Python {
+    if ($PythonExe -and (Test-Path $PythonExe)) { return $PythonExe }
+    foreach ($candidate in @(
+            (Get-Command python.exe -ErrorAction SilentlyContinue).Source,
+            "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
+            'C:\Python311\python.exe')) {
+        if ($candidate -and (Test-Path $candidate)) { return $candidate }
+    }
+    return $null
+}
+
+$interpreter = Resolve-Python
+Write-Host "Interpreter: $interpreter"
+if (-not $interpreter) {
+    "failed: no python interpreter found" | Out-File (Join-Path $OutputDir '_complete.txt') -Encoding utf8
+    try { Stop-Transcript | Out-Null } catch { }
+    exit 4
+}
+
 Push-Location $repoDesktop
 $env:PYTHONPATH = '.'
 
 try {
     if (-not $Devices -or $Devices.Count -eq 0) {
-        $inventory = & python -m driverepair_desktop list --json 2>$null | Out-String
+        $inventory = & $interpreter -m driverepair_desktop list --json 2>$null | Out-String
+        Write-Host "Inventory length: $($inventory.Length)"
         try {
             $Devices = ($inventory | ConvertFrom-Json | ForEach-Object { $_.id })
         } catch {
-            Write-Error "Could not parse drive inventory; pass -Devices explicitly."
-            exit 2
+            Write-Host "Inventory parse failed: $_"
+            $Devices = @()
         }
     }
     if (-not $Devices -or $Devices.Count -eq 0) {
-        Write-Error "No external whole disks reported. Connect a drive and retry."
+        "failed: no external whole disks reported" | Out-File (Join-Path $OutputDir '_complete.txt') -Encoding utf8
         exit 3
     }
 
@@ -41,7 +68,8 @@ try {
     foreach ($device in $Devices) {
         $name = ($device -split ':')[-1]
         $target = Join-Path $OutputDir "$name.scan.json"
-        & python -m driverepair_desktop scan --device $device --mode triage `
+        Write-Host "Scanning $device -> $target"
+        & $interpreter -m driverepair_desktop scan --device $device --mode triage `
             --samples $Samples --ack-risk --json --no-live-dashboard *> $target
         $status = 'unknown'
         try {
@@ -53,9 +81,13 @@ try {
         $summary += [pscustomobject]@{ Device = $device; Status = $status; File = $target }
     }
 
-    $summary | Format-Table -AutoSize
+    $summary | Format-Table -AutoSize | Out-String | Write-Host
     $summary | ConvertTo-Json | Out-File (Join-Path $OutputDir '_summary.json') -Encoding utf8
     "completed $(Get-Date -Format o)" | Out-File (Join-Path $OutputDir '_complete.txt') -Encoding utf8
+} catch {
+    "failed: $_" | Out-File (Join-Path $OutputDir '_complete.txt') -Encoding utf8
+    Write-Host "ERROR: $_"
 } finally {
     Pop-Location
+    try { Stop-Transcript | Out-Null } catch { }
 }
