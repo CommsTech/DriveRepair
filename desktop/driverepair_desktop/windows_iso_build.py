@@ -95,16 +95,26 @@ if [[ ! -d "$SOURCE_DIR/driverepair" || ! -d "$OUTPUT_DIR" ]]; then
   echo 'or build in a Debian VM. No ISO and no USB were written.' >&2
   exit 3
 fi
+# The chroot must be built on the WSL distribution's native Linux filesystem.
+# Some WSL installations mount /tmp on a filesystem where mknod is denied.
+# Put both staging and the nested live-build TMPDIR under /var/tmp instead.
+WORK="$(mktemp -d /var/tmp/driverepair-wsl-build.XXXXXXXX)"
+if ! mknod -m 600 "$WORK/test-dev-null" c 1 3 2>/dev/null; then
+  echo 'ERROR: WSL build filesystem cannot create Linux device nodes.' >&2
+  echo 'Use Debian WSL2 with a native Linux /var/tmp filesystem or a Debian VM.' >&2
+  echo 'No ISO was made and no USB was written.' >&2
+  exit 6
+fi
+rm -f "$WORK/test-dev-null"
 if ! command -v lb >/dev/null || ! command -v debootstrap >/dev/null || ! command -v xorriso >/dev/null; then
   echo 'Installing Debian live-build prerequisites in isolated WSL distro (approved by operator).' >&2
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends live-build debootstrap xorriso
 fi
-WORK="$(mktemp -d /tmp/driverepair-wsl-build.XXXXXXXX)"
 trap 'echo "Build workspace retained for review: $WORK"' EXIT
 cp -a -- "$SOURCE_DIR/driverepair" "$WORK/driverepair"
 mkdir -- "$WORK/output"
-bash "$WORK/driverepair/scripts/build_live_iso.sh" "$WORK/output"
+TMPDIR="$WORK" bash "$WORK/driverepair/scripts/build_live_iso.sh" "$WORK/output"
 shopt -s nullglob
 artifacts=("$WORK/output"/*.iso "$WORK/output"/*.sha256)
 if (( ${#artifacts[@]} < 2 )); then echo 'ISO or checksum missing' >&2; exit 4; fi

@@ -69,10 +69,11 @@ class RepairVolumePickerTests(unittest.TestCase):
         self.assertEqual(parsed.command,'list-repair-volumes')
         self.assertEqual(parsed.confirm_identity,self.device.fingerprint[:12])
 
-    def test_qt_repair_does_not_redirect_to_restore_and_reselects_for_flash(self):
+    def test_qt_repair_keeps_manual_method_and_does_not_redirect(self):
         code=(Path(__file__).resolve().parents[1]/'driverepair_desktop'/'qtgui.py').read_text(encoding='utf-8')
-        self.assertIn("self.job_box.itemData(i)=='winfsrepair'", code)
-        self.assertIn("if flash is not None:",code)
+        self.assertIn("('Repair filesystem on selected drive (Windows)','winfsrepair')", code)
+        self.assertNotIn('if flash is not None:', code)
+        self.assertIn('Preserve the operator', code)
         self.assertIn('def repair_volumes_ready(self, child, exit_code)',code)
         self.assertIn("self.start_windows_filesystem_repair()", code)
         self.assertNotIn("elif decision['action']=='rescue':\n                self.start_job(repair_copy=True)",code)

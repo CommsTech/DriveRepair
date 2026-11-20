@@ -2,7 +2,7 @@
 
 **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
 
-> **Release status:** `0.3.3b32` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+> **Release status:** `0.3.3b33` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
 
 **Drive models:** The bundled [offline model catalog](docs/DRIVE_MODEL_CATALOG.md) currently documents four vendor-backed model entries (three Seagate SMR models and one SanDisk SSD family). It guides scanning; it is not a comprehensive database or authorization to rewrite a disk.
 
@@ -19,8 +19,11 @@ mounted NTFS, exFAT, or FAT volume. The repair screen discovers the eligible
 volumes attached to the selected external disk asynchronously; operators choose
 one from a bound list instead of typing a speculative drive letter. A RAW,
 unmounted or unknown filesystem is NOT silently repaired or formatted.
-Known SSDs select this logical repair method in the actual task dropdown,
-not a misleading HDD rewrite workflow. The command performs a second,
+The operator selects the applicable repair technique explicitly. An HDD
+maintenance method will **not** be silently changed into CHKDSK; if the medium
+is unsuitable, the UI explains that method is unavailable. CHKDSK is for
+filesystem metadata only, never physical flash wear, unreadable sectors or
+HDD surface regeneration. The command performs a second,
 independent volume-to-PhysicalDrive check immediately before altering metadata.
 
 Choose **Targeted HDD region repair** separately for a genuinely identified
@@ -36,6 +39,28 @@ HDD physical-region maintenance uses DriveRepair's bounded, journaled rewrite
 engine with separate media-type, identity, health, locking and readback checks.
 It may re-write repeatably readable weak HDD regions; an unreadable region is
 **not** reconstructed. The program cannot guarantee the drive's remaining life.
+
+**Restore image storage:** The Restore workspace offers a default **space-saving
+sparse image** option. Only all-zero chunks successfully read from the source
+can remain unallocated on sparse-file capable destination storage. The image
+retains its original logical disk size and exactly the observed bytes; an
+independent `.rescue.json` journal distinguishes successfully read zeros from
+unreadable/unprocessed areas. This is **not** filesystem-aware free-space
+analysis or a compressed container, and copying the sparse image to another
+filesystem may expand it. Disable this option for the simplest regular-file
+workflow; neither mode proves forensic chain of custody.
+
+**Recovery USB creation:** Debian WSL builds now show an indeterminate live
+progress window, keep a complete `DriveRepair-iso-build.log` in the chosen
+output folder and reject build-hosts unable to create Linux device nodes
+before downloading the full live image. A structurally checked ISO is still
+not considered firmware-boot verified until tested on BIOS and UEFI.
+
+**Diagnose** automatically requests a bounded read-only hardware-health probe
+after a completed scan. When a USB adapter hides SMART, the observed scan
+read errors are reported but **no drive life or reliability score is invented**.
+Use **System readiness** to review local prerequisites and optionally approve
+installation of supported Windows tools. No installer runs automatically.
 
 **Restore data** is a **different workspace** for imaging, recovery and file
 salvage. Recover files or use a restored image when the data matters more than

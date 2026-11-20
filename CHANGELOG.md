@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.3b33 — 2026-11-20: Recovery ISO visibility, sparse output, truthful repair selection
+
+- Added a nonmodal Debian/WSL ISO-build progress window with ongoing stage messages, an indeterminate progress indicator, and a persistent full log. Distinguishes a completed image from a failed build, with WSL device-node preflight and no claim of verified BIOS/UEFI boot.
+- Added an explicit System readiness action and one-time consent-based Windows SMART prerequisite notification.
+- Automatically requests bounded hardware-health evidence after diagnosis, without confusing sampled read results with guaranteed hardware health.
+- Removed automatic rerouting of explicitly selected HDD maintenance to a filesystem repair operation. Unsafe methods remain ineligible, but the operator is told why.
+- Added optional sparse-zero rescue images to single and serial multi-source workflows: only successfully read zero-filled blocks are elided; unreadable regions remain journaled, and resume enforces consistent image policy.
+- Added regression tests for sparse data accounting and policy-safe restart. Native Windows Qt, WSL bootstrap and physical-media repairs remain hardware-unverified.
+
+
 ## 0.3.3b32 — 2026-11-20: Repair operation selection and Windows volume binding
 
 - Corrected the Qt repair-method selection when switching drives: a recognized SSD/flash source now displays the on-device Windows filesystem method instead of leaving an HDD targeted/full-scan rewrite selected while silently changing the Start action.

@@ -275,6 +275,11 @@ def _validate_state(state: dict) -> None:
             raise ValueError('Overlapping missing-sector map entries')
         if state.get('recovered_bytes') != cursor - sum(n for _, n in ordered):
             raise ValueError('Recovery map byte accounting inconsistent')
+        zero_elided = state.get('zero_elided_bytes', 0)
+        if (type(zero_elided) is not int or zero_elided < 0 or
+                zero_elided > state['recovered_bytes'] or
+                (zero_elided and not state.get('sparse_zeros'))):
+            raise ValueError('Recovery sparse-zero accounting inconsistent')
     except (KeyError, TypeError, OverflowError) as exc:
         raise ValueError('Malformed recovery map') from exc
 
@@ -313,6 +318,8 @@ def inspect_rescue_status(output: str) -> dict:
         'source_size_bytes': state['size'],
         'cursor_bytes': state['cursor'],
         'recovered_bytes': state['recovered_bytes'],
+        'verified_zero_elided_bytes': state.get('zero_elided_bytes', 0),
+        'sparse_zero_storage': bool(state.get('sparse_zeros', False)),
         'unprocessed_bytes': unprocessed,
         'unreadable_bytes': missing + pending,
         'missing_regions': len(state['missing_ranges']) + len(state.get('retry_pending_ranges', [])),
@@ -333,7 +340,8 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
                   max_chunks: int | None = None,
                   retry_sector_attempts: int = 1,
                   consensus_attempts: int = 3,
-                  consensus_sector_budget: int = 4096) -> dict:
+                  consensus_sector_budget: int = 4096,
+                  sparse_zeros: bool = False) -> dict:
     """Rescue readable data to image; no writes to reader/source.
 
     Recovered means OS returned all requested bytes, not that bytes match
@@ -350,6 +358,8 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
     journal = output + '.rescue.json'
     if os.path.realpath(journal) == os.path.realpath(output):
         raise ValueError('Output overlaps journal')
+    if type(sparse_zeros) is not bool:
+        raise ValueError('Sparse zero policy must be explicitly boolean')
     if retry_missing and not resume:
         raise ValueError('Retry missing requires --resume')
     if resume:
@@ -361,6 +371,8 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
                         source_token=source_token, output=output)
         if any(state.get(k) != v for k, v in expected.items()):
             raise RuntimeError('Recovery source/destination identity or parameters changed')
+        if bool(state.get('sparse_zeros', False)) != sparse_zeros:
+            raise RuntimeError('Recovery zero-data storage policy changed; resume with the original policy')
         _validate_state(state)
         if retry_missing and state['cursor'] != size:
             raise RuntimeError('Complete the first pass before retrying missing regions')
@@ -370,6 +382,7 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
         state = dict(schema=1, size=size, sector=sector, chunk=chunk,
                      source_token=source_token, output=output,
                      cursor=0, recovered_bytes=0, missing_ranges=[],
+                     sparse_zeros=sparse_zeros, zero_elided_bytes=0,
                      failed_read_attempts=0, status='in_progress')
     fd = _open_output(output, size, resume)
     attempts = 0
@@ -472,7 +485,15 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
                 recover(start + half, n - half)
             recover(offset, length)
             for start, data in segments:
-                _write_all(fd, data, start)
+                # Output was created as a sparse regular file. A confirmed
+                # all-zero source read can remain a hole: logical bytes are
+                # identical. Missing/unreadable regions are tracked separately
+                # by the authoritative recovery map, never inferred from zeros.
+                # Do not write zeros to a hole (especially costly on NTFS).
+                if sparse_zeros and data.count(0) == len(data):
+                    state['zero_elided_bytes'] = int(state.get('zero_elided_bytes', 0)) + len(data)
+                else:
+                    _write_all(fd, data, start)
             previous_missing = state['missing_ranges']
             if retry_missing:
                 # Pending-range removal is only durable after the checkpoint
@@ -531,7 +552,8 @@ def rescue_reader(reader: Reader, *, size: int, sector: int, output: str,
                   max_chunks: int | None = None,
                   retry_sector_attempts: int = 1,
                   consensus_attempts: int = 3,
-                  consensus_sector_budget: int = 4096) -> dict:
+                  consensus_sector_budget: int = 4096,
+                  sparse_zeros: bool = False) -> dict:
     """Rescue with exclusive OS lock to prevent concurrent output/map writers."""
     with _rescue_writer_lock(output):
         return _rescue_reader_locked(
@@ -542,4 +564,5 @@ def rescue_reader(reader: Reader, *, size: int, sector: int, output: str,
             max_chunks=max_chunks, retry_sector_attempts=retry_sector_attempts,
             consensus_attempts=consensus_attempts,
             consensus_sector_budget=consensus_sector_budget,
+            sparse_zeros=sparse_zeros,
         )
