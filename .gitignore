@@ -68,3 +68,9 @@ desktop/*.egg-info/
 # Internal USB lab launcher (not for release trees)
 desktop/scripts/run_elevated_live_lab.ps1
 
+
+# Audit and coverage outputs
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

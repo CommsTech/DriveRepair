@@ -1,0 +1,453 @@
+diff --git a/.gitignore b/.gitignore
+index e99c6fd..eacba0d 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -68,3 +68,9 @@ desktop/*.egg-info/
+ # Internal USB lab launcher (not for release trees)
+ desktop/scripts/run_elevated_live_lab.ps1
+ 
++
++# Audit and coverage outputs
++.coverage
++.coverage.*
++coverage.xml
++htmlcov/
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index ad5bba7..bc75d47 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,14 @@
+ # Changelog
+ 
++## 0.3.3b28 — 2026-11-19: scan evidence durability and source hygiene audit
++
++- **Fixed buffered telemetry loss at scan phase boundaries.** If a producer transitions directly from scanning to a terminal or verification state, pending read spans are emitted under the original SCANNING phase before the terminal event; no covered region is silently discarded. A transient progress-stream failure no longer discards buffered spans or advances the throttle clock. Progress reporting remains best-effort and cannot guarantee delivery across persistent stream failures.
++- **Fixed checkpoint retry after a failed durable write.** The checkpoint throttle time is now committed only after the atomic replacement and durability checks complete. A failed replacement can be retried immediately, even within the nominal checkpoint interval.
++- Added focused fault-injection regression tests for failed checkpoint replacement, transient telemetry sink failure, and SCANNING→DONE phase transitions. Preserved independent disk-write authorization and device safety checks.
++- Added a deterministic, dependency-free clean-source ZIP packager (`scripts/create_clean_source_archive.py`) plus tests. Generated Rust target caches and historical nested release ZIPs had dominated the uploaded archive. No active application code or documentation is deleted from the source deliverable.
++- Removed a pytest discovery warning by renaming a test fixture; no application feature was removed as "dead code" without a demonstrated unused reference.
++- Verification is limited to this environment: Python synthetic suite and source-package checks. PySide6 native-Windows UI, Rust compilation, actual device-repair success, bootability, and hardware failure recovery are **NOT VERIFIED**.
++
+ ## 0.3.3b27 — 2026-11-19: native read-only ATA IDENTIFY fallback (experimental)
+ 
+ - Added a bounded, isolated Windows SAT ATA IDENTIFY DEVICE probe for compatible USB bridges when smartctl and Windows storage-property identification are inconclusive.
+diff --git a/README.md b/README.md
+index 19a73f8..fb96f34 100644
+--- a/README.md
++++ b/README.md
+@@ -262,6 +262,12 @@ The primary workstation is **Python / PySide6** with a Qt-only workstation. The
+ 
+ Automated tests operate on fixtures and synthetic images. They do **not** prove real Windows USB device locking, power-loss recovery, hardware remapping, SSD controller outcomes, or bootability. Report problems with anonymized logs and exact versions; do not publish full disk images, serial numbers or private recovered content.
+ 
++### Testing and compact source packaging
++
++Run the offline Python regression suite with `PYTHONPATH=desktop python -m pytest -q desktop/tests` (or `cd desktop && python -m unittest discover -s tests`). These tests use simulated data and cannot certify raw-device repair or bootable recovery media. The core Rust source must be checked separately with a compatible Rust toolchain; GUI workflows need a native PySide6/Windows test.
++
++To produce a clean source ZIP without recursively bundling compiled Rust outputs, Python caches, or historical release ZIPs, use `python scripts/create_clean_source_archive.py --output /path/outside/repo/DriveRepair-Source.zip`. This operation does not delete your checkout, and the output is not a signed or hardware-qualified binary release. See [code audit notes](docs/CODE_AUDIT_B28.md) for tested paths and remaining verification gaps.
++
+ For release changes see [CHANGELOG.md](CHANGELOG.md). Older technical release discussions are preserved in [the README engineering-history archive](docs/README_ENGINEERING_HISTORY.md), not mixed into this getting-started guide.
+ 
+ **Support development:** [GitHub Sponsors — CommsTech](https://github.com/sponsors/CommsTech). Optional sponsorship does not grant access to recovered data or bypass any safety checks.
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index 0e6ae3b..ef7c7c0 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b27"
++__version__ = "0.3.3b28"
+diff --git a/desktop/driverepair_desktop/progress_events.py b/desktop/driverepair_desktop/progress_events.py
+index 336212d..b47dc92 100644
+--- a/desktop/driverepair_desktop/progress_events.py
++++ b/desktop/driverepair_desktop/progress_events.py
+@@ -27,19 +27,41 @@ class ProgressEmitter:
+         # falsely shows 15% coverage after a full 100% sequential read.
+         self._read_spans: list[list] = []
+         self._read_phase: str | None = None
++        self._last_scan_event: dict | None = None
++
++    def _write(self, event: dict, spans: list[list]) -> bool:
++        payload = {"type": "progress", "ts": round(time.time(), 3), **event}
++        if spans:
++            payload['observed_read_spans'] = spans
++        try:
++            self.stream.write(json.dumps(payload, separators=(",", ":")) + "\n")
++            self.stream.flush()
++        except Exception:
++            # Presentation must never abort recovery. Unsent observations
++            # remain queued and can be retried by the next event.
++            return False
++        return True
+ 
+     def emit(self, event: dict, *, force: bool = False) -> None:
+         if not self.enabled:
+             return
+         now = time.monotonic()
+         phase = str(event.get('phase') or '')
+-        if phase != self._read_phase:
+-            # A phase transition must not associate old read spans with a
+-            # different operation (e.g. completed scan -> writing). A final
+-            # forced SCANNING event flushes all buffered evidence.
+-            self._read_spans.clear()
++        previous_phase = self._read_phase
++        if phase != previous_phase and self._read_spans:
++            # Scan->repair/status transitions must not discard pending samples
++            # or mislabel them as writes. Emit under their original phase.
++            if not self._write(self._last_scan_event or {'phase': 'SCANNING'},
++                               self._read_spans):
++                return
++            self._read_spans = []
++            self._last = now
++        if phase != previous_phase:
+             self._read_phase = phase
++            if phase != 'SCANNING':
++                self._last_scan_event = None
+         if phase == 'SCANNING':
++            self._last_scan_event = dict(event)
+             offset, length = event.get('offset'), event.get('read_length')
+             if type(offset) is int and type(length) is int and offset >= 0 and length > 0:
+                 failed = bool(event.get('failed'))
+@@ -49,16 +71,11 @@ class ProgressEmitter:
+                     prior[1] += length
+                 else:
+                     self._read_spans.append([offset, length, failed, slow])
+-        if not force and now - self._last < self.min_interval_s and len(self._read_spans) < 512:
++        # Final status cannot be hidden by the normal high-rate event throttle.
++        leaving_scan = previous_phase == 'SCANNING' and phase != 'SCANNING'
++        if (not force and not leaving_scan and
++                now - self._last < self.min_interval_s and len(self._read_spans) < 512):
+             return
+-        self._last = now
+-        payload = {"type": "progress", "ts": round(time.time(), 3), **event}
+-        if self._read_spans:
+-            payload['observed_read_spans'] = self._read_spans
++        if self._write(event, self._read_spans):
+             self._read_spans = []
+-        try:
+-            self.stream.write(json.dumps(payload, separators=(",", ":")) + "\n")
+-            self.stream.flush()
+-        except Exception:
+-            # Presentation must never abort recovery.
+-            pass
++            self._last = now
+diff --git a/desktop/driverepair_desktop/scan_checkpoint.py b/desktop/driverepair_desktop/scan_checkpoint.py
+index cb48597..2d017e9 100644
+--- a/desktop/driverepair_desktop/scan_checkpoint.py
++++ b/desktop/driverepair_desktop/scan_checkpoint.py
+@@ -71,7 +71,6 @@ class ScanCheckpoint:
+         now = time.monotonic()
+         if not force and now - self._last < self.minimum_interval:
+             return
+-        self._last = now
+         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+         if self.path.is_symlink() or (self.path.exists() and not stat.S_ISREG(self.path.stat().st_mode)):
+             raise ValueError('Unsafe checkpoint destination')
+@@ -101,5 +100,9 @@ class ScanCheckpoint:
+                     os.fsync(directory_fd)
+                 finally:
+                     os.close(directory_fd)
++            # Throttle only after the replacement and durability checks work.
++            # A failed checkpoint must be retried on the next scan opportunity,
++            # not suppressed for minimum_interval seconds.
++            self._last = now
+         finally:
+             tmp.unlink(missing_ok=True)
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index bed64c6..e76cfa3 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b27"
++version = "0.3.3b28"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_audit_evidence_durability.py b/desktop/tests/test_audit_evidence_durability.py
+new file mode 100644
+index 0000000..fce3333
+--- /dev/null
++++ b/desktop/tests/test_audit_evidence_durability.py
+@@ -0,0 +1,71 @@
++"""Regression tests for telemetry and checkpoint durability during failures."""
++from __future__ import annotations
++
++import io
++import json
++import tempfile
++from pathlib import Path
++from unittest import mock
++
++import pytest
++
++from driverepair_desktop.progress_events import ProgressEmitter
++from driverepair_desktop.scan_checkpoint import ScanCheckpoint, load
++
++
++def _events(stream):
++    return [json.loads(line) for line in stream.getvalue().splitlines()]
++
++
++def test_phase_change_flushes_read_evidence_before_completion():
++    stream = io.StringIO()
++    emitter = ProgressEmitter(True, stream=stream, min_interval_s=1000)
++    with mock.patch('driverepair_desktop.progress_events.time.monotonic', return_value=1000):
++        for index in range(3):
++            emitter.emit({'phase':'SCANNING', 'offset': index * 512,
++                          'read_length':512, 'failed': index == 1})
++        emitter.emit({'phase':'DONE', 'status':'completed_with_read_errors'})
++    events = _events(stream)
++    assert events[-1]['phase'] == 'DONE'
++    assert events[-1]['status'] == 'completed_with_read_errors'
++    # Flushed reads keep the original scan phase and include every observation.
++    scan_events = [event for event in events if event['phase'] == 'SCANNING']
++    spans = [item for event in scan_events for item in event.get('observed_read_spans', [])]
++    assert spans == [[0,512,False,False],[512,512,True,False],[1024,512,False,False]]
++    assert 'observed_read_spans' not in events[-1]
++
++
++def test_transient_sink_failure_does_not_discard_unsent_observations():
++    class Sink(io.StringIO):
++        attempts = 0
++        def write(self, value):
++            self.attempts += 1
++            if self.attempts == 1:
++                raise OSError('temporary broken pipe')
++            return super().write(value)
++    stream = Sink()
++    emitter = ProgressEmitter(True, stream=stream, min_interval_s=1000)
++    with mock.patch('driverepair_desktop.progress_events.time.monotonic', return_value=1000):
++        emitter.emit({'phase':'SCANNING','offset':0,'read_length':512}, force=True)
++        emitter.emit({'phase':'SCANNING','offset':512,'read_length':512}, force=True)
++    assert stream.attempts == 2
++    assert _events(stream)[0]['observed_read_spans'] == [[0,1024,False,False]]
++
++
++def test_failed_checkpoint_is_retried_even_inside_throttle_interval():
++    with tempfile.TemporaryDirectory() as directory:
++        path = Path(directory)/'scan.json'
++        check = ScanCheckpoint(path, source_token='source-test', size=4096,
++                               sector=512, minimum_interval=600)
++        state = {'position':1024, 'checked':1024, 'readable':1024,
++                 'read_count':2, 'failures':0}
++        with mock.patch('driverepair_desktop.scan_checkpoint.time.monotonic',
++                        return_value=1000):
++            with mock.patch('driverepair_desktop.scan_checkpoint.os.replace',
++                            side_effect=OSError('simulated storage outage')):
++                with pytest.raises(OSError, match='simulated'):
++                    check.save(state)
++            assert not path.exists()
++            check.save(state)  # same clock value -- failed saves must never throttle
++        assert load(path,source_token='source-test',size=4096,sector=512)['position']==1024
++        assert not list(Path(directory).glob('*.pending-*'))
+diff --git a/desktop/tests/test_clean_source_archive.py b/desktop/tests/test_clean_source_archive.py
+new file mode 100644
+index 0000000..abad66c
+--- /dev/null
++++ b/desktop/tests/test_clean_source_archive.py
+@@ -0,0 +1,46 @@
++"""Keep release-source bundles small without dropping executable source assets."""
++from __future__ import annotations
++
++import importlib.util
++from pathlib import Path
++import tempfile
++import zipfile
++
++import pytest
++
++
++REPO = Path(__file__).resolve().parents[2]
++TOOL = REPO / 'scripts' / 'create_clean_source_archive.py'
++
++
++def _loader():
++    spec = importlib.util.spec_from_file_location('clean_source_archive', TOOL)
++    assert spec and spec.loader
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
++
++
++def test_clean_source_archive_includes_essential_runtime_sources():
++    tool = _loader()
++    with tempfile.TemporaryDirectory() as folder:
++        dest = Path(folder) / 'source.zip'
++        summary = tool.build_archive(REPO, dest)
++        assert summary['files'] > 200
++        with zipfile.ZipFile(dest) as z:
++            names = set(z.namelist())
++            assert {'driverepair/README.md', 'driverepair/Cargo.toml',
++                    'driverepair/desktop/driverepair_desktop/qtgui.py',
++                    'driverepair/desktop/driverepair_desktop/data/drive_models.json',
++                    'driverepair/scripts/build_live_iso.sh',
++                    'driverepair/desktop/tests/test_scanner.py'} <= names
++            assert not any('/target/' in n or '__pycache__' in n or n.endswith('.zip')
++                           for n in names)
++        with pytest.raises(FileExistsError):
++            tool.build_archive(REPO, dest)
++
++
++def test_refuse_to_package_inside_the_repo():
++    tool = _loader()
++    with pytest.raises(ValueError, match='outside the repository'):
++        tool.build_archive(REPO, REPO / 'would_recurse.zip')
+diff --git a/desktop/tests/test_triage.py b/desktop/tests/test_triage.py
+index 6d19537..3ff02a5 100644
+--- a/desktop/tests/test_triage.py
++++ b/desktop/tests/test_triage.py
+@@ -3,7 +3,7 @@ import unittest
+ from driverepair_desktop.scanner import scan_offsets, scan_reader
+ 
+ 
+-class TestReader:
++class SyntheticReader:
+     def __init__(self, count: int, bad: set[int] | None = None):
+         self.size = count
+         self.bad = bad or set()
+@@ -32,7 +32,7 @@ class TriageTests(unittest.TestCase):
+     def test_responds_to_fault_with_neighbor_check_bounded(self):
+         candidates = list(scan_offsets(512*1000, 512, 'triage', 50))
+         problem = candidates[24][0] // 512
+-        reader = TestReader(1000, {problem})
++        reader = SyntheticReader(1000, {problem})
+         result = scan_reader(reader, size=512*1000, sector=512, chunk=512,
+                              mode='triage', samples=50)
+         self.assertEqual(result['status'], 'completed_with_read_errors')
+@@ -43,7 +43,7 @@ class TriageTests(unittest.TestCase):
+         self.assertLess(result['surface_coverage_pct'], 100)
+ 
+     def test_clean_triage_is_not_a_full_scan(self):
+-        reader = TestReader(1000)
++        reader = SyntheticReader(1000)
+         report = scan_reader(reader, size=512*1000, sector=512, chunk=512,
+                              mode='triage', samples=37)
+         self.assertEqual(report['status'], 'completed')
+diff --git a/docs/CODE_AUDIT_B28.md b/docs/CODE_AUDIT_B28.md
+new file mode 100644
+index 0000000..c1d478f
+--- /dev/null
++++ b/docs/CODE_AUDIT_B28.md
+@@ -0,0 +1,31 @@
++# DriveRepair b28 — Source Hygiene and Runtime Audit
++
++**Scope:** Source ZIP `DriveRepair-main(20261120-004204).zip`, supplied November 19, 2026. Read-only source analysis and synthetic fixture tests; no physical disks were accessed. This is an engineering audit, **not** a complete functionality or hardware qualification certificate.
++
++## Audit results and changes
++
++| Area | Evidence | Action / disposition |
++|---|---|---|
++| Python regression baseline | 557 passed, 11 skipped; 41 subtests; one collection warning | Preserve existing behaviour; extend tests |
++| Dropped scan observations | `ProgressEmitter` cleared buffered read spans on phase change | **Fixed**: flush under SCANNING before publishing another phase; retain unsent spans on transient sink errors |
++| Lost checkpoint retry opportunities | `ScanCheckpoint.save` set throttle timestamp before durable replace | **Fixed**: timestamp updates only after completed replacement/durability steps |
++| Unnecessary source distribution size | Original archive 121.34 MiB compressed; 158.60 MiB uncompressed generated Rust `target/` files; 71.71 MiB historical nested release archives | New clean-source packager excludes only generated binaries/archives/caches, preserving Rust/Python/Qt/boot recipes/tests/catalogs/docs |
++| Misclassified “dead” code risk | Console modules are called by CLI; Qt callbacks and recovery modes are accessed dynamically | **Retained** until usage proves removal safe. Do not infer dead code from a grep result |
++| Pytest warning | A fixture named `TestReader` was mistakenly considered a test class | Renamed helper to `SyntheticReader` |
++
++## Coverage evidence
++
++The baseline synthetic run measured **58% overall Python statement coverage** in Linux/Python 3.13, which is **not** a measure of production readiness. Important gaps: native Qt module ~2% (PySide6 unavailable), Windows-native storage IOCTL ~46%, USB flashing ~57%, Windows ISO builder ~43%, exFAT parser ~14%, and CLI ~67%. A few modules have far higher fixture coverage. These unexecuted or skipped branches are **not automatically dead code**.
++
++A randomized interval-union stress check validated 105,000 `CoverageCell` insertions against an independent byte-set reference. This is an algorithmic sanity check, not a hardware read benchmark. The modified progress path processed 100,000 synthetic events in approximately 0.07 seconds in this environment; timing is machine-specific.
++
++## Release gates still unresolved
++
++- Actual repair outcome on a sacrificial HDD: pre/post independent reads, source-data identity, journal rollback, controller remap/SMART changes (where available)
++- USB disconnections, locked Windows kernel I/O, refusal of exclusive access, UASP/SAT bridge diversity
++- Native Windows/PySide6 GUI interaction, navigation, keyboard, high-DPI and async progress
++- Rust compilation and tests (Rust toolchain unavailable in this execution environment)
++- Debian live ISO BIOS/UEFI hardware boot, USB writer verification, interruption recovery
++- Incomplete filesystem extraction/repair coverage and file carving performance/accuracy
++
++**Do not disable the write gates or claim 100% drive repair.** Stable recovery performance must be measured on real hardware with known-good data. Keep selected source, journal, destination and logs separate; use disposable drives for any physical-write tests.
+diff --git a/scripts/create_clean_source_archive.py b/scripts/create_clean_source_archive.py
+new file mode 100644
+index 0000000..5ad17da
+--- /dev/null
++++ b/scripts/create_clean_source_archive.py
+@@ -0,0 +1,82 @@
++#!/usr/bin/env python3
++"""Create a compact, reproducible DriveRepair *source* ZIP (not a binary release).
++
++Source packages include Python/Rust source, tests, model data, boot recipes and
++text documentation. They exclude Rust build caches, Python caches and nested
++historical release binaries that otherwise dwarf the actual repository.
++
++This does not delete checkout files and must not be used as a signed release
++artifact without separate provenance/signature and hardware qualification.
++"""
++from __future__ import annotations
++
++import argparse
++from pathlib import Path
++import zipfile
++
++EXCLUDED_DIRECTORIES = frozenset({
++    '.git', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache',
++    '.tox', '.venv', 'venv', 'target', 'dist', 'build', '.agent-temp',
++})
++EXCLUDED_EXTENSIONS = frozenset({
++    '.zip', '.pyz', '.whl', '.iso', '.img', '.exe', '.dll', '.so', '.dylib',
++    '.rlib', '.rmeta', '.o', '.a', '.pdb', '.pyc', '.pyo', '.efi', '.log',
++})
++EXCLUDED_FILENAMES = frozenset({'.coverage', 'coverage.xml', 'Thumbs.db', '.DS_Store'})
++
++
++def source_members(root: Path):
++    for path in sorted(root.rglob('*')):
++        if not path.is_file() or path.is_symlink():
++            continue
++        relative = path.relative_to(root)
++        if (any(part in EXCLUDED_DIRECTORIES for part in relative.parts[:-1])
++                or path.suffix.casefold() in EXCLUDED_EXTENSIONS
++                or path.name in EXCLUDED_FILENAMES):
++            continue
++        yield path, relative
++
++
++def build_archive(root: Path, output: Path) -> dict:
++    root = root.resolve()
++    output = output.resolve()
++    if not (root / 'Cargo.toml').is_file() or not (root / 'desktop' / 'pyproject.toml').is_file():
++        raise ValueError('Expected DriveRepair repository root with Cargo.toml and desktop/pyproject.toml')
++    if output.is_relative_to(root):
++        raise ValueError('Write source archives outside the repository to avoid recursive packaging')
++    if output.exists() or output.is_symlink():
++        raise FileExistsError('Source archive already exists; refusing overwrite')
++    output.parent.mkdir(parents=True, exist_ok=True)
++    count = 0
++    total = 0
++    try:
++        with zipfile.ZipFile(output, 'x', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
++            for file_path, relative in source_members(root):
++                # Deliberately stable metadata for reproducible source reviews.
++                info = zipfile.ZipInfo('driverepair/' + relative.as_posix(),
++                                       date_time=(1980, 1, 1, 0, 0, 0))
++                info.compress_type = zipfile.ZIP_DEFLATED
++                info.external_attr = ((0o755 if file_path.stat().st_mode & 0o111 else 0o644) << 16)
++                data = file_path.read_bytes()
++                archive.writestr(info, data, compress_type=zipfile.ZIP_DEFLATED,
++                                 compresslevel=9)
++                count += 1
++                total += len(data)
++    except BaseException:
++        output.unlink(missing_ok=True)
++        raise
++    return {'files': count, 'source_bytes': total, 'archive_bytes': output.stat().st_size}
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1])
++    parser.add_argument('--output', type=Path, required=True)
++    args = parser.parse_args()
++    info = build_archive(args.root, args.output)
++    print(f"Packaged {info['files']} source files; "
++          f"{info['source_bytes']:,} -> {info['archive_bytes']:,} bytes")
++
++
++if __name__ == '__main__':
++    main()

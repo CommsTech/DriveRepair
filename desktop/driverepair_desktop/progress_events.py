@@ -27,19 +27,41 @@ class ProgressEmitter:
         # falsely shows 15% coverage after a full 100% sequential read.
         self._read_spans: list[list] = []
         self._read_phase: str | None = None
+        self._last_scan_event: dict | None = None
+
+    def _write(self, event: dict, spans: list[list]) -> bool:
+        payload = {"type": "progress", "ts": round(time.time(), 3), **event}
+        if spans:
+            payload['observed_read_spans'] = spans
+        try:
+            self.stream.write(json.dumps(payload, separators=(",", ":")) + "\n")
+            self.stream.flush()
+        except Exception:
+            # Presentation must never abort recovery. Unsent observations
+            # remain queued and can be retried by the next event.
+            return False
+        return True
 
     def emit(self, event: dict, *, force: bool = False) -> None:
         if not self.enabled:
             return
         now = time.monotonic()
         phase = str(event.get('phase') or '')
-        if phase != self._read_phase:
-            # A phase transition must not associate old read spans with a
-            # different operation (e.g. completed scan -> writing). A final
-            # forced SCANNING event flushes all buffered evidence.
-            self._read_spans.clear()
+        previous_phase = self._read_phase
+        if phase != previous_phase and self._read_spans:
+            # Scan->repair/status transitions must not discard pending samples
+            # or mislabel them as writes. Emit under their original phase.
+            if not self._write(self._last_scan_event or {'phase': 'SCANNING'},
+                               self._read_spans):
+                return
+            self._read_spans = []
+            self._last = now
+        if phase != previous_phase:
             self._read_phase = phase
+            if phase != 'SCANNING':
+                self._last_scan_event = None
         if phase == 'SCANNING':
+            self._last_scan_event = dict(event)
             offset, length = event.get('offset'), event.get('read_length')
             if type(offset) is int and type(length) is int and offset >= 0 and length > 0:
                 failed = bool(event.get('failed'))
@@ -49,16 +71,11 @@ class ProgressEmitter:
                     prior[1] += length
                 else:
                     self._read_spans.append([offset, length, failed, slow])
-        if not force and now - self._last < self.min_interval_s and len(self._read_spans) < 512:
+        # Final status cannot be hidden by the normal high-rate event throttle.
+        leaving_scan = previous_phase == 'SCANNING' and phase != 'SCANNING'
+        if (not force and not leaving_scan and
+                now - self._last < self.min_interval_s and len(self._read_spans) < 512):
             return
-        self._last = now
-        payload = {"type": "progress", "ts": round(time.time(), 3), **event}
-        if self._read_spans:
-            payload['observed_read_spans'] = self._read_spans
+        if self._write(event, self._read_spans):
             self._read_spans = []
-        try:
-            self.stream.write(json.dumps(payload, separators=(",", ":")) + "\n")
-            self.stream.flush()
-        except Exception:
-            # Presentation must never abort recovery.
-            pass
+            self._last = now

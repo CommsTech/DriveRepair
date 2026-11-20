@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.3b28 — 2026-11-19: scan evidence durability and source hygiene audit
+
+- **Fixed buffered telemetry loss at scan phase boundaries.** If a producer transitions directly from scanning to a terminal or verification state, pending read spans are emitted under the original SCANNING phase before the terminal event; no covered region is silently discarded. A transient progress-stream failure no longer discards buffered spans or advances the throttle clock. Progress reporting remains best-effort and cannot guarantee delivery across persistent stream failures.
+- **Fixed checkpoint retry after a failed durable write.** The checkpoint throttle time is now committed only after the atomic replacement and durability checks complete. A failed replacement can be retried immediately, even within the nominal checkpoint interval.
+- Added focused fault-injection regression tests for failed checkpoint replacement, transient telemetry sink failure, and SCANNING→DONE phase transitions. Preserved independent disk-write authorization and device safety checks.
+- Added a deterministic, dependency-free clean-source ZIP packager (`scripts/create_clean_source_archive.py`) plus tests. Generated Rust target caches and historical nested release ZIPs had dominated the uploaded archive. No active application code or documentation is deleted from the source deliverable.
+- Removed a pytest discovery warning by renaming a test fixture; no application feature was removed as "dead code" without a demonstrated unused reference.
+- Verification is limited to this environment: Python synthetic suite and source-package checks. PySide6 native-Windows UI, Rust compilation, actual device-repair success, bootability, and hardware failure recovery are **NOT VERIFIED**.
+
 ## 0.3.3b27 — 2026-11-19: native read-only ATA IDENTIFY fallback (experimental)
 
 - Added a bounded, isolated Windows SAT ATA IDENTIFY DEVICE probe for compatible USB bridges when smartctl and Windows storage-property identification are inconclusive.
