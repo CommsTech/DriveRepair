@@ -15,6 +15,22 @@ except (OSError,ValueError) as exc:
 PY
 if command -v xorriso >/dev/null 2>&1; then
   xorriso -indev "$ISO" -report_el_torito plain 2>&1
+  # Inspect the ACTUAL ISO boot menu, not just the source template. Never
+  # certify a boot product whose menu was discarded by the build system.
+  MENU_DIR="$(mktemp -d)"
+  trap 'rm -rf -- "$MENU_DIR"' EXIT
+  if ! xorriso -osirrox on -indev "$ISO" -extract /boot/grub/grub.cfg "$MENU_DIR/grub.cfg" >/dev/null 2>&1; then
+    echo 'ERROR: built ISO has no readable DriveRepair GRUB menu' >&2; exit 3
+  fi
+  grep -Fq 'DriveRepair - Start recovery workstation' "$MENU_DIR/grub.cfg" || {
+    echo 'ERROR: built ISO boot menu is not customized for DriveRepair' >&2; exit 3;
+  }
+  grep -Fq 'DriveRepair - Compatibility graphics' "$MENU_DIR/grub.cfg" || {
+    echo 'ERROR: built ISO has no compatibility graphics boot entry' >&2; exit 3;
+  }
+  if grep -Eq '@(KERNEL_LIVE|INITRD_LIVE|LB_BOOTAPPEND_LIVE)@' "$MENU_DIR/grub.cfg"; then
+    echo 'ERROR: live-build did not resolve DriveRepair GRUB kernel placeholders' >&2; exit 3
+  fi
 fi
 echo 'Structure passed. REQUIRED: boot in a disposable BIOS VM and UEFI VM, then test on a sacrificial USB.'
 echo 'Without these boots, the ISO remains UNVERIFIED.'

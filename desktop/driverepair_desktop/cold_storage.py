@@ -151,6 +151,19 @@ def create_baseline(directory: str, output: str, *, progress: Callable | None = 
     root = _root(directory)
     outfile = _new_output(output, root)
     issues: list[dict] = []
+    # Enumerate filenames once before hashing so the desktop can display
+    # real per-file progress instead of an indefinite spinner. This does NOT
+    # read file contents or modify the archive. Files changing in between
+    # passes are still checked with fstat and make the baseline fail closed.
+    count_issues: list[dict] = []
+    planned_files = 0
+    for _rel, _path in _walk(root, issues=count_issues):
+        planned_files += 1
+        if planned_files > MAX_FILES:
+            raise ValueError('Archive contains too many files for this manifest format')
+    if count_issues:
+        raise RuntimeError(f'Baseline not written: archive enumeration had {len(count_issues)} errors. '
+                           f'First issue: {count_issues[0]["path"]} ({count_issues[0]["reason"]}).')
     entries = []
     size_total = 0
     for rel, path in _walk(root, issues=issues):
@@ -163,8 +176,10 @@ def create_baseline(directory: str, output: str, *, progress: Callable | None = 
             continue
         entries.append({'path': rel, 'size_bytes': size, 'sha256': digest})
         size_total += size
-        _notify(progress, len(entries), rel)
+        _notify(progress, len(entries), rel, planned_files)
     # Cannot stamp an incomplete archive as a verified baseline.
+    if len(entries) != planned_files:
+        issues.append({'path': str(root), 'reason': 'file_list_changed_during_baseline'})
     if issues:
         raise RuntimeError(f'Baseline not written: {len(issues)} files, links or folders could not be checked. '
                            f'First issue: {issues[0]["path"]} ({issues[0]["reason"]}).')

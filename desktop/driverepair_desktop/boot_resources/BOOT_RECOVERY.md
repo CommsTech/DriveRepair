@@ -18,11 +18,12 @@ Encryption: BitLocker, FileVault and LUKS require authorized credentials/keys; r
 `./scripts/build_live_iso.sh /build/output` targets Debian trixie on x86-64
 with GRUB-PC and GRUB-EFI via live-build. The package includes DriveRepair,
 Python/Tk, smartctl, GNU ddrescue, testdisk and network mount tools.
-The builder itself does NOT write to USB or patient media. The separate Qt
-**Flash bootable USB** workflow can write this ISO-hybrid onto a confirmed
-sacrificial USB and verify the written bytes. It DESTROYS the entire selected
-USB. It does not establish BIOS/UEFI bootability; this remains `UNVERIFIED`
-until real boot tests pass. The
+The builder itself never writes USB or patient media. The separate Qt
+**Flash bootable USB** workflow can copy a previously built ISO-hybrid to a
+specifically selected, sacrificial USB drive after typed erasure confirmation;
+all its partitions and files are destroyed. It verifies the ISO bytes by
+readback but cannot establish actual bootability. The ISO output is explicitly
+`UNVERIFIED` until BIOS and UEFI VM and hardware boot tests pass. The
 separately included bare-metal Rust boot code is NOT an established recovery OS.
 
 See `ONE_DRIVE_RECOVERY.md` for the guided live-mode internal disk imaging
@@ -35,7 +36,9 @@ workflow, explicit source identity, NAS/USB destination, resume, and limitations
 - Explicit no-automount, no-write environment, source/destination physical identity, USB disconnect handling.
 - On-device manual recovery journal, encrypted report export and clear recovery/repair separation.
 
-Do not make an untested ISO or USB writer available to beta users as a complete recovery product.
+The experimental flasher is available for operator-controlled sacrificial USB
+validation, not as a boot-certified recovery product. Never flash a patient disk.
+See `USB_FLASH_HARDWARE_QA_20261118.md` before distribution.
 
 ## RAM and CPU diagnostics in the live ISO
 
@@ -44,3 +47,18 @@ The new Debian live-build recipe explicitly requests a **Memtest86+** boot menu 
 Inside the Linux live desktop, **Hardware Diagnostics (CPU / RAM)** opens a guided terminal launcher. Optional two-minute CPU and bounded-memory tests use Debian `stress-ng`, with no patient disk I/O. They are not a substitute for Memtest86+, do not certify error-free hardware, and cannot repair faulty processors or RAM. `stressapptest` is packaged for specialists. Stop tests if temperature or stability deteriorates.
 
 These capabilities are only **configured in the build recipe** until a real ISO has been built and BIOS/UEFI boot and menu entries validated.
+
+## DriveRepair live menu and login (next build; unverified)
+
+A rebuilt ISO now provides a DriveRepair-specific GRUB menu for **normal graphical
+boot (first choice)**, **compatibility graphics (`nomodeset`)**, and a **text-only
+diagnostic console**. The XFCE live desktop is configured to autologin as
+`driverepair` and autostart the DriveRepair Qt workstation. If graphical
+autologin fails, the Debian Live fallback should be **username `driverepair`,
+password `live`**, pending real BIOS/UEFI login testing. The built image includes
+`/usr/share/driverepair/START_HERE.txt`; the recipe has no OS installer option.
+
+The ISO remains **UNVERIFIED** until real VM and physical-USB tests prove the
+bootloader, display, keyboard, desktop session, DriveRepair launch, and read-only
+device enumeration. Secure Boot is **not validated**. A GUI boot test on an HP
+laptop must record the failing stage before declaring compatibility.

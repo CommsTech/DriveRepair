@@ -47,3 +47,18 @@ The new Debian live-build recipe explicitly requests a **Memtest86+** boot menu 
 Inside the Linux live desktop, **Hardware Diagnostics (CPU / RAM)** opens a guided terminal launcher. Optional two-minute CPU and bounded-memory tests use Debian `stress-ng`, with no patient disk I/O. They are not a substitute for Memtest86+, do not certify error-free hardware, and cannot repair faulty processors or RAM. `stressapptest` is packaged for specialists. Stop tests if temperature or stability deteriorates.
 
 These capabilities are only **configured in the build recipe** until a real ISO has been built and BIOS/UEFI boot and menu entries validated.
+
+## DriveRepair live menu and login (next build; unverified)
+
+A rebuilt ISO now provides a DriveRepair-specific GRUB menu for **normal graphical
+boot (first choice)**, **compatibility graphics (`nomodeset`)**, and a **text-only
+diagnostic console**. The XFCE live desktop is configured to autologin as
+`driverepair` and autostart the DriveRepair Qt workstation. If graphical
+autologin fails, the Debian Live fallback should be **username `driverepair`,
+password `live`**, pending real BIOS/UEFI login testing. The built image includes
+`/usr/share/driverepair/START_HERE.txt`; the recipe has no OS installer option.
+
+The ISO remains **UNVERIFIED** until real VM and physical-USB tests prove the
+bootloader, display, keyboard, desktop session, DriveRepair launch, and read-only
+device enumeration. Secure Boot is **not validated**. A GUI boot test on an HP
+laptop must record the failing stage before declaring compatibility.

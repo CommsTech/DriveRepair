@@ -32,11 +32,16 @@ cd "$WORK"
 lb config --mode debian --distribution trixie --architecture amd64 \
   --binary-images iso-hybrid --bootloaders 'grub-pc grub-efi' \
   --memtest memtest86+ \
+  --bootappend-live 'boot=live components live-config.username=driverepair hostname=driverepair quiet' \
   --archive-areas 'main non-free-firmware' --apt-recommends false
 mkdir -p config/package-lists \
   config/includes.chroot/opt/driverepair/desktop \
   config/includes.chroot/usr/local/bin \
   config/includes.chroot/usr/share/applications \
+  config/includes.chroot/etc/xdg/autostart \
+  config/includes.chroot/etc/lightdm/lightdm.conf.d \
+  config/includes.chroot/usr/share/driverepair \
+  config/bootloaders/grub-pc \
   config/includes.chroot/etc/systemd/system
 cat > config/package-lists/driverepair.list.chroot <<'EOF'
 python3
@@ -100,6 +105,27 @@ Terminal=false
 Icon=drive-harddisk
 Categories=System;Utility;
 EOF
+# Use the SAME GRUB configuration for PC BIOS and EFI; dynamic kernel paths
+# are substituted by live-build at binary stage. Never ship a Debian-only menu.
+cp -- "$REPO/scripts/driverepair-grub.cfg" config/bootloaders/grub-pc/grub.cfg
+cat > config/includes.chroot/etc/lightdm/lightdm.conf.d/50-driverepair-live.conf <<'EOF'
+[Seat:*]
+autologin-user=driverepair
+autologin-user-timeout=0
+user-session=xfce
+EOF
+cat > config/includes.chroot/etc/xdg/autostart/driverepair.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=DriveRepair Recovery Workstation
+Comment=Open DriveRepair when the live desktop appears
+Exec=/usr/local/bin/driverepair-gui
+Terminal=false
+OnlyShowIn=XFCE;
+X-GNOME-Autostart-enabled=true
+EOF
+cp -- "$REPO/docs/DRIVEREPAIR_LIVE_START_HERE.txt" \
+   config/includes.chroot/usr/share/driverepair/START_HERE.txt
 # A live rescue environment should NOT automatically mount patient media.
 # Manual mounting of separate network/USB destinations remains possible.
 ln -s /dev/null config/includes.chroot/etc/systemd/system/udisks2.service
