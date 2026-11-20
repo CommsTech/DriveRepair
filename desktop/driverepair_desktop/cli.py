@@ -33,6 +33,7 @@ from .fat32_undelete import undelete_fat32, list_deleted_fat32
 from .filesystem_repair import check_ext_image, repair_ext_image
 from .verification import verify_images
 from .integrity import build_manifest, audit_image, restore_image_from_reference
+from .cold_storage import create_baseline as archive_baseline, audit_archive, write_html_report
 from .media_refresh import (
     ImageReadWriter,
     JournalStore,
@@ -329,6 +330,15 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser('compare-benchmarks', help='Compare two recorded read benchmarks')
     cmd.add_argument('--before', required=True)
     cmd.add_argument('--after', required=True)
+    cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser('archive-baseline', help='READ-ONLY: baseline all regular files on a stored photo/archive drive using SHA-256')
+    cmd.add_argument('--folder', required=True, help='Existing archive folder/drive root; source files never changed')
+    cmd.add_argument('--output', required=True, help='NEW small manifest outside protected folder, ideally on another disk')
+    cmd.add_argument('--json', action='store_true')
+    cmd = sub.add_parser('archive-verify', help='READ-ONLY: compare files to an earlier saved cold-storage manifest')
+    cmd.add_argument('--folder', required=True, help='Same archive content folder as baseline (drive letter may change)')
+    cmd.add_argument('--manifest', required=True, help='Previously saved trusted-by-owner baseline JSON')
+    cmd.add_argument('--report-html', help='NEW offline DriveRepair HTML report outside archive folder')
     cmd.add_argument('--json', action='store_true')
     cmd = sub.add_parser('integrity-baseline', help='Create untrusted SHA-256 chunk baseline from a stable image; preserve independently')
     cmd.add_argument('--image', required=True)
@@ -1900,6 +1910,24 @@ def run(argv: list[str] | None = None) -> int:
         from .release_policy import block_public_physical_writes
         block_public_physical_writes(args.command,
                                      execute_optimization=bool(getattr(args, 'execute', False)))
+        if args.command in {'archive-baseline', 'archive-verify'}:
+            def progress(item):
+                # Machine progress on stderr, not mixed into stdout result JSON.
+                print('ARCHIVE_PROGRESS '+json.dumps(item,ensure_ascii=True),file=sys.stderr,flush=True)
+            if args.command == 'archive-baseline':
+                result = archive_baseline(args.folder,args.output,progress=progress)
+            else:
+                result = audit_archive(args.folder,args.manifest,progress=progress)
+                if args.report_html:
+                    result['report_html'] = write_html_report(result,args.report_html,args.folder)
+            if args.json:
+                print(json.dumps(result,indent=2))
+            else:
+                print(f"Cold storage: {result['status']} | "
+                      f"unchanged {result.get('files_unchanged',result.get('files_baselined',0))} | "
+                      f"changed {result.get('files_changed',0)} | missing {result.get('files_missing',0)} | "
+                      f"unreadable {result.get('files_unreadable_or_skipped',0)}")
+            return 0 if result['status'] in {'matches_baseline','new_files_found','baseline_created_unattested'} else 2
         if args.command in {'validate-image-capacity','validate-usb-capacity'}:
             from .capacity_validation import RegularImageWriter, validate_spots, restore_pending
             from .drive_report import save_report
