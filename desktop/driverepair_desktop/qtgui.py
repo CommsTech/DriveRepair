@@ -1065,9 +1065,9 @@ def launch():
             self.next_action.setTextFormat(Qt.PlainText)
             result_card.addWidget(self.next_action)
             report_row=QHBoxLayout()
-            self.rescue_instead=QPushButton('Rescue to image instead')
-            self.rescue_instead.setToolTip('Switch to read-only imaging of this selected drive; no source writes.')
-            self.rescue_instead.clicked.connect(lambda:self.select_goal('rescue'))
+            self.rescue_instead=QPushButton('Create recovery copy here…')
+            self.rescue_instead.setToolTip('Image this drive to healthy storage while remaining in Repair & Restore. No source writes.')
+            self.rescue_instead.clicked.connect(lambda:self.start_job(repair_copy=True))
             self.rescue_instead.setVisible(False)
             report_row.addWidget(self.rescue_instead)
             self.copy_summary_button=QPushButton('Copy operator summary')
@@ -1129,7 +1129,7 @@ def launch():
             dock_layout.addLayout(readiness,1)
             self.start=QPushButton('Start read-only diagnostics')
             self.start.setObjectName('primary')
-            self.start.clicked.connect(self.start_job)
+            self.start.clicked.connect(lambda: self.start_job())
             self.start.setMinimumWidth(205)
             dock_layout.addWidget(self.start)
             self.stop=QPushButton('Stop')
@@ -1307,7 +1307,7 @@ def launch():
             rescue=info.addButton('Rescue data',QMessageBox.ActionRole)
             info.exec()
             if info.clickedButton()==rescue:
-                self.select_goal('rescue')
+                self.start_job(repair_copy=True)
 
         def resolve_repair_next(self):
             if self.proc and self.proc.state()!=QProcess.NotRunning:
@@ -1323,7 +1323,7 @@ def launch():
             elif decision['action']=='setup':
                 self.enable_smart_tools()
             elif decision['action']=='rescue':
-                self.select_goal('rescue')
+                self.start_job(repair_copy=True)
             elif decision['action']=='select':
                 self.device_box.setFocus()
             else:
@@ -2736,11 +2736,12 @@ def launch():
                 return
             QMessageBox.information(self,'Drive details (read-only)',
                 drive_inspection_text(identified,report,error=err.strip()[:220])[:4000])
-        def start_job(self):
-            # The visible primary action in Repair & Restore is contextual.
-            # When physical repair is ineligible, route to actual read-only
-            # recovery/identification rather than launching a doomed writer.
-            if self.job_box.currentData() in {'carequick', 'carefull', 'careresume'}:
+        def start_job(self, *, repair_copy=False):
+            # Stay in Repair & Restore when the right operation is a new,
+            # read-only recovery copy. Do not jump to the Rescue workspace or
+            # change the user's operation selection; run the same rescue engine.
+            recovery_here = bool(repair_copy)
+            if not recovery_here and self.job_box.currentData() in {'carequick', 'carefull', 'careresume'}:
                 from .repair_routes import choose_repair_route
                 from .dependencies import smartctl_path
                 selected = self.selected()
@@ -2748,8 +2749,7 @@ def launch():
                     self._health_by_device.get((selected or {}).get('identity_hint')),
                     smartctl_available=bool(smartctl_path()))
                 if route.action == 'rescue':
-                    self.select_goal('rescue')
-                    return
+                    recovery_here = True
                 if route.action == 'probe':
                     self.probe_selected_media(force=True)
                     return
@@ -2763,7 +2763,7 @@ def launch():
             self._reconnect_timer.stop()
             if self.proc and self.proc.state()!=QProcess.NotRunning:
                 return
-            kind=self.job_box.currentData()
+            kind='rescue' if recovery_here else self.job_box.currentData()
             if PUBLIC_BETA_IMAGE_ONLY and kind in {'carefull', 'carequick', 'careresume'}:
                 QMessageBox.information(self, 'Public beta: image-first',
                     'In-place physical-drive writes are disabled in this build. '

@@ -38,9 +38,9 @@ def choose_repair_route(device: dict | None, snapshot: dict | None = None,
     flash = _flash_profile(device, snapshot)
     if flash:
         kind = flash.kind.upper()
-        return RepairRoute('rescue', f'Prepare {kind} recovery',
+        return RepairRoute('rescue', f'Restore {kind} data to image',
                            f'{kind} does not support HDD-style sector rewrites. '
-                           'Set up a recovery image on different healthy storage, then '
+                           'Create a recovery image on separate healthy storage right here, then '
                            'recover files or repair a supported filesystem on a NEW copy.')
     if decision['action'] == 'probe':
         return RepairRoute('probe', 'Identify disk (read-only)',

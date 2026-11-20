@@ -39,3 +39,11 @@ workflow, explicit source identity, NAS/USB destination, resume, and limitations
 The experimental flasher is available for operator-controlled sacrificial USB
 validation, not as a boot-certified recovery product. Never flash a patient disk.
 See `USB_FLASH_HARDWARE_QA_20261118.md` before distribution.
+
+## RAM and CPU diagnostics in the live ISO
+
+The new Debian live-build recipe explicitly requests a **Memtest86+** boot menu entry (BIOS/UEFI support must be tested on actual firmware). This independent memory test runs before Linux and is the preferred option for comprehensive RAM checks.
+
+Inside the Linux live desktop, **Hardware Diagnostics (CPU / RAM)** opens a guided terminal launcher. Optional two-minute CPU and bounded-memory tests use Debian `stress-ng`, with no patient disk I/O. They are not a substitute for Memtest86+, do not certify error-free hardware, and cannot repair faulty processors or RAM. `stressapptest` is packaged for specialists. Stop tests if temperature or stability deteriorates.
+
+These capabilities are only **configured in the build recipe** until a real ISO has been built and BIOS/UEFI boot and menu entries validated.

@@ -1,0 +1,577 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -703,3 +703,9 @@
+ - Private, identity-bound full-scan checkpoints permit explicit read-only resumption after unplug/reconnect; 433/no-device classified as access failure.
+ - RAM-only guided writes keep their no-file default; scan checkpoint is a separate explicit opt-in.
+ - This does **not** add raw firmware vendor commands, AI-invented evidence, or automatic physical-write resumption.
++
++## 0.3.3b29 (2026-11-20) — Repair workflow and live hardware diagnostics
++- Image-first restoration can start **inside Repair & Restore**, without silently switching workspaces.
++- Live ISO build adds an explicit Memtest86+ boot option, stress-ng and stressapptest, plus a bounded CPU/RAM diagnostics desktop launcher. Actual ISO build/boot remains unverified.
++- Read-only Linux sysfs fallback reports disk/bridge geometry and rotational hints when SMART is unavailable; it cannot authorize in-place repair.
++- Unknown/SSD media remains ineligible for generic HDD sector rewrites; journal/identity/locking controls unchanged.
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,7 @@
+ 
+ **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
+ 
+-> **Release status:** `0.3.3b27` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
++> **Release status:** `0.3.3b29` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+ 
+ **Drive models:** The bundled [offline model catalog](docs/DRIVE_MODEL_CATALOG.md) currently documents four vendor-backed model entries (three Seagate SMR models and one SanDisk SSD family). It guides scanning; it is not a comprehensive database or authorization to rewrite a disk.
+ 
+@@ -14,8 +14,8 @@
+ 
+ The Qt **Repair & restore** workspace uses the chosen disk's actual evidence to
+ pick the next step. A detected SSD, NVMe, or flash drive is **not** offered
+-magnetic HDD sector rewrites; its primary action goes to creating a recovery
+-image on another healthy disk. After imaging, choose **Repair a recovered
++magnetic HDD sector rewrites; the primary action creates a new recovery
++image on another healthy disk **within Repair & Restore**. After imaging, choose **Repair a recovered
+ filesystem copy…** for supported ext2/3/4 *volume* images (requires `e2fsck`
+ on a supported host). NTFS, exFAT, and other filesystems are not claimed as
+ supported by that particular repair tool. Data rescue and filesystem repair
+@@ -281,3 +281,9 @@
+ Build on Debian using `sudo bash scripts/build_live_iso.sh /path/to/empty-dir` and inspect with `bash scripts/check_live_iso.sh /path/to/DriveRepair-Live-amd64-UNVERIFIED.iso`. Boot-test that ISO in both BIOS and UEFI virtual machines, then on sacrificial USB media before claiming it works. A byte-for-byte USB readback proves copying, **not firmware boot**. On Windows, an ISO-hybrid USB can appear empty or lack a drive letter while still containing a Linux filesystem; only structural inspection and an actual boot establish functionality.
+ 
+ The desktop interface is Qt-only (PySide6). Its Specialist Tools dialog exposes image scanning, filesystem analysis, recovery and clone-only ext repair without the removed Tk UI. Disk writes remain guarded by the CLI and require drive identity, access, journal and explicit risk authorization.
++
++### Offline CPU and RAM tests
++
++The optional Debian recovery ISO build now includes Memtest86+ as a separate firmware boot-menu choice and a **Hardware Diagnostics (CPU / RAM)** desktop launcher for short, consent-based Linux tests using stress-ng. These tests do not repair disks or memory, and the ISO still requires BIOS/UEFI boot qualification before release.
++
++**Repair & Restore** can start a read-only image of an SSD, flash device, or unqualified HDD without leaving the workspace. This saves recoverable data on **another healthy disk** and is not the same as restoring physical media reliability. When SMART is blocked, Linux sysfs can also provide limited, unverified identification hints; a USB adapter may supply misleading values.
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b28"
++__version__ = "0.3.3b29"
+diff --git a/desktop/driverepair_desktop/boot_media.py b/desktop/driverepair_desktop/boot_media.py
+--- a/desktop/driverepair_desktop/boot_media.py
++++ b/desktop/driverepair_desktop/boot_media.py
+@@ -52,6 +52,7 @@
+             if from_checkout:
+                 members = [root / 'scripts' / 'build_live_iso.sh',
+                     root / 'scripts' / 'check_live_iso.sh',
++                    root / 'scripts' / 'driverepair-hardware-diagnostics.sh',
+                     root / 'docs' / 'BOOT_RECOVERY.md', root / 'README.md']
+                 members.extend(sorted((root / 'desktop' / 'driverepair_desktop').glob('*.py')))
+                 members.extend(sorted((root / 'desktop' / 'driverepair_desktop' / 'filesystems').glob('*.py')))
+@@ -62,7 +63,7 @@
+                 # importlib.resources works with Python zipapps and installed
+                 # package trees; no temp extraction or network connection.
+                 pkg = resources.files('driverepair_desktop')
+-                for name in ('build_live_iso.sh','check_live_iso.sh','BOOT_RECOVERY.md','README.md'):
++                for name in ('build_live_iso.sh','check_live_iso.sh','driverepair-hardware-diagnostics.sh','BOOT_RECOVERY.md','README.md'):
+                     member = pkg.joinpath('boot_resources',name)
+                     if not member.is_file():
+                         raise ValueError('Boot-media assets missing from application package')
+diff --git a/desktop/driverepair_desktop/boot_resources/BOOT_RECOVERY.md b/desktop/driverepair_desktop/boot_resources/BOOT_RECOVERY.md
+--- a/desktop/driverepair_desktop/boot_resources/BOOT_RECOVERY.md
++++ b/desktop/driverepair_desktop/boot_resources/BOOT_RECOVERY.md
+@@ -36,3 +36,11 @@
+ - On-device manual recovery journal, encrypted report export and clear recovery/repair separation.
+ 
+ Do not make an untested ISO or USB writer available to beta users as a complete recovery product.
++
++## RAM and CPU diagnostics in the live ISO
++
++The new Debian live-build recipe explicitly requests a **Memtest86+** boot menu entry (BIOS/UEFI support must be tested on actual firmware). This independent memory test runs before Linux and is the preferred option for comprehensive RAM checks.
++
++Inside the Linux live desktop, **Hardware Diagnostics (CPU / RAM)** opens a guided terminal launcher. Optional two-minute CPU and bounded-memory tests use Debian `stress-ng`, with no patient disk I/O. They are not a substitute for Memtest86+, do not certify error-free hardware, and cannot repair faulty processors or RAM. `stressapptest` is packaged for specialists. Stop tests if temperature or stability deteriorates.
++
++These capabilities are only **configured in the build recipe** until a real ISO has been built and BIOS/UEFI boot and menu entries validated.
+diff --git a/desktop/driverepair_desktop/boot_resources/build_live_iso.sh b/desktop/driverepair_desktop/boot_resources/build_live_iso.sh
+--- a/desktop/driverepair_desktop/boot_resources/build_live_iso.sh
++++ b/desktop/driverepair_desktop/boot_resources/build_live_iso.sh
+@@ -31,6 +31,7 @@
+ # subsequently be boot-tested on both BIOS and UEFI before release).
+ lb config --mode debian --distribution trixie --architecture amd64 \
+   --binary-images iso-hybrid --bootloaders 'grub-pc grub-efi' \
++  --memtest memtest86+ \
+   --archive-areas 'main non-free-firmware' --apt-recommends false
+ mkdir -p config/package-lists \
+   config/includes.chroot/opt/driverepair/desktop \
+@@ -43,6 +44,9 @@
+ python3-pyside6.qtgui
+ python3-pyside6.qtwidgets
+ smartmontools
++memtest86+
++stress-ng
++stressapptest
+ gddrescue
+ testdisk
+ e2fsprogs
+@@ -71,6 +75,21 @@
+ exec /usr/local/bin/driverepair gui "$@"
+ EOF
+ chmod 0755 config/includes.chroot/usr/local/bin/driverepair-gui
++# Memory test is a dedicated boot-menu choice; Linux-session diagnostics
++# are manual and bounded. These do not touch patient storage devices.
++cp -- "$REPO/scripts/driverepair-hardware-diagnostics.sh" \
++   config/includes.chroot/usr/local/bin/driverepair-hardware-diagnostics
++chmod 0755 config/includes.chroot/usr/local/bin/driverepair-hardware-diagnostics
++cat > config/includes.chroot/usr/share/applications/driverepair-hardware-diagnostics.desktop <<'EOF'
++[Desktop Entry]
++Type=Application
++Name=Hardware Diagnostics (CPU / RAM)
++Comment=Bounded CPU and memory checks; does not repair storage
++Exec=/usr/local/bin/driverepair-hardware-diagnostics
++Terminal=true
++Icon=utilities-system-monitor
++Categories=System;Utility;
++EOF
+ cat > config/includes.chroot/usr/share/applications/driverepair.desktop <<'EOF'
+ [Desktop Entry]
+ Type=Application
+diff --git a/desktop/driverepair_desktop/boot_resources/driverepair-hardware-diagnostics.sh b/desktop/driverepair_desktop/boot_resources/driverepair-hardware-diagnostics.sh
+new file mode 100644
+--- /dev/null
++++ b/desktop/driverepair_desktop/boot_resources/driverepair-hardware-diagnostics.sh
+@@ -0,0 +1,32 @@
++#!/usr/bin/env bash
++# DriveRepair live environment: voluntary non-disk CPU/RAM checks.
++# Memory test from the boot menu (Memtest86+) is more comprehensive.
++set -euo pipefail
++printf '%s\n' 'DriveRepair • CPU & memory diagnostics (LIVE ISO)' \
++  'These are diagnostics, NOT repairs. Stop if the computer overheats.' \
++  'No patient disks are read or modified by this script.' ''
++printf '\nHardware summary\n'
++command -v lscpu >/dev/null && lscpu | grep -E '^(Architecture|Model name|CPU\(s\)|Thread\(s\)|Core\(s\)):' || true
++command -v free >/dev/null && free -h || true
++printf '\n1) CPU verification (2 min, bounded workers)\n2) RAM stress (2 min, up to 20%% of RAM)\n3) Exit\n'
++read -r -p 'Select an optional test [1/2/3]: ' answer || exit 0
++case "$answer" in
++  1)
++    command -v stress-ng >/dev/null || { echo 'stress-ng missing'; exit 2; }
++    read -r -p 'This will load the CPU. Type RUN to proceed: ' confirm
++    [[ "$confirm" == RUN ]] || exit 0
++    cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
++    [[ "$cores" =~ ^[0-9]+$ ]] || cores=2
++    (( cores > 4 )) && cores=4
++    (( cores < 1 )) && cores=1
++    exec stress-ng --cpu "$cores" --verify --timeout 120s --metrics-brief
++    ;;
++  2)
++    command -v stress-ng >/dev/null || { echo 'stress-ng missing'; exit 2; }
++    read -r -p 'This tests some AVAILABLE memory, not all RAM. Type RUN to proceed: ' confirm
++    [[ "$confirm" == RUN ]] || exit 0
++    exec stress-ng --vm 1 --vm-bytes 20% --verify --timeout 120s --metrics-brief
++    ;;
++  3|'') exit 0 ;;
++  *) echo 'Unknown selection; no test started'; exit 2 ;;
++esac
+diff --git a/desktop/driverepair_desktop/health.py b/desktop/driverepair_desktop/health.py
+--- a/desktop/driverepair_desktop/health.py
++++ b/desktop/driverepair_desktop/health.py
+@@ -410,6 +410,15 @@
+                 native['status'] = coarse['status']
+                 native['windows_storage'] = coarse.get('windows_storage')
+             return native
++        # Linux live recovery has an additional, non-SMART observation source:
++        # sysfs. It may help choose a conservative rescue profile but must
++        # NEVER qualify any HDD for physical writes (native_hdd_corrob=False).
++        if sys.platform == 'linux' and device.id.startswith('linux:'):
++            from .linux_media import linux_sysfs_snapshot
++            observed = linux_sysfs_snapshot(device)
++            if observed:
++                observed['smart_unavailable_reason'] = str(exc)
++                return observed
+         coarse = windows_storage_health(device, run=run)
+         if coarse is not None:
+             coarse['smart_unavailable_reason'] = str(exc)
+diff --git a/desktop/driverepair_desktop/linux_media.py b/desktop/driverepair_desktop/linux_media.py
+new file mode 100644
+--- /dev/null
++++ b/desktop/driverepair_desktop/linux_media.py
+@@ -0,0 +1,67 @@
++"""Read-only Linux sysfs media evidence when SMART/SAT is unavailable.
++
++A USB bridge can synthesize rotational, discard and model properties. This
++report helps choose read-only rescue but NEVER authorizes HDD-style writes.
++Only known whole-disk paths already admitted by the device enumerator qualify.
++"""
++from __future__ import annotations
++
++from pathlib import Path
++import re
++import sys
++
++from .devices import Device
++
++
++def _read(path: Path) -> str | None:
++    try:
++        return path.read_text(encoding='utf-8').strip()[:128]
++    except (OSError, UnicodeError):
++        return None
++
++
++def linux_sysfs_snapshot(device: Device, *, root: Path = Path('/sys/class/block')) -> dict | None:
++    if sys.platform != 'linux' or not device.id.startswith('linux:'):
++        return None
++    if not device.id.endswith(device.path):
++        return None
++    name = Path(device.path).name
++    # No partitions, symlinks, arbitrary filenames, or /dev/mapper volumes.
++    if not (re.fullmatch(r'sd[a-z]+', name) or re.fullmatch(r'nvme[0-9]+n[0-9]+', name)
++            or re.fullmatch(r'mmcblk[0-9]+', name)):
++        return None
++    path = root / name
++    if not path.is_dir():
++        return None
++    blocks = _read(path / 'size')
++    logical = _read(path / 'queue' / 'logical_block_size')
++    rotational = _read(path / 'queue' / 'rotational')
++    discard = _read(path / 'queue' / 'discard_max_bytes')
++    try:
++        if (not blocks or not logical or int(logical) != device.sector_size
++                or int(blocks) * 512 != device.size_bytes):
++            return None
++        if rotational not in ('0', '1'):
++            return None
++        discard_bytes = int(discard) if discard and discard.isdecimal() else None
++    except (ValueError, OverflowError):
++        return None
++    model = _read(path / 'device' / 'model')
++    # The kernel may describe only a bridge. Never interpret this as authority.
++    reported_medium = 'hdd' if rotational == '1' else 'ssd'
++    return {
++        'source': 'linux_sysfs_unverified', 'status': 'unknown',
++        'reported_medium': reported_medium,
++        'native_hdd_corrob': False,
++        'smart_status_passed': None, 'temperature_c': None,
++        'ata_selected_raw_attributes': [], 'nvme': {},
++        'device': device.public(),
++        'native_media_properties': {
++            'incurs_seek_penalty': rotational == '1',
++            'discard_max_bytes': discard_bytes,
++            'driver_reported_model': model,
++        },
++        'notes': ('Linux sysfs size and sector geometry match inventory. '
++                  'Rotational and discard flags are driver or bridge claims, '
++                  'not physical-media or health proof. No source writes permitted.'),
++    }
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+--- a/desktop/driverepair_desktop/qtgui.py
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -1065,9 +1065,9 @@
+             self.next_action.setTextFormat(Qt.PlainText)
+             result_card.addWidget(self.next_action)
+             report_row=QHBoxLayout()
+-            self.rescue_instead=QPushButton('Rescue to image instead')
+-            self.rescue_instead.setToolTip('Switch to read-only imaging of this selected drive; no source writes.')
+-            self.rescue_instead.clicked.connect(lambda:self.select_goal('rescue'))
++            self.rescue_instead=QPushButton('Create recovery copy here…')
++            self.rescue_instead.setToolTip('Image this drive to healthy storage while remaining in Repair & Restore. No source writes.')
++            self.rescue_instead.clicked.connect(lambda:self.start_job(repair_copy=True))
+             self.rescue_instead.setVisible(False)
+             report_row.addWidget(self.rescue_instead)
+             self.copy_summary_button=QPushButton('Copy operator summary')
+@@ -1129,7 +1129,7 @@
+             dock_layout.addLayout(readiness,1)
+             self.start=QPushButton('Start read-only diagnostics')
+             self.start.setObjectName('primary')
+-            self.start.clicked.connect(self.start_job)
++            self.start.clicked.connect(lambda: self.start_job())
+             self.start.setMinimumWidth(205)
+             dock_layout.addWidget(self.start)
+             self.stop=QPushButton('Stop')
+@@ -1307,7 +1307,7 @@
+             rescue=info.addButton('Rescue data',QMessageBox.ActionRole)
+             info.exec()
+             if info.clickedButton()==rescue:
+-                self.select_goal('rescue')
++                self.start_job(repair_copy=True)
+ 
+         def resolve_repair_next(self):
+             if self.proc and self.proc.state()!=QProcess.NotRunning:
+@@ -1323,7 +1323,7 @@
+             elif decision['action']=='setup':
+                 self.enable_smart_tools()
+             elif decision['action']=='rescue':
+-                self.select_goal('rescue')
++                self.start_job(repair_copy=True)
+             elif decision['action']=='select':
+                 self.device_box.setFocus()
+             else:
+@@ -2736,11 +2736,12 @@
+                 return
+             QMessageBox.information(self,'Drive details (read-only)',
+                 drive_inspection_text(identified,report,error=err.strip()[:220])[:4000])
+-        def start_job(self):
+-            # The visible primary action in Repair & Restore is contextual.
+-            # When physical repair is ineligible, route to actual read-only
+-            # recovery/identification rather than launching a doomed writer.
+-            if self.job_box.currentData() in {'carequick', 'carefull', 'careresume'}:
++        def start_job(self, *, repair_copy=False):
++            # Stay in Repair & Restore when the right operation is a new,
++            # read-only recovery copy. Do not jump to the Rescue workspace or
++            # change the user's operation selection; run the same rescue engine.
++            recovery_here = bool(repair_copy)
++            if not recovery_here and self.job_box.currentData() in {'carequick', 'carefull', 'careresume'}:
+                 from .repair_routes import choose_repair_route
+                 from .dependencies import smartctl_path
+                 selected = self.selected()
+@@ -2748,8 +2749,7 @@
+                     self._health_by_device.get((selected or {}).get('identity_hint')),
+                     smartctl_available=bool(smartctl_path()))
+                 if route.action == 'rescue':
+-                    self.select_goal('rescue')
+-                    return
++                    recovery_here = True
+                 if route.action == 'probe':
+                     self.probe_selected_media(force=True)
+                     return
+@@ -2763,7 +2763,7 @@
+             self._reconnect_timer.stop()
+             if self.proc and self.proc.state()!=QProcess.NotRunning:
+                 return
+-            kind=self.job_box.currentData()
++            kind='rescue' if recovery_here else self.job_box.currentData()
+             if PUBLIC_BETA_IMAGE_ONLY and kind in {'carefull', 'carequick', 'careresume'}:
+                 QMessageBox.information(self, 'Public beta: image-first',
+                     'In-place physical-drive writes are disabled in this build. '
+diff --git a/desktop/driverepair_desktop/repair_routes.py b/desktop/driverepair_desktop/repair_routes.py
+--- a/desktop/driverepair_desktop/repair_routes.py
++++ b/desktop/driverepair_desktop/repair_routes.py
+@@ -38,9 +38,9 @@
+     flash = _flash_profile(device, snapshot)
+     if flash:
+         kind = flash.kind.upper()
+-        return RepairRoute('rescue', f'Prepare {kind} recovery',
++        return RepairRoute('rescue', f'Restore {kind} data to image',
+                            f'{kind} does not support HDD-style sector rewrites. '
+-                           'Set up a recovery image on different healthy storage, then '
++                           'Create a recovery image on separate healthy storage right here, then '
+                            'recover files or repair a supported filesystem on a NEW copy.')
+     if decision['action'] == 'probe':
+         return RepairRoute('probe', 'Identify disk (read-only)',
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b28"
++version = "0.3.3b29"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+@@ -37,4 +37,4 @@
+ include = ["driverepair_desktop*"]
+ 
+ [tool.setuptools.package-data]
+-driverepair_desktop = ["data/*.json"]
++driverepair_desktop = ["data/*.json", "boot_resources/*"]
+diff --git a/desktop/tests/test_b29_recovery_and_hardware.py b/desktop/tests/test_b29_recovery_and_hardware.py
+new file mode 100644
+--- /dev/null
++++ b/desktop/tests/test_b29_recovery_and_hardware.py
+@@ -0,0 +1,104 @@
++"""No physical media touched: regression for b29 repair routing and ISO features."""
++from pathlib import Path
++import tempfile
++import unittest
++from unittest import mock
++import zipfile
++
++from driverepair_desktop.devices import Device
++from driverepair_desktop.linux_media import linux_sysfs_snapshot
++from driverepair_desktop.repair_routes import choose_repair_route
++from driverepair_desktop.repair_readiness import ui_repair_readiness
++from driverepair_desktop.boot_media import export_build_kit
++
++ROOT=Path(__file__).resolve().parents[2]
++
++
++class RepairViewTests(unittest.TestCase):
++    def test_ssd_restore_is_image_and_never_authorizes_hdd_write(self):
++        drive={'model':'SanDisk SDSSDH3 500G USB Device','bus':'usb',
++               'sector_size':512,'serial_suffix':'***0000','identity_hint':'abc'}
++        route=choose_repair_route(drive)
++        self.assertEqual(route.action,'rescue')
++        self.assertIn('image',route.button.lower())
++        self.assertFalse(route.patient_write_possible)
++        self.assertFalse(ui_repair_readiness(drive,'carequick')[0])
++
++    def test_qt_uses_common_rescue_engine_without_switching_workspaces(self):
++        src=(ROOT/'desktop/driverepair_desktop/qtgui.py').read_text()
++        start=src[src.index('        def start_job('):src.index('        def reveal_job_evidence(')]
++        self.assertIn("kind='rescue' if recovery_here",start)
++        self.assertIn('recovery_here = True',start)
++        self.assertIn("'rescue-external'",start)
++        self.assertNotIn("self.select_goal('rescue')",start)
++        self.assertIn("lambda:self.start_job(repair_copy=True)",src)
++
++
++class LinuxEvidenceTests(unittest.TestCase):
++    def make(self,td,*,disk='sdb',rotation='1',sectors='4096',size=2097152):
++        root=Path(td)/'block'
++        p=root/disk
++        (p/'queue').mkdir(parents=True)
++        (p/'device').mkdir()
++        (p/'size').write_text(sectors)
++        (p/'queue'/'logical_block_size').write_text('512')
++        (p/'queue'/'rotational').write_text(rotation)
++        (p/'queue'/'discard_max_bytes').write_text('0')
++        (p/'device'/'model').write_text('USB Bridge')
++        drive=Device('linux:/dev/'+disk,'/dev/'+disk,'ST1000LM048',size,512,'usb','serial')
++        return root,drive
++
++    def test_rotational_only_hint_not_write_authorization(self):
++        with tempfile.TemporaryDirectory() as td:
++            root,dev=self.make(td)
++            snap=linux_sysfs_snapshot(dev,root=root)
++            self.assertEqual(snap['reported_medium'],'hdd')
++            self.assertEqual(snap['status'],'unknown')
++            self.assertFalse(snap['native_hdd_corrob'])
++            self.assertIn('bridge',snap['notes'])
++            ok,_=ui_repair_readiness(dev.public(),'carequick',snap)
++            self.assertFalse(ok)
++
++    def test_reject_partition_and_geometry_mismatch(self):
++        with tempfile.TemporaryDirectory() as td:
++            root,dev=self.make(td)
++            bad=Device('linux:/dev/sdb1','/dev/sdb1',dev.model,dev.size_bytes,512,'usb','serial')
++            self.assertIsNone(linux_sysfs_snapshot(bad,root=root))
++            bad=Device(dev.id,dev.path,dev.model,dev.size_bytes+512,512,'usb','serial')
++            self.assertIsNone(linux_sysfs_snapshot(bad,root=root))
++
++    def test_no_smart_fallback_can_only_report_unknown_health(self):
++        from driverepair_desktop import health
++        with tempfile.TemporaryDirectory() as td:
++            root,dev=self.make(td,rotation='0')
++            with (mock.patch.object(health,'health_snapshot',side_effect=RuntimeError('SAT unavailable')),
++                  mock.patch('driverepair_desktop.linux_media.linux_sysfs_snapshot',
++                             return_value=linux_sysfs_snapshot(dev,root=root))):
++                snap=health.try_health_snapshot(dev)
++            self.assertEqual(snap['reported_medium'],'ssd')
++            self.assertEqual(snap['smart_unavailable_reason'],'SAT unavailable')
++            self.assertFalse(snap['native_hdd_corrob'])
++
++
++class LiveBuildTests(unittest.TestCase):
++    def test_live_scripts_include_ram_cpu_boot_diagnostics(self):
++        for rel in ('scripts/build_live_iso.sh','desktop/driverepair_desktop/boot_resources/build_live_iso.sh'):
++            text=(ROOT/rel).read_text()
++            for piece in ('--memtest memtest86+', 'stress-ng', 'stressapptest',
++                          'driverepair-hardware-diagnostics', 'Terminal=true'):
++                self.assertIn(piece,text)
++        s=(ROOT/'scripts/driverepair-hardware-diagnostics.sh').read_text()
++        self.assertNotIn('--hdd',s)
++        self.assertIn('--timeout 120s',s)
++
++    def test_standalone_kit_includes_hardware_diagnostic_script(self):
++        with tempfile.TemporaryDirectory() as td:
++            path=Path(td)/'build-kit.zip'
++            export_build_kit(None,path)
++            with zipfile.ZipFile(path) as z:
++                members=z.namelist()
++                self.assertIn('driverepair/scripts/driverepair-hardware-diagnostics.sh',members)
++                build=z.read('driverepair/scripts/build_live_iso.sh').decode()
++                self.assertIn('--memtest memtest86+',build)
++
++if __name__=='__main__':unittest.main()
+diff --git a/docs/BOOT_RECOVERY.md b/docs/BOOT_RECOVERY.md
+--- a/docs/BOOT_RECOVERY.md
++++ b/docs/BOOT_RECOVERY.md
+@@ -39,3 +39,11 @@
+ The experimental flasher is available for operator-controlled sacrificial USB
+ validation, not as a boot-certified recovery product. Never flash a patient disk.
+ See `USB_FLASH_HARDWARE_QA_20261118.md` before distribution.
++
++## RAM and CPU diagnostics in the live ISO
++
++The new Debian live-build recipe explicitly requests a **Memtest86+** boot menu entry (BIOS/UEFI support must be tested on actual firmware). This independent memory test runs before Linux and is the preferred option for comprehensive RAM checks.
++
++Inside the Linux live desktop, **Hardware Diagnostics (CPU / RAM)** opens a guided terminal launcher. Optional two-minute CPU and bounded-memory tests use Debian `stress-ng`, with no patient disk I/O. They are not a substitute for Memtest86+, do not certify error-free hardware, and cannot repair faulty processors or RAM. `stressapptest` is packaged for specialists. Stop tests if temperature or stability deteriorates.
++
++These capabilities are only **configured in the build recipe** until a real ISO has been built and BIOS/UEFI boot and menu entries validated.
+diff --git a/scripts/build_live_iso.sh b/scripts/build_live_iso.sh
+--- a/scripts/build_live_iso.sh
++++ b/scripts/build_live_iso.sh
+@@ -31,6 +31,7 @@
+ # subsequently be boot-tested on both BIOS and UEFI before release).
+ lb config --mode debian --distribution trixie --architecture amd64 \
+   --binary-images iso-hybrid --bootloaders 'grub-pc grub-efi' \
++  --memtest memtest86+ \
+   --archive-areas 'main non-free-firmware' --apt-recommends false
+ mkdir -p config/package-lists \
+   config/includes.chroot/opt/driverepair/desktop \
+@@ -43,6 +44,9 @@
+ python3-pyside6.qtgui
+ python3-pyside6.qtwidgets
+ smartmontools
++memtest86+
++stress-ng
++stressapptest
+ gddrescue
+ testdisk
+ e2fsprogs
+@@ -71,6 +75,21 @@
+ exec /usr/local/bin/driverepair gui "$@"
+ EOF
+ chmod 0755 config/includes.chroot/usr/local/bin/driverepair-gui
++# Memory test is a dedicated boot-menu choice; Linux-session diagnostics
++# are manual and bounded. These do not touch patient storage devices.
++cp -- "$REPO/scripts/driverepair-hardware-diagnostics.sh" \
++   config/includes.chroot/usr/local/bin/driverepair-hardware-diagnostics
++chmod 0755 config/includes.chroot/usr/local/bin/driverepair-hardware-diagnostics
++cat > config/includes.chroot/usr/share/applications/driverepair-hardware-diagnostics.desktop <<'EOF'
++[Desktop Entry]
++Type=Application
++Name=Hardware Diagnostics (CPU / RAM)
++Comment=Bounded CPU and memory checks; does not repair storage
++Exec=/usr/local/bin/driverepair-hardware-diagnostics
++Terminal=true
++Icon=utilities-system-monitor
++Categories=System;Utility;
++EOF
+ cat > config/includes.chroot/usr/share/applications/driverepair.desktop <<'EOF'
+ [Desktop Entry]
+ Type=Application
+diff --git a/scripts/driverepair-hardware-diagnostics.sh b/scripts/driverepair-hardware-diagnostics.sh
+new file mode 100644
+--- /dev/null
++++ b/scripts/driverepair-hardware-diagnostics.sh
+@@ -0,0 +1,32 @@
++#!/usr/bin/env bash
++# DriveRepair live environment: voluntary non-disk CPU/RAM checks.
++# Memory test from the boot menu (Memtest86+) is more comprehensive.
++set -euo pipefail
++printf '%s\n' 'DriveRepair • CPU & memory diagnostics (LIVE ISO)' \
++  'These are diagnostics, NOT repairs. Stop if the computer overheats.' \
++  'No patient disks are read or modified by this script.' ''
++printf '\nHardware summary\n'
++command -v lscpu >/dev/null && lscpu | grep -E '^(Architecture|Model name|CPU\(s\)|Thread\(s\)|Core\(s\)):' || true
++command -v free >/dev/null && free -h || true
++printf '\n1) CPU verification (2 min, bounded workers)\n2) RAM stress (2 min, up to 20%% of RAM)\n3) Exit\n'
++read -r -p 'Select an optional test [1/2/3]: ' answer || exit 0
++case "$answer" in
++  1)
++    command -v stress-ng >/dev/null || { echo 'stress-ng missing'; exit 2; }
++    read -r -p 'This will load the CPU. Type RUN to proceed: ' confirm
++    [[ "$confirm" == RUN ]] || exit 0
++    cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
++    [[ "$cores" =~ ^[0-9]+$ ]] || cores=2
++    (( cores > 4 )) && cores=4
++    (( cores < 1 )) && cores=1
++    exec stress-ng --cpu "$cores" --verify --timeout 120s --metrics-brief
++    ;;
++  2)
++    command -v stress-ng >/dev/null || { echo 'stress-ng missing'; exit 2; }
++    read -r -p 'This tests some AVAILABLE memory, not all RAM. Type RUN to proceed: ' confirm
++    [[ "$confirm" == RUN ]] || exit 0
++    exec stress-ng --vm 1 --vm-bytes 20% --verify --timeout 120s --metrics-brief
++    ;;
++  3|'') exit 0 ;;
++  *) echo 'Unknown selection; no test started'; exit 2 ;;
++esac

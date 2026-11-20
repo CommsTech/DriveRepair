@@ -1,0 +1,2 @@
+26c5d32704ae51fa41a1280b5e141faea89fad70efc98b068a44ce426f9a68bf  DriveRepair_0.3.3b29_Live_Diagnostics_Repair_Workspace.patch
+ee80523ce04073700aee691e94b5fb68770540d15061852d44309f7a4807034b  DriveRepair_0.3.3b29_Clean_Source.zip

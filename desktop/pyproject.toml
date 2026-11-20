@@ -1,6 +1,6 @@
 [project]
 name = "driverepair-desktop"
-version = "0.3.3b28"
+version = "0.3.3b29"
 description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,4 +37,4 @@ build-backend = "setuptools.build_meta"
 include = ["driverepair_desktop*"]
 
 [tool.setuptools.package-data]
-driverepair_desktop = ["data/*.json"]
+driverepair_desktop = ["data/*.json", "boot_resources/*"]

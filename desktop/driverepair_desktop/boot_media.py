@@ -52,6 +52,7 @@ def export_build_kit(repo: str | Path | None, output: str | Path) -> dict:
             if from_checkout:
                 members = [root / 'scripts' / 'build_live_iso.sh',
                     root / 'scripts' / 'check_live_iso.sh',
+                    root / 'scripts' / 'driverepair-hardware-diagnostics.sh',
                     root / 'docs' / 'BOOT_RECOVERY.md', root / 'README.md']
                 members.extend(sorted((root / 'desktop' / 'driverepair_desktop').glob('*.py')))
                 members.extend(sorted((root / 'desktop' / 'driverepair_desktop' / 'filesystems').glob('*.py')))
@@ -62,7 +63,7 @@ def export_build_kit(repo: str | Path | None, output: str | Path) -> dict:
                 # importlib.resources works with Python zipapps and installed
                 # package trees; no temp extraction or network connection.
                 pkg = resources.files('driverepair_desktop')
-                for name in ('build_live_iso.sh','check_live_iso.sh','BOOT_RECOVERY.md','README.md'):
+                for name in ('build_live_iso.sh','check_live_iso.sh','driverepair-hardware-diagnostics.sh','BOOT_RECOVERY.md','README.md'):
                     member = pkg.joinpath('boot_resources',name)
                     if not member.is_file():
                         raise ValueError('Boot-media assets missing from application package')
