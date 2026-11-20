@@ -410,6 +410,17 @@ def try_health_snapshot(device: Device,
                 native['status'] = coarse['status']
                 native['windows_storage'] = coarse.get('windows_storage')
             return native
+        # Linux live recovery has an additional, non-SMART observation source:
+        # sysfs. It may help choose a conservative rescue profile but must
+        # NEVER qualify any HDD for physical writes (native_hdd_corrob=False).
+        # Gate on device id (not host OS) so synthetic linux:* fixtures can
+        # exercise the path on developer Windows hosts.
+        if device.id.startswith('linux:'):
+            from .linux_media import linux_sysfs_snapshot
+            observed = linux_sysfs_snapshot(device)
+            if observed:
+                observed['smart_unavailable_reason'] = str(exc)
+                return observed
         coarse = windows_storage_health(device, run=run)
         if coarse is not None:
             coarse['smart_unavailable_reason'] = str(exc)

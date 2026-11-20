@@ -2,7 +2,7 @@
 
 **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
 
-> **Release status:** `0.3.3b27` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+> **Release status:** `0.3.3b29` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
 
 **Drive models:** The bundled [offline model catalog](docs/DRIVE_MODEL_CATALOG.md) currently documents four vendor-backed model entries (three Seagate SMR models and one SanDisk SSD family). It guides scanning; it is not a comprehensive database or authorization to rewrite a disk.
 
@@ -14,8 +14,8 @@ The Qt workstation now selects an **automatic, bounded HDD investigation level**
 
 The Qt **Repair & restore** workspace uses the chosen disk's actual evidence to
 pick the next step. A detected SSD, NVMe, or flash drive is **not** offered
-magnetic HDD sector rewrites; its primary action goes to creating a recovery
-image on another healthy disk. After imaging, choose **Repair a recovered
+magnetic HDD sector rewrites; the primary action creates a new recovery
+image on another healthy disk **within Repair & Restore**. After imaging, choose **Repair a recovered
 filesystem copy…** for supported ext2/3/4 *volume* images (requires `e2fsck`
 on a supported host). NTFS, exFAT, and other filesystems are not claimed as
 supported by that particular repair tool. Data rescue and filesystem repair
@@ -281,3 +281,9 @@ The Windows USB wizard is a **writer**, not an ISO operating-system builder. A s
 Build on Debian using `sudo bash scripts/build_live_iso.sh /path/to/empty-dir` and inspect with `bash scripts/check_live_iso.sh /path/to/DriveRepair-Live-amd64-UNVERIFIED.iso`. Boot-test that ISO in both BIOS and UEFI virtual machines, then on sacrificial USB media before claiming it works. A byte-for-byte USB readback proves copying, **not firmware boot**. On Windows, an ISO-hybrid USB can appear empty or lack a drive letter while still containing a Linux filesystem; only structural inspection and an actual boot establish functionality.
 
 The desktop interface is Qt-only (PySide6). Its Specialist Tools dialog exposes image scanning, filesystem analysis, recovery and clone-only ext repair without the removed Tk UI. Disk writes remain guarded by the CLI and require drive identity, access, journal and explicit risk authorization.
+
+### Offline CPU and RAM tests
+
+The optional Debian recovery ISO build now includes Memtest86+ as a separate firmware boot-menu choice and a **Hardware Diagnostics (CPU / RAM)** desktop launcher for short, consent-based Linux tests using stress-ng. These tests do not repair disks or memory, and the ISO still requires BIOS/UEFI boot qualification before release.
+
+**Repair & Restore** can start a read-only image of an SSD, flash device, or unqualified HDD without leaving the workspace. This saves recoverable data on **another healthy disk** and is not the same as restoring physical media reliability. When SMART is blocked, Linux sysfs can also provide limited, unverified identification hints; a USB adapter may supply misleading values.

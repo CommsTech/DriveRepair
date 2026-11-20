@@ -31,6 +31,7 @@ cd "$WORK"
 # subsequently be boot-tested on both BIOS and UEFI before release).
 lb config --mode debian --distribution trixie --architecture amd64 \
   --binary-images iso-hybrid --bootloaders 'grub-pc grub-efi' \
+  --memtest memtest86+ \
   --archive-areas 'main non-free-firmware' --apt-recommends false
 mkdir -p config/package-lists \
   config/includes.chroot/opt/driverepair/desktop \
@@ -43,6 +44,9 @@ python3-pyside6.qtcore
 python3-pyside6.qtgui
 python3-pyside6.qtwidgets
 smartmontools
+memtest86+
+stress-ng
+stressapptest
 gddrescue
 testdisk
 e2fsprogs
@@ -71,6 +75,21 @@ cat > config/includes.chroot/usr/local/bin/driverepair-gui <<'EOF'
 exec /usr/local/bin/driverepair gui "$@"
 EOF
 chmod 0755 config/includes.chroot/usr/local/bin/driverepair-gui
+# Memory test is a dedicated boot-menu choice; Linux-session diagnostics
+# are manual and bounded. These do not touch patient storage devices.
+cp -- "$REPO/scripts/driverepair-hardware-diagnostics.sh" \
+   config/includes.chroot/usr/local/bin/driverepair-hardware-diagnostics
+chmod 0755 config/includes.chroot/usr/local/bin/driverepair-hardware-diagnostics
+cat > config/includes.chroot/usr/share/applications/driverepair-hardware-diagnostics.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Hardware Diagnostics (CPU / RAM)
+Comment=Bounded CPU and memory checks; does not repair storage
+Exec=/usr/local/bin/driverepair-hardware-diagnostics
+Terminal=true
+Icon=utilities-system-monitor
+Categories=System;Utility;
+EOF
 cat > config/includes.chroot/usr/share/applications/driverepair.desktop <<'EOF'
 [Desktop Entry]
 Type=Application

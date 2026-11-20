@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.3b29 — 2026-11-20: Repair workflow and live hardware diagnostics
+
+- Image-first restoration can start **inside Repair & Restore**, without silently switching workspaces.
+- Live ISO build adds an explicit Memtest86+ boot option, stress-ng and stressapptest, plus a bounded CPU/RAM diagnostics desktop launcher. Actual ISO build/boot remains unverified.
+- Read-only Linux sysfs fallback reports disk/bridge geometry and rotational hints when SMART is unavailable; it cannot authorize in-place repair.
+- Unknown/SSD media remains ineligible for generic HDD sector rewrites; journal/identity/locking controls unchanged.
+
 ## 0.3.3b28 — 2026-11-19: scan evidence durability and source hygiene audit
 
 - **Fixed buffered telemetry loss at scan phase boundaries.** If a producer transitions directly from scanning to a terminal or verification state, pending read spans are emitted under the original SCANNING phase before the terminal event; no covered region is silently discarded. A transient progress-stream failure no longer discards buffered spans or advances the throttle clock. Progress reporting remains best-effort and cannot guarantee delivery across persistent stream failures.
