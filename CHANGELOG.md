@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3b31 — 2026-11-20: Windows repair-lock lifetime and Debian WSL startup fixes
+
+- **Windows raw-disk access:** after obtaining and retaining exclusive locks on every discoverable patient filesystem volume, open the physical disk using Win32 `FILE_SHARE_READ | FILE_SHARE_WRITE` rather than unnecessarily requesting an incompatible `share=0` handle. A successfully opened raw handle is not itself proof of exclusive disk access; filesystem-volume locks, external/system checks, independent identity verification, separate journal, write consent and readback remain mandatory.
+- **Lock lifetime:** close the raw physical disk handle **before** releasing acquired volume handles; release in reverse acquisition order. Preserve fail-closed behavior when a volume cannot be locked, is in use, changes partition layout, or has no safe lockable handle. Mounted GUID paths cannot sidestep explicit dismount authorization.
+- Improve Win32 error messages with the failed volume and operating-system error code; never use an unapproved force-dismount to bypass a lock failure.
+- **WSL ISO build on Windows:** stop launching Debian merely to translate staging/output drive paths. Use a deterministic default WSL `/mnt/<drive>/` translation and verify availability inside the asynchronous build. Distinguish an absent Debian distribution from an unresponsive or uninitialized WSL installation, avoiding duplicate `wsl --install` attempts after `ERROR_ALREADY_EXISTS`.
+- New fault-injection tests cover Windows CreateFile sharing, held-lock cleanup and close order, mounted GUID paths, installed/missing/unresponsive Debian cases and Windows-path mapping. Linux-hosted tests prove only the software logic; **real Windows disk locking, filesystem write, WSL ISO build, and BIOS/UEFI USB boot remain unverified.**
+
 ## 0.3.3b30 — 2026-11-20: On-device repair and Restore workspace separation
 
 - Separated the Qt **Repair drive** and **Restore data** workspaces. SSD/flash repair actions no longer silently image drives or switch to Restore.

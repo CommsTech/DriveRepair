@@ -2,7 +2,7 @@
 
 **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
 
-> **Release status:** `0.3.3b30` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+> **Release status:** `0.3.3b31` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
 
 **Drive models:** The bundled [offline model catalog](docs/DRIVE_MODEL_CATALOG.md) currently documents four vendor-backed model entries (three Seagate SMR models and one SanDisk SSD family). It guides scanning; it is not a comprehensive database or authorization to rewrite a disk.
 
@@ -139,22 +139,22 @@ On Windows PowerShell, run these same commands using `py` if Python is installed
 
 ```bash
 python scripts/build_desktop.py --public-beta --no-wheel
-python dist/DriveRepair-0.3.3b24-public-beta.pyz gui
+python dist/DriveRepair-0.3.3b31-public-beta.pyz gui
 ```
 
 Install optional `PySide6` in that Python environment if you want the new Qt workstation. The **public-beta** package blocks physical in-place writes. The separate **repair-beta** package may attempt the guided, HDD-only write workflow on sacrificial hardware with all safeguards enabled:
 
 ```bash
 python scripts/build_desktop.py --repair-beta --no-wheel
-python dist/DriveRepair-0.3.3b24-repair-beta.pyz qt-gui
+python dist/DriveRepair-0.3.3b31-repair-beta.pyz qt-gui
 ```
 
 For a CLI image-only example, use a source **regular file** and an unused output path:
 
 ```bash
-python dist/DriveRepair-0.3.3b24-public-beta.pyz scan-image --image source.img --mode triage --json
-python dist/DriveRepair-0.3.3b24-public-beta.pyz rescue-image --image source.img --output recovered.img --json
-python dist/DriveRepair-0.3.3b24-public-beta.pyz rescue-status --output recovered.img --json
+python dist/DriveRepair-0.3.3b31-public-beta.pyz scan-image --image source.img --mode triage --json
+python dist/DriveRepair-0.3.3b31-public-beta.pyz rescue-image --image source.img --output recovered.img --json
+python dist/DriveRepair-0.3.3b31-public-beta.pyz rescue-status --output recovered.img --json
 ```
 
 A repair-beta build is **not** a recommendation to write to a failing or valuable patient. See [hardware testing requirements](docs/USB_REPAIR_PREFLIGHT_B17.md) and [release gates](docs/RELEASE_STATUS.md).
@@ -256,9 +256,11 @@ Drive condition scores are **evidence-based diagnostics**, not exact remaining-l
 
 **Targeted HDD repair is disabled.** This is usually missing stable identity or SMART rotation/health evidence from the USB bridge. Use **Check HDD eligibility**. Install `smartmontools`, ensure the enclosure supports ATA SAT pass-through, or safely test offline via direct SATA; the software will not infer permission to write from a Seagate/SMR model label alone. Rescue to image remains available.
 
-**Windows reports access denied / WinError 5.** Close programs using the disk, verify Administrator privileges and that Windows can grant exclusive access. DriveRepair must not override locks, active volumes or OS-level device protection.
+**Windows reports access denied / WinError 5.** The guarded writer now opens the raw physical disk with Win32 read/write sharing **after acquiring every accessible patient volume lock**, and keeps those locks until the raw handle is closed. This avoids a spurious conflict from `share=0`. It does **not** circumvent an actual lock denial. Close File Explorer/windows, antivirus scanners and file-indexing or backup jobs using the patient; verify Administrator privileges and review the exact `FSCTL_LOCK_VOLUME` / `FSCTL_DISMOUNT_VOLUME` error in the operator log. If a partition exposes no safe lockable volume handle, work offline rather than forcing an unmounted raw write. For an NTFS/FAT/exFAT filesystem correction, Windows CHKDSK manages its own volume locking; it cannot be made safe by borrowing the physical HDD writer's handle.
 
 **A read stalls indefinitely.** The USB device/driver may have stopped responding. A cooperative Stop can only act after the current kernel request returns; an isolated read-only worker can be stopped, but the hardware may still need a safe disconnect. Avoid repeated stress on deteriorating media.
+
+**Windows WSL builder reports `ERROR_ALREADY_EXISTS` or Debian path translation times out.** Do not repeat `wsl --install -d Debian` blindly. Run `wsl --list --verbose` to see whether Debian is already registered, launch the Debian app once to initialize it, reboot if Windows requests one, and only then retry the ISO builder. The b31 GUI no longer launches WSL just to translate `C:\...` staging paths; it assumes standard `/mnt/c/...` mounts and checks their availability when the Debian build actually starts. If your WSL automount location is customized, use a Debian VM or adjust the build environment rather than forcing a fallback path. A successful build still needs BIOS/UEFI boot testing.
 
 **SMART results are unavailable.** Windows `HealthStatus` is only a coarse fallback and cannot authorize HDD repair. `smartctl` and a supporting bridge are needed for stronger evidence. Do not mistake an unavailable SMART report for a healthy drive.
 
