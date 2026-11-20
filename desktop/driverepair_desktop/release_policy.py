@@ -20,18 +20,20 @@ IN_PLACE_WRITE_COMMANDS = PHYSICAL_WRITE_COMMANDS | {'care-image', 'refresh-imag
 def block_public_physical_writes(command: str | None, *, execute_optimization: bool = False) -> None:
     """Deny unsafe distribution commands BEFORE inventory or opening patients."""
     direct_write = command in IN_PLACE_WRITE_COMMANDS or (
-        command == 'optimize-volume' and execute_optimization)
+        command == 'optimize-volume' and execute_optimization) or (
+        command == 'repair-windows-filesystem' and execute_optimization)
     if PUBLIC_BETA_IMAGE_ONLY and direct_write:
         raise ValueError(
             'In-place patient writes are unavailable in this public image-first beta. '
             'Choose a read-only scan or rescue to a new image instead. '
             'Hardware repair remains restricted to separately qualified engineering builds.'
         )
-    if REPAIR_BETA_GUARDED and direct_write and command not in {'care-external','validate-usb-capacity'}:
+    if REPAIR_BETA_GUARDED and direct_write and command not in {'care-external','validate-usb-capacity','repair-windows-filesystem'}:
         raise ValueError(
             'Direct media writes are unavailable in the guarded repair beta. '
-            'Use the guided care-external workflow with SMART evidence, identity '
-            'confirmation, an exclusive lock and a separate durable journal.'
+            'For physical HDD writes use guided care-external with verified identity, '
+            'exclusive lock and a separate durable journal. On-device Windows '
+            'filesystem metadata repair is a separately guarded operation.'
         )
 
 

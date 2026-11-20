@@ -1,0 +1,1089 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 0812eb6..818c16b 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,16 @@
+ # Changelog
+ 
++## 0.3.3b30 — 2026-11-20: On-device repair and Restore workspace separation
++
++- Separated the Qt **Repair drive** and **Restore data** workspaces. SSD/flash repair actions no longer silently image drives or switch to Restore.
++- Added a guarded **on-device Windows filesystem repair** route using CHKDSK `/f` on mounted NTFS, FAT and exFAT volumes. It is deliberately *logical filesystem repair*, not physical NAND rejuvenation or reconstructed unreadable sectors.
++- Windows checks an independent Get-Disk external/non-system gate, re-selects the drive, confirms the volume belongs to the exact selected PhysicalDrive and has supported geometry, and requires backup affirmation and an exact typed repair consent before any write command.
++- Preserved the existing independent, journaled rotational HDD repair engine. No SSD is admitted to that engine, and a filesystem repair does not bypass it.
++- Updated the Qt workflow selector, risk labels, visible primary action and results. Restore remains a separate workflow. Changed the stepper graphics to reflect Diagnose, Restore and Repair separately.
++- Added regression tests (including forbidden interruption of an active CHKDSK subprocess) for altered volume/disk identity, system/boot drive refusal, unsupported filesystems, missing authorizations, public-beta write denial, and actual CHKDSK invocation arguments.
++- No native Windows GUI clickthrough or hardware write/boot qualification performed here. Do not market this as demonstrated physical media recovery.
++
++
+ ## 0.3.3b29 — 2026-11-20: Repair workflow and live hardware diagnostics
+ 
+ - Image-first restoration can start **inside Repair & Restore**, without silently switching workspaces.
+diff --git a/README.md b/README.md
+index 97ccdfd..80bb759 100644
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,7 @@
+ 
+ **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
+ 
+-> **Release status:** `0.3.3b29` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
++> **Release status:** `0.3.3b30` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+ 
+ **Drive models:** The bundled [offline model catalog](docs/DRIVE_MODEL_CATALOG.md) currently documents four vendor-backed model entries (three Seagate SMR models and one SanDisk SSD family). It guides scanning; it is not a comprehensive database or authorization to rewrite a disk.
+ 
+@@ -10,31 +10,37 @@ The Qt workstation now selects an **automatic, bounded HDD investigation level**
+ 
+ [Get started](#get-started) · [Choose a workflow](#choose-a-workflow) · [Recovery USB](#create-a-recovery-usb) · [Command line](#command-line-examples) · [Troubleshooting](#troubleshooting) · [Changelog](CHANGELOG.md) · [Support](https://github.com/sponsors/CommsTech)
+ 
+-## Why the Repair button chooses a different action on some devices
+-
+-The Qt **Repair & restore** workspace uses the chosen disk's actual evidence to
+-pick the next step. A detected SSD, NVMe, or flash drive is **not** offered
+-magnetic HDD sector rewrites; the primary action creates a new recovery
+-image on another healthy disk **within Repair & Restore**. After imaging, choose **Repair a recovered
+-filesystem copy…** for supported ext2/3/4 *volume* images (requires `e2fsck`
+-on a supported host). NTFS, exFAT, and other filesystems are not claimed as
+-supported by that particular repair tool. Data rescue and filesystem repair
+-are different from repairing failing storage hardware.
+-
+-For a verified rotating HDD, DriveRepair can offer a separate consent-based
+-journaled region rewrite after the independent identity, health, mount/lock,
+-and journal checks. When SMART is hidden by the USB adapter, the initial action
+-collects available Windows media evidence or offers imaging. Merely recognizing
+-a model number is not permission to write to a drive. This is still a hardware
+-qualification gap on some USB adapters, not a software repair success.
++## Repair a drive versus Restore data
++
++**Repair drive** performs supported *on-device* operations. It no longer sends
++SSD owners to imaging just because magnetic-disk rewriting does not apply.
++Choose **Repair filesystem on selected drive (Windows)** for a supported
++mounted NTFS, exFAT, or FAT volume, or choose **Targeted HDD region repair**
++for a genuinely identified rotational disk. The first method invokes Windows
++CHKDSK `/f` on the **original volume**; it can correct filesystem metadata but
++**cannot repair NAND flash cells, an unreadable sector, worn parts, or lost
++content**. It requires an existing backup, two explicit confirmations, a
++fresh match between the chosen drive and the Windows volume, and an independent
++non-system/external disk check. Locked, busy, unrecognized, or system volumes
++fail closed rather than being forced offline or scheduled silently for reboot.
++
++HDD physical-region maintenance uses DriveRepair's bounded, journaled rewrite
++engine with separate media-type, identity, health, locking and readback checks.
++It may re-write repeatably readable weak HDD regions; an unreadable region is
++**not** reconstructed. The program cannot guarantee the drive's remaining life.
++
++**Restore data** is a **different workspace** for imaging, recovery and file
++salvage. Recover files or use a restored image when the data matters more than
++reuse of a potentially failing drive. These are distinct workflows and should
++not be presented as interchangeable repairs.
+ 
+ ## What DriveRepair does
+ 
+ | Workspace | You can do | What it **does not** mean |
+ | --- | --- | --- |
+ | **Diagnose** | Read SMART/NVMe health where available, sample or scan drive regions, run an optional **write/restore USB capacity spot test** on a backed-up disposable drive, and export an offline HTML evidence report | A successful read is not proof that the bytes match the original file, or that the disk will remain reliable |
+-| **Rescue data** | Copy readable sectors to a **new image on separate healthy storage**, record missing ranges, resume and retry bounded failed reads | A full-size image file is not proof that every byte was successfully recovered |
+-| **Targeted HDD repair** | On eligible, positively identified rotational HDDs: inspect weak but repeatably readable regions and perform small, journaled, post-verified rewrites | This cannot regenerate unreadable original bytes, fix mechanical damage, or make SSD/NVMe rewrites into "repairs" |
++| **Restore data** | Copy readable sectors to a **new image on separate healthy storage**, record missing ranges, resume and retry bounded failed reads | A full-size image file is not proof that every byte was successfully recovered |
++| **Repair drive** | On Windows, explicitly approved on-device NTFS/FAT/exFAT filesystem metadata repair; on eligible rotational HDDs, small journaled post-verified region rewrites | This cannot regenerate unreadable original bytes, fix mechanical damage, or make SSD/NVMe rewrites into "repairs" |
+ | **Analyze recovered images** | Recover select deleted files, carve recognized file formats, check compatible filesystems, work on a clone | File carving cannot reliably reconstruct every fragmented file or encrypted volume |
+ | **Create recovery USB** | Flash a separately built DriveRepair hybrid ISO to a **disposable USB drive** with full-image readback | This **erases the USB**. It does not image/repair a patient disk or establish that BIOS/UEFI boot has been tested |
+ 
+@@ -55,7 +61,7 @@ beta can offer a separate, explicitly acknowledged **unknown-health lab repair**
+ small durable journal and verified rewrites on a disposable or already-backed-up drive.
+ The choice must still pass disk identity, exclusive lock, write-safety and batch checks;
+ no writes start automatically. Critical Windows health warnings still stop the candidate
+-path. If identification remains incomplete, select **Rescue data** and save a copy to a
++path. If identification remains incomplete for **HDD media rewrites**, select **Restore data** and save a copy to a
+ separate healthy drive instead. A full SMART pass still supplies stronger health evidence.
+ 
+ Use **Hardware diagnostics → Inspect storage** for read-only low-level information. Seek
+@@ -287,3 +293,21 @@ The desktop interface is Qt-only (PySide6). Its Specialist Tools dialog exposes
+ The optional Debian recovery ISO build now includes Memtest86+ as a separate firmware boot-menu choice and a **Hardware Diagnostics (CPU / RAM)** desktop launcher for short, consent-based Linux tests using stress-ng. These tests do not repair disks or memory, and the ISO still requires BIOS/UEFI boot qualification before release.
+ 
+ **Repair & Restore** can start a read-only image of an SSD, flash device, or unqualified HDD without leaving the workspace. This saves recoverable data on **another healthy disk** and is not the same as restoring physical media reliability. When SMART is blocked, Linux sysfs can also provide limited, unverified identification hints; a USB adapter may supply misleading values.
++
++
++### Repair versus Restore (desktop)
++
++**Repair drive** performs on-device operations with distinct safety controls:
++
++- **Windows logical filesystem repair (NTFS, exFAT, FAT):** an explicitly authorized `chkdsk X: /f` on a mounted, independently mapped *external* volume. This can correct filesystem metadata errors, **not** worn NAND, unreadable sectors, lost file content, or SSD endurance. It requires a prior backup, the selected drive's identity hint, matching Windows partition-to-disk evidence, and two approvals. It will refuse boot/system disks and unsupported/unknown volumes. A busy volume may refuse the operation rather than force a dismount.
++- **Rotational HDD region maintenance:** journaled, bounded rewrites of repeatably readable HDD regions only when the stronger media, locking, and identity gates pass. No guarantee of improving disk life. Missing SMART does not grant permission to write.
++
++**Restore data** is a separate workspace for imaging, copy-out recovery, and salvage. An SSD is never sent to Restore merely because an HDD-specific repair is inapplicable. Use Restore first for valuable or unstable media; on-device filesystem repair can sacrifice damaged file references.
++
++On Windows, the guarded CLI can inspect the selected volume binding without writing:
++
++```
++python -m driverepair_desktop repair-windows-filesystem --device windows:PhysicalDriveN --letter E --confirm-identity THE_12_CHAR_HINT --json
++```
++
++Actual writes additionally require `--execute --ack-backed-up --ack-filesystem-write`. These flags are not a substitute for a backup or a successful verification afterward. The public read-only beta blocks execution.
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index fddd992..dfe4674 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b29"
++__version__ = "0.3.3b30"
+diff --git a/desktop/driverepair_desktop/cli.py b/desktop/driverepair_desktop/cli.py
+index a7a5219..928e934 100644
+--- a/desktop/driverepair_desktop/cli.py
++++ b/desktop/driverepair_desktop/cli.py
+@@ -73,6 +73,15 @@ def parser() -> argparse.ArgumentParser:
+     cli = argparse.ArgumentParser(
+         prog="driverepair", description="Disk diagnostics, image rescue and file recovery without reboot")
+     sub = cli.add_subparsers(dest="command", required=True)
++    winfs = sub.add_parser('repair-windows-filesystem',
++        help='Guarded on-device NTFS/exFAT/FAT logical repair with Windows CHKDSK /f; NOT physical sector repair')
++    winfs.add_argument('--device', required=True)
++    winfs.add_argument('--letter', required=True)
++    winfs.add_argument('--confirm-identity', required=True)
++    winfs.add_argument('--execute', action='store_true')
++    winfs.add_argument('--ack-backed-up', action='store_true')
++    winfs.add_argument('--ack-filesystem-write', action='store_true')
++    winfs.add_argument('--json', action='store_true')
+     usb = sub.add_parser('flash-usb', help='DESTRUCTIVE: write a hybrid ISO to verified external USB and read back')
+     usb.add_argument('--iso', required=True)
+     usb.add_argument('--device', required=True)
+@@ -1949,6 +1958,15 @@ def run(argv: list[str] | None = None) -> int:
+             print(json.dumps(result,indent=2) if args.json else
+                   f"{result['status']} · verified spots {result.get('verified_regions',0)}",flush=True)
+             return (0 if result['status'] in {'SAMPLED_REGIONS_VERIFIED','ORIGINAL_RESTORED_VERIFIED'} else 2)
++        if args.command == 'repair-windows-filesystem':
++            from .windows_volume_repair import windows_filesystem_maintenance
++            result = windows_filesystem_maintenance(args.device, args.letter,
++                confirm_identity=args.confirm_identity, execute=args.execute,
++                ack_backup=args.ack_backed_up,
++                ack_write=args.ack_filesystem_write)
++            print(json.dumps(result, indent=2) if args.json else result, flush=True)
++            return 0 if result.get('status') in {
++                'volume_bound_readonly', 'repair_command_completed_unverified'} else 2
+         if args.command == 'flash-usb':
+             from .usb_flash import flash_usb_iso
+             def report(e):
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+index 7519634..a24e5ac 100644
+--- a/desktop/driverepair_desktop/qtgui.py
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -10,6 +10,7 @@ import json
+ import math
+ from collections import deque
+ import os
++import re
+ from pathlib import Path
+ 
+ from .surface_map import SurfaceCoverage
+@@ -479,11 +480,16 @@ def launch():
+         def __init__(self):
+             super().__init__()
+             self.kind = 'unknown'
++            self.mode = 'check'
+             self.eligible = False
+             self.setMinimumHeight(58)
+             self.setMaximumHeight(64)
+             self.setToolTip('Media policy is advisory. Device identity, SMART and exclusive access are checked by the engine before physical writes.')
+ 
++        def set_workflow(self, family):
++            self.mode = str(family or 'check')
++            self.update()
++
+         def set_policy(self, kind, eligible=False):
+             self.kind = str(kind or 'unknown').lower()
+             self.eligible = bool(eligible)
+@@ -492,8 +498,12 @@ def launch():
+         def paintEvent(self, _event):
+             painter=QPainter(self)
+             painter.setRenderHint(QPainter.Antialiasing)
+-            labels=('IDENTIFY MEDIA', 'IMAGE / RESCUE',
+-                    'TARGETED HDD' if self.eligible else 'VERIFY / REPORT')
++            labels = (('IDENTIFY MEDIA', 'CHOOSE REPAIR',
++                       'TARGETED HDD' if self.eligible else 'VERIFY RESULTS')
++                      if self.mode == 'fix' else
++                      ('IDENTIFY SOURCE', 'IMAGE / RESCUE', 'VERIFY / REPORT')
++                      if self.mode == 'recover' else
++                      ('IDENTIFY MEDIA', 'SCAN / DIAGNOSE', 'VERIFY / REPORT'))
+             colors=('#7892b3','#40cfb5', '#e6b669' if self.eligible else '#7892b3')
+             gap=8.0
+             width=max(10.0,(self.width()-2*gap)/3)
+@@ -604,8 +614,8 @@ def launch():
+             self.nav_buttons={}
+             for family, label, key in (
+                 ('check','Diagnose','scanquick'),
+-                ('recover','Rescue data','rescue'),
+-                ('fix','Repair & restore','carequick')):
++                ('recover','Restore data','rescue'),
++                ('fix','Repair drive','carequick')):
+                 b=QPushButton(label)
+                 b.setObjectName('nav')
+                 b.setCheckable(True)
+@@ -859,9 +869,9 @@ def launch():
+             # One next action replaces a row of competing SMART/setup/help controls.
+             # This does not bypass the CLI's independent physical-write checks.
+             self.repair_next=QPushButton('Why this plan?')
+-            self.repair_next.setAccessibleName('Next step for HDD repair eligibility')
+-            self.repair_next.setToolTip('Check SMART, Windows-native disk evidence, or rescue; identity is not a write permit.')
+-            self.repair_next.clicked.connect(self.explain_repair_eligibility)
++            self.repair_next.setAccessibleName('Review disk repair methods and eligibility')
++            self.repair_next.setToolTip('Check physical HDD eligibility and supported on-device filesystem repair; no write permit is implied.')
++            self.repair_next.clicked.connect(self.resolve_repair_next)
+             self.repair_next.hide()
+             drive_panel.addWidget(self.repair_next)
+             # Recovering bytes and repairing a filesystem COPY are meaningful
+@@ -898,7 +908,8 @@ def launch():
+             self.job_box.setAccessibleDescription('Read-only diagnosis, rescue, or experimental repair task')
+             self.job_box.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+             self._jobs={
+-                'fix':[('Targeted HDD region repair','carequick'),
++                'fix':([('Repair filesystem on selected drive (Windows)','winfsrepair')] if sys.platform=='win32' else []) + [
++                       ('Targeted HDD region repair','carequick'),
+                        ('Full scan + targeted HDD repair','carefull'),
+                        ('Resume journaled repair','careresume')],
+                 'recover':[('Rescue selected external drive to NEW image','rescue'),
+@@ -928,7 +939,7 @@ def launch():
+             workflow.addWidget(self.batch_status)
+             help_row=QHBoxLayout()
+             workflow.addLayout(help_row)
+-            help_row.addWidget(help_icon('Repair: suitable HDDs only in the guarded beta, with SMART evidence, a separate journal and exclusive disk access. Rescue: new image. Diagnose: reads only.'))
++            help_row.addWidget(help_icon('Repair Drive: guarded HDD region maintenance or explicitly approved Windows filesystem metadata repair. Restore: save files or create an image. Diagnose: reads only.'))
+             self.auto_resume=QCheckBox('Resume read-only full scan when the same USB drive reconnects')
+             self.auto_resume.setChecked(True)
+             self.auto_resume.setToolTip('Only a read-only full scan with a saved checkpoint can restart automatically. No in-place writes or RAM-only transactions restart after a disconnect.')
+@@ -1065,7 +1076,7 @@ def launch():
+             self.next_action.setTextFormat(Qt.PlainText)
+             result_card.addWidget(self.next_action)
+             report_row=QHBoxLayout()
+-            self.rescue_instead=QPushButton('Create recovery copy here…')
++            self.rescue_instead=QPushButton('Open Restore workspace')
+             self.rescue_instead.setToolTip('Image this drive to healthy storage while remaining in Repair & Restore. No source writes.')
+             self.rescue_instead.clicked.connect(lambda:self.start_job(repair_copy=True))
+             self.rescue_instead.setVisible(False)
+@@ -1470,11 +1481,26 @@ def launch():
+                 if self.job_box.itemData(i) == goal:
+                     self.job_box.setCurrentIndex(i)
+                     break
++            # SSD/flash cannot use the HDD rewrite workflow; the default
++            # Repair method becomes an explicit on-device filesystem operation.
++            if family == 'fix' and sys.platform == 'win32':
++                d=self.selected() or {}
++                try:
++                    from .repair_readiness import _flash_profile
++                    snap=self._health_by_device.get(d.get('identity_hint'))
++                    if _flash_profile(d, snap) is not None:
++                        index=next((i for i in range(self.job_box.count())
++                            if self.job_box.itemData(i)=='winfsrepair'), -1)
++                        if index >= 0:
++                            self.job_box.setCurrentIndex(index)
++                except (ValueError,TypeError):
++                    pass
+             self.job_box.blockSignals(False)
++            self.media_pipeline.set_workflow(family)
+             self.smart_check_note.setVisible(family=='fix')
+             self.repair_help.hide()  # explanation is available through contextual next action
+             self.repair_next.setVisible(family=='fix')
+-            self.repair_copy.setVisible(family=='fix')
++            self.repair_copy.setVisible(False)  # Copy-based repair belongs in Restore/Specialist tools
+             self.choice_changed()
+             if not (self.proc and self.proc.state()!=QProcess.NotRunning):
+                 self.set_live_focus(False)
+@@ -1484,6 +1510,14 @@ def launch():
+             if (self.proc and self.proc.state()!=QProcess.NotRunning
+                     and self._last_progress_at is not None
+                     and time.monotonic()-self._last_progress_at>8):
++                if self._last_job_kind == 'winfsrepair':
++                    self.metric_labels['rate'].setText('Windows CHKDSK running')
++                    self.status.setText('Filesystem repair in progress · completion not confirmed')
++                    self.help.setText('Windows is checking the selected external volume. '
++                        'A filesystem repair may produce no progress output for several minutes. '
++                        'Do not unplug the drive while CHKDSK is writing.')
++                    self.metric_labels['eta'].setText('Unknown · Windows repair')
++                    return
+                 self.metric_labels['rate'].setText('Waiting on drive')
+                 elapsed=int(time.monotonic()-self._last_progress_at)
+                 if self._last_phase is None and elapsed < 30:
+@@ -1723,7 +1757,8 @@ def launch():
+                    'capacity':'Authenticity spot check: temporary writes to selected USB regions, readback, and restoration. Requires full backup and durable separate-drive journal. Not a normal health scan.',
+                    'scanquick':'Samples at least 10% of the entire drive with distributed random locations; no writes.',
+                    'scanfull':'Reads the full address space, saving a resumable local checkpoint.',
+-                   'carequick':'Investigates slow regions; may rewrite only consistently readable targets after consent.',
++                   'carequick':'Investigates slow HDD regions; may rewrite consistently readable targets after explicit consent.',
++                   'winfsrepair':'On-device Windows NTFS/FAT/exFAT logical repair (CHKDSK /f). This does not fix damaged media or reconstruct unreadable data; backup and explicit authorization required.',
+                    'carefull':'Full scan and bounded repair. Writes require separate explicit approval.',
+                    'careresume':'Reopens a previously durable journal on a separate healthy disk and verifies patient identity before resuming interrupted writes.',
+                    'rescue':'Copy readable sectors directly from the selected EXTERNAL drive to a NEW image on another healthy disk. The patient is read-only.',
+@@ -1734,12 +1769,12 @@ def launch():
+             for widget in (self.total_caption,self.overall_label,self.progress):
+                 widget.setVisible(guided)
+             impact, impact_detail=operation_impact(kind)
+-            self.operation_impact.setObjectName('warningTag' if kind in {'carequick','carefull','careresume'} else 'riskTag')
++            self.operation_impact.setObjectName('warningTag' if kind in {'carequick','carefull','careresume','winfsrepair'} else 'riskTag')
+             self.operation_impact.setText(impact)
+             self.operation_impact.setToolTip(impact_detail)
+             self.operation_impact.style().unpolish(self.operation_impact)
+             self.operation_impact.style().polish(self.operation_impact)
+-            self.start.setText('Start '+('capacity spot test' if kind=='capacity' else
++            self.start.setText('Start '+('filesystem repair review' if kind=='winfsrepair' else 'capacity spot test' if kind=='capacity' else
+                                          'read-only rescue' if kind in {'rescue','rescueimage'} else
+                                          'diagnostics' if kind in {'health','scanquick','scanfull','resume'} else
+                                          'authorized repair'))
+@@ -1828,11 +1863,11 @@ def launch():
+                 state=readiness_next_action(d,kind,
+                     self._health_by_device.get(d.get('identity_hint')),
+                     smartctl_available=bool(smartctl_path()))
+-                self.repair_next.setText('Why this plan?')
++                self.repair_next.setText('Check repair options')
+                 self.repair_next.setToolTip(state['reason'])
+                 self.repair_next.setEnabled(not running and
+                     not (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning))
+-                self.repair_copy.setEnabled(not running)
++                self.repair_copy.setEnabled(False)  # specialist copy repair is not in on-device Repair
+                 if self._smart_probe_failures.get(d.get('identity_hint')) and not enabled:
+                     advice=('SMART check: '+self._smart_probe_failures[d['identity_hint']]
+                             +' | '+advice)
+@@ -1848,7 +1883,7 @@ def launch():
+                     smartctl_available=bool(smartctl_path()))
+                 self.start.setText(route.button)
+                 if (not running and not PUBLIC_BETA_IMAGE_ONLY and
+-                    route.action in {'rescue','probe'} and
++                    route.action in {'filesystem','probe'} and
+                     not (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning)):
+                     enabled=True
+                     self.start.setEnabled(True)
+@@ -1862,8 +1897,7 @@ def launch():
+             self.start_shortcut.setEnabled(enabled)
+             # When a repair is ineligible, expose the non-destructive next step
+             # without a cryptic failed worker run. No source write is performed.
+-            self.rescue_instead.setVisible(kind in {'carequick','carefull','careresume'}
+-                and bool(self.selected()) and not enabled and not running)
++            self.rescue_instead.setVisible(False)  # Restore is a separate workspace
+             self.ready_note.setText(advice)
+             self.start.setToolTip(advice)
+             self.device_box.setEnabled(not running and bool(self._devices))
+@@ -1930,6 +1964,7 @@ def launch():
+                 operation={'carefull':'Full scan + targeted HDD maintenance',
+                            'carequick':'Targeted HDD maintenance',
+                            'careresume':'Resume journaled HDD maintenance',
++                           'winfsrepair':'On-device Windows filesystem metadata repair',
+                            'scanquick':'Quick read-only scan',
+                            'scanfull':'Full read-only scan',
+                            'rescue':'Rescue physical drive to image',
+@@ -2736,10 +2771,63 @@ def launch():
+                 return
+             QMessageBox.information(self,'Drive details (read-only)',
+                 drive_inspection_text(identified,report,error=err.strip()[:220])[:4000])
++        def start_windows_filesystem_repair(self):
++            """Windows CHKDSK /f on a selected external volume, not image rescue.
++
++            The CLI independently checks current Get-Disk and Get-Partition
++            binding and requires fresh identity and explicit authorizations.
++            """
++            if sys.platform != 'win32':
++                QMessageBox.information(self, 'Windows volume repair',
++                    'This logical filesystem repair requires Windows. HDD region maintenance is separate.')
++                return
++            if PUBLIC_BETA_IMAGE_ONLY:
++                QMessageBox.warning(self, 'Public beta',
++                    'On-device filesystem changes are unavailable in the read-only public build.')
++                return
++            d=self.selected()
++            if not d:
++                QMessageBox.information(self, 'Select a drive', 'Select the external drive to repair.')
++                return
++            if self.proc and self.proc.state()!=QProcess.NotRunning:
++                return
++            from PySide6.QtWidgets import QInputDialog
++            letter, ok=QInputDialog.getText(self, 'Repair a Windows filesystem',
++                f"Selected physical disk: {d.get('model')} ({d.get('identity_hint')})\n\n"
++                'Enter the Windows volume letter ON THIS DISK (for example, E).\n'
++                'DriveRepair will independently verify the volume-to-disk binding:')
++            if not ok:
++                return
++            letter=letter.strip().upper().rstrip(':')
++            if not re.fullmatch(r'[D-Z]', letter):
++                QMessageBox.warning(self, 'Invalid Windows volume',
++                    'Enter one external volume letter from D through Z. No disk was changed.')
++                return
++            backup=QMessageBox.question(self,'Backup and data-loss risk',
++                f'Windows CHKDSK /f on {letter}: will MODIFY filesystem metadata on the original drive.\n\n'
++                'It may discard orphaned/damaged file records or worsen data loss on unstable media. '
++                'This is not physical NAND repair, magnetic sector remapping, or deleted-file recovery.\n\n'
++                'Have you already made an independent backup of everything important on this volume?',
++                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
++            if backup != QMessageBox.Yes:
++                return
++            typed, ok=QInputDialog.getText(self,'Authorize on-device filesystem repair',
++                f'Confirm the disk identity {d["identity_hint"]}, volume {letter}:, and risk of data loss.\n'
++                f'Type exactly REPAIR {letter}: to authorize CHKDSK /f:')
++            if not ok or typed.strip().upper() != f'REPAIR {letter}:':
++                QMessageBox.information(self,'Not authorized','No filesystem repair started.')
++                return
++            # Native worker enforces mapping and source policy; no UI-only permit.
++            self._last_good_device=d
++            self._last_job_kind='winfsrepair'
++            self._job_args=['repair-windows-filesystem','--device',d['id'],
++                '--letter',letter,'--confirm-identity',d['identity_hint'],
++                '--execute','--ack-backed-up','--ack-filesystem-write','--json']
++            self.run_command(self._job_args)
++
+         def start_job(self, *, repair_copy=False):
+-            # Stay in Repair & Restore when the right operation is a new,
+-            # read-only recovery copy. Do not jump to the Rescue workspace or
+-            # change the user's operation selection; run the same rescue engine.
++            # Restore imaging is independent from Repair methods. Only explicit
++            # Restore actions may invoke the copy-out rescue engine.
+             recovery_here = bool(repair_copy)
+             if not recovery_here and self.job_box.currentData() in {'carequick', 'carefull', 'careresume'}:
+                 from .repair_routes import choose_repair_route
+@@ -2748,14 +2836,18 @@ def launch():
+                 route = choose_repair_route(selected,
+                     self._health_by_device.get((selected or {}).get('identity_hint')),
+                     smartctl_available=bool(smartctl_path()))
+-                if route.action == 'rescue':
+-                    recovery_here = True
++                if route.action == 'filesystem':
++                    self.start_windows_filesystem_repair()
++                    return
+                 if route.action == 'probe':
+                     self.probe_selected_media(force=True)
+                     return
+                 if route.action == 'select':
+                     self.device_box.setFocus()
+                     return
++            if not recovery_here and self.job_box.currentData() == 'winfsrepair':
++                self.start_windows_filesystem_repair()
++                return
+             self._auto_probe_timer.stop()
+             if self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning:
+                 self._auto_probe_proc.kill()  # bounded read-only SMART probe; do not compete with recovery
+@@ -3090,7 +3182,9 @@ def launch():
+             self.proc.finished.connect(self.job_done)
+             self.stop.setText('Stop')
+             self.start.setEnabled(False)
+-            self.stop.setEnabled(True)
++            # Windows CHKDSK /f may be modifying volume metadata. Qt must not
++            # kill that subprocess and leave the on-device filesystem half repaired.
++            self.stop.setEnabled(self._last_job_kind != 'winfsrepair')
+             self.copy_summary_button.setEnabled(False)
+             self.proc.start()
+             self.update_action_state()
+@@ -3327,7 +3421,14 @@ def launch():
+                 self.show_condition(result['condition_assessment'])
+             text=str(result.get('status') or ('Completed' if exit_code==0 else 'Incomplete / attention needed'))
+             self.status.setText(text.replace('_',' ').title())
+-            if user_stop_requested and exit_code!=0:
++            if self._last_job_kind == 'winfsrepair' and exit_code != 0:
++                self.result.setText('Filesystem repair not confirmed')
++                self.explain.setText('The on-device Windows filesystem repair did not finish successfully. '
++                    'Inspect the local command output. Do not treat the disk as repaired or repeat '
++                    'writes until the cause is understood.')
++                self.next_action.setText('If the volume cannot be locked or media reads fail, '
++                    'use an offline environment or a recovery specialist before attempting further writes.')
++            elif user_stop_requested and exit_code!=0:
+                 self.result.setText('Stopped by operator — incomplete scan')
+                 self.explain.setText('The requested stop has ended the child process. '
+                     'Previously observed errors are retained in the log; unscanned ranges remain unknown. '
+@@ -3359,6 +3460,13 @@ def launch():
+                         f'Read-only diagnosis finished.{coverage_txt} '
+                         'This is not Quick Repair and does not rewrite sectors. '
+                         'A completed read is not proof of file integrity.')
++                elif self._last_job_kind == 'winfsrepair':
++                    self.result.setText('Filesystem repair command finished · verify files')
++                    self.explain.setText('Windows CHKDSK /f attempted logical metadata repair only. '
++                        'This does not repair physical sectors or establish SSD health. '
++                        'Review the command output and independently verify the filesystem.')
++                    self.next_action.setText('Check the filesystem again and inspect important files. '
++                        'Recurring errors mean the device should be replaced.')
+                 elif status_code == 'completed_targeted_refresh':
+                     pv=result.get('postverification') or {}
+                     completed=int((result.get('repair') or {}).get('rewritten_bytes') or 0)
+@@ -3512,6 +3620,13 @@ def launch():
+                 event.ignore()
+                 return
+             if self.proc and self.proc.state()!=QProcess.NotRunning:
++                if self._last_job_kind == 'winfsrepair':
++                    QMessageBox.warning(self, 'Windows filesystem repair is running',
++                        'CHKDSK /f may be modifying filesystem metadata. Stopping the GUI or '
++                        'disconnecting the drive could leave it inconsistent. Wait for the '
++                        'Windows command to finish; a timeout is reported as an unknown outcome.')
++                    event.ignore()
++                    return
+                 if self._last_job_kind in ('carefull','carequick','careresume','capacity'):
+                     answer=QMessageBox.question(self,'Physical write may be in progress',
+                         'The active transaction cannot be forcibly interrupted safely. '
+@@ -3528,6 +3643,11 @@ def launch():
+             event.accept()
+ 
+         def stop_job(self):
++            if (self._last_job_kind == 'winfsrepair' and self.proc
++                    and self.proc.state()!=QProcess.NotRunning):
++                QMessageBox.warning(self, 'Filesystem repair cannot be interrupted safely',
++                    'Wait for CHKDSK /f to finish. A forced termination may damage the filesystem.')
++                return
+             if self._batch_running:
+                 self._batch_queue.clear()
+                 self.batch_status.setText('Queued jobs cancelled; current read-only imaging continues to its journal boundary.')
+diff --git a/desktop/driverepair_desktop/release_policy.py b/desktop/driverepair_desktop/release_policy.py
+index 7a7868d..1ff1976 100644
+--- a/desktop/driverepair_desktop/release_policy.py
++++ b/desktop/driverepair_desktop/release_policy.py
+@@ -20,18 +20,20 @@ IN_PLACE_WRITE_COMMANDS = PHYSICAL_WRITE_COMMANDS | {'care-image', 'refresh-imag
+ def block_public_physical_writes(command: str | None, *, execute_optimization: bool = False) -> None:
+     """Deny unsafe distribution commands BEFORE inventory or opening patients."""
+     direct_write = command in IN_PLACE_WRITE_COMMANDS or (
+-        command == 'optimize-volume' and execute_optimization)
++        command == 'optimize-volume' and execute_optimization) or (
++        command == 'repair-windows-filesystem' and execute_optimization)
+     if PUBLIC_BETA_IMAGE_ONLY and direct_write:
+         raise ValueError(
+             'In-place patient writes are unavailable in this public image-first beta. '
+             'Choose a read-only scan or rescue to a new image instead. '
+             'Hardware repair remains restricted to separately qualified engineering builds.'
+         )
+-    if REPAIR_BETA_GUARDED and direct_write and command not in {'care-external','validate-usb-capacity'}:
++    if REPAIR_BETA_GUARDED and direct_write and command not in {'care-external','validate-usb-capacity','repair-windows-filesystem'}:
+         raise ValueError(
+             'Direct media writes are unavailable in the guarded repair beta. '
+-            'Use the guided care-external workflow with SMART evidence, identity '
+-            'confirmation, an exclusive lock and a separate durable journal.'
++            'For physical HDD writes use guided care-external with verified identity, '
++            'exclusive lock and a separate durable journal. On-device Windows '
++            'filesystem metadata repair is a separately guarded operation.'
+         )
+ 
+ 
+diff --git a/desktop/driverepair_desktop/repair_routes.py b/desktop/driverepair_desktop/repair_routes.py
+index 5696a93..8adbec4 100644
+--- a/desktop/driverepair_desktop/repair_routes.py
++++ b/desktop/driverepair_desktop/repair_routes.py
+@@ -1,4 +1,4 @@
+-"""Media-specific primary action for the Qt Repair & Restore workspace.
++"""Media-specific repair action for the Qt Repair Drive workspace.
+ 
+ An active primary action does not imply permission to write to patient media.
+ The guard in ``start_job`` and the CLI remain independent.  SSD and removable
+@@ -17,7 +17,8 @@ class RepairRoute:
+     action: str
+     button: str
+     explanation: str
+-    patient_write_possible: bool = False
++    patient_write_possible: bool = False  # A separate, approved action MAY modify the original device
++    hdd_region_write_candidate: bool = False  # Never inferred from filesystem repair
+ 
+ 
+ def choose_repair_route(device: dict | None, snapshot: dict | None = None,
+@@ -25,31 +26,33 @@ def choose_repair_route(device: dict | None, snapshot: dict | None = None,
+     """Select an *operator action*, never grant write permission.
+ 
+     Physical HDD repair remains separately gated by eligibility, journal,
+-    identity and locks, while non-HDD drives get an actual recovery entry point.
++    identity and locks. Restore/imaging is a SEPARATE workspace.
+     """
+     decision = readiness_next_action(device, 'carequick', snapshot,
+                                      smartctl_available=smartctl_available)
+     if decision['ready']:
+         return RepairRoute('review', 'Review guarded HDD repair',
+                            'A rotational HDD has been identified. Next: approve risk, '
+-                           'select separate-disk journal, recheck identity and exclusive access.', True)
++                           'select separate-disk journal, recheck identity and exclusive access.', True, True)
+     if not device:
+         return RepairRoute('select', 'Select a drive', 'Connect and select the source drive first.')
+     flash = _flash_profile(device, snapshot)
+     if flash:
+         kind = flash.kind.upper()
+-        return RepairRoute('rescue', f'Restore {kind} data to image',
+-                           f'{kind} does not support HDD-style sector rewrites. '
+-                           'Create a recovery image on separate healthy storage right here, then '
+-                           'recover files or repair a supported filesystem on a NEW copy.')
++        return RepairRoute('filesystem', 'Repair filesystem on this drive',
++                           f'{kind} does not support HDD magnetic-sector rewrites. '
++                           'Windows CHKDSK /f can repair supported NTFS, exFAT or FAT '
++                           'filesystem metadata on an identified external volume, with explicit backup/risk consent. '
++                           'This is not a flash-cell repair or guarantee of healthy hardware.', True)
+     if decision['action'] == 'probe':
+         return RepairRoute('probe', 'Identify disk (read-only)',
+                            'Check SMART/SAT and Windows storage properties automatically. '
+                            'This reads only drive identity and health metadata.')
+     if decision['action'] in {'identity', 'setup', 'rescue'}:
+-        return RepairRoute('rescue', 'Set up recovery image',
+-                           'The external disk cannot currently satisfy the physical-write '
+-                           'identity/health checks. Save readable bytes to a separate image; '
+-                           'try another known-compatible SATA/USB bridge for optional HDD maintenance.')
+-    return RepairRoute('rescue', 'Set up recovery image',
+-                       'Preserve readable bytes on separate storage before other maintenance.')
++        return RepairRoute('filesystem', 'Repair filesystem on this drive',
++                           'HDD sector maintenance is blocked by missing device/health evidence. '
++                           'A separate on-device filesystem repair may be available for a mounted '
++                           'Windows NTFS/FAT/exFAT volume after identity checks, backup acknowledgment, '
++                           'and explicit approval. This does NOT fix damaged physical sectors.', True)
++    return RepairRoute('filesystem', 'Inspect filesystem repair options',
++                       'Select a Windows filesystem volume; raw disk repair remains independently restricted.', True)
+diff --git a/desktop/driverepair_desktop/windows_volume_repair.py b/desktop/driverepair_desktop/windows_volume_repair.py
+new file mode 100644
+index 0000000..17214b0
+--- /dev/null
++++ b/desktop/driverepair_desktop/windows_volume_repair.py
+@@ -0,0 +1,148 @@
++"""Explicitly approved Windows *logical filesystem* repair on an external volume.
++
++This is not SSD wear repair or HDD sector remapping.  Never infer a safe target
++from a drive letter alone: independently bind the volume to an inventoried,
++non-system external physical disk immediately before chkdsk can modify it.
++"""
++from __future__ import annotations
++
++import json
++import re
++import subprocess
++import sys
++
++from .devices import (Device, assert_windows_external_write_gate,
++                      select_external_device)
++from .media_refresh import assert_stable_identity
++
++_SUPPORTED = {'NTFS', 'EXFAT', 'FAT', 'FAT32'}
++
++
++def _letter(value: str) -> str:
++    token = str(value).strip().upper().rstrip(':')
++    if not re.fullmatch(r'[D-Z]', token):
++        raise ValueError('Select a non-system Windows volume letter D through Z')
++    return token
++
++
++def parse_volume_binding(raw: bytes, *, device: Device, letter: str) -> dict:
++    """Validate the direct Get-Partition/Get-Disk/Get-Volume relationship.
++
++    No disk/volume/model matching heuristic can substitute for DiskNumber.
++    """
++    try:
++        record = json.loads(raw.decode('utf-8-sig'))
++    except (UnicodeError, json.JSONDecodeError) as exc:
++        raise RuntimeError('Windows returned invalid volume binding evidence') from exc
++    if not isinstance(record, dict):
++        raise RuntimeError('Windows did not return a unique volume binding')
++    number_match = re.fullmatch(r'windows:PhysicalDrive(\d+)', device.id)
++    if not number_match:
++        raise PermissionError('Only a selected Windows physical disk is supported')
++    expected = int(number_match.group(1))
++    try:
++        number = int(record['disk_number'])
++        size = int(record['disk_size'])
++    except (KeyError, ValueError, TypeError) as exc:
++        raise RuntimeError('Windows volume/disk identity evidence incomplete') from exc
++    if number != expected:
++        raise PermissionError('Volume belongs to a DIFFERENT physical disk')
++    if abs(size - device.size_bytes) > 16 * 1024 * 1024:
++        raise PermissionError('Selected volume disk capacity changed')
++    if record.get('is_boot') is not False or record.get('is_system') is not False or record.get('is_offline') is not False:
++        raise PermissionError('System, boot, or offline disk cannot be repaired here')
++    if str(record.get('volume_letter', '')).upper() != letter:
++        raise PermissionError('Volume drive letter changed while being inspected')
++    fs = str(record.get('filesystem', '')).upper()
++    if fs not in _SUPPORTED:
++        raise PermissionError('Only mounted NTFS, exFAT and FAT volumes support this Windows repair')
++    if record.get('volume_health') in ('Unknown', None, ''):
++        # A status of unknown is not a repair permit or a reason to pretend healthy.
++        pass
++    return {'disk_number': number, 'disk_size': size, 'letter': letter,
++            'filesystem': fs, 'health': record.get('volume_health') or 'Unknown',
++            'status': 'volume_bound_readonly', 'media_identity_hint': device.fingerprint[:12]}
++
++
++def inspect_windows_volume(device: Device, letter: str, *, run=None) -> dict:
++    """Read-only Windows metadata. No volume opened for writes."""
++    if sys.platform != 'win32':
++        raise RuntimeError('On-device Windows filesystem repair requires Windows')
++    letter = _letter(letter)
++    assert_windows_external_write_gate(device)
++    script = (
++        "$ErrorActionPreference='Stop';"
++        f"$p=Get-Partition -DriveLetter '{letter}' -ErrorAction Stop;"
++        "if(@($p).Count -ne 1){ throw 'Ambiguous volume partition' };"
++        "$d=Get-Disk -Number ([int]$p.DiskNumber) -ErrorAction Stop;"
++        f"$v=Get-Volume -DriveLetter '{letter}' -ErrorAction Stop;"
++        "[pscustomobject]@{disk_number=[int]$d.Number;disk_size=[long]$d.Size;"
++        "is_boot=[bool]$d.IsBoot;is_system=[bool]$d.IsSystem;is_offline=[bool]$d.IsOffline;"
++        "volume_letter=[string]$v.DriveLetter;filesystem=[string]$v.FileSystem;"
++        "volume_health=[string]$v.HealthStatus} | ConvertTo-Json -Compress"
++    )
++    runner = run if run is not None else subprocess.run
++    try:
++        response = runner(['powershell.exe', '-NoProfile', '-NonInteractive',
++                           '-Command', script], stdout=subprocess.PIPE,
++                          stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
++                          timeout=12, check=False)
++    except (OSError, subprocess.TimeoutExpired) as exc:
++        raise RuntimeError('Windows could not inspect the volume within 12 seconds; no writes attempted') from exc
++    if response.returncode != 0:
++        raise RuntimeError('Windows could not map the volume to the selected disk; no writes attempted')
++    return parse_volume_binding(response.stdout, device=device, letter=letter)
++
++
++def windows_filesystem_maintenance(device_id: str, letter: str, *,
++                                   confirm_identity: str = '',
++                                   execute: bool = False,
++                                   ack_backup: bool = False,
++                                   ack_write: bool = False,
++                                   runner=None) -> dict:
++    """Repair on-device filesystem metadata with CHKDSK /f, never raw media.
++
++    No /r, /b, /x, /spotfix, /forceofflinefix or destructive format. If the
++    volume is busy, CHKDSK must not be auto-scheduled for the next reboot.
++    """
++    if sys.platform != 'win32':
++        raise RuntimeError('Windows-only filesystem repair')
++    selected = select_external_device(device_id)
++    letter = _letter(letter)
++    if selected.fingerprint[:12] != confirm_identity:
++        raise PermissionError('Selected device fingerprint does not match operator approval')
++    bind = inspect_windows_volume(selected, letter)
++    if not execute:
++        return {**bind, 'mode': 'read_only_plan', 'writes_performed': False,
++                'notes': 'Filesystem metadata repair is possible, but may discard damaged file records. '
++                         'This does not repair physical flash, HDD mechanics, or unreadable bytes.'}
++    from .release_policy import PUBLIC_BETA_IMAGE_ONLY
++    if PUBLIC_BETA_IMAGE_ONLY:
++        raise PermissionError('This public beta cannot modify a patient filesystem')
++    if not (ack_backup and ack_write):
++        raise PermissionError('Physical source backup and destructive filesystem repair approvals are mandatory')
++    # A fresh native inventory and a fresh independent write gate before disk I/O.
++    current = select_external_device(device_id)
++    assert_stable_identity(selected, current)
++    assert_windows_external_write_gate(current)
++    check = inspect_windows_volume(current, letter)
++    if check['disk_number'] != bind['disk_number'] or check['filesystem'] != bind['filesystem']:
++        raise PermissionError('Volume identity or filesystem changed during preflight')
++    do_run = runner if runner is not None else subprocess.run
++    try:
++        completed = do_run(['chkdsk.exe', f'{letter}:', '/f'],
++                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
++                           stderr=subprocess.STDOUT, timeout=1800, check=False)
++    except subprocess.TimeoutExpired as exc:
++        return {**check, 'status': 'filesystem_repair_timeout_unknown',
++                'writes_performed': 'unknown', 'notes': 'Timed out. The volume may be inconsistent; '
++                'do not disconnect it while Windows still has pending I/O.'}
++    output = completed.stdout.decode('utf-8', 'replace')[-10000:]
++    # A successful command exit is not independently verified file integrity.
++    status = 'repair_command_completed_unverified' if completed.returncode == 0 else 'repair_incomplete_or_failed'
++    return {**check, 'status': status, 'mode': 'in_place_filesystem_repair',
++            'exit_code': completed.returncode, 'log': output,
++            'writes_performed': 'possible',
++            'notes': 'CHKDSK /f repairs filesystem metadata, not physical media. '
++                     'Run a separate verification and inspect the recovered files. '
++                     'A busy/locked volume must be handled offline, not forced.'}
+diff --git a/desktop/driverepair_desktop/workstation_ui.py b/desktop/driverepair_desktop/workstation_ui.py
+index b1554a4..5289e49 100644
+--- a/desktop/driverepair_desktop/workstation_ui.py
++++ b/desktop/driverepair_desktop/workstation_ui.py
+@@ -25,19 +25,19 @@ WORKSPACES = {
+         'Read-only diagnosis', 'No planned writes to source',
+         'Verify the drive model and serial suffix, then choose a diagnostic check.'),
+     'recover': Workspace(
+-        'Rescue data',
++        'Restore data',
+         'Save readable data onto another healthy disk before attempting invasive work.',
+         'Read-only source', 'Writes only to a new destination image',
+         'Select your external source drive. A destination image is chosen when you start.'),
+     'fix': Workspace(
+-        'Repair & restore',
+-        'Drive-aware recovery, copy-only filesystem repair, and guarded HDD maintenance.',
+-        'Experimental writes', 'May permanently worsen a failing drive',
+-        'Start with a recovery copy. Verified HDDs may qualify for journaled maintenance.'),
++        'Repair drive',
++        'On-device logical filesystem repair and eligible HDD region maintenance. Restore is separate.',
++        'Experimental guarded writes', 'Writes can alter or lose data; confirm the specific method',
++        'Choose a supported repair method; approve any on-device changes explicitly.'),
+ }
+ 
+ IMAGE_OPERATIONS = frozenset({'rescueimage'})
+-EXPERIMENTAL_OPERATIONS = frozenset({'carequick', 'carefull', 'careresume'})
++EXPERIMENTAL_OPERATIONS = frozenset({'carequick', 'carefull', 'careresume', 'winfsrepair'})
+ 
+ # A fast source can emit thousands of progress events per second. Repainting
+ # every one of them starves the UI thread and makes the window feel stuck.
+@@ -88,12 +88,16 @@ def can_start(kind: str | None, *, device_selected: bool, image_exists: bool,
+         return False, 'Connect and select the external source drive to continue.'
+     if kind == 'rescue':
+         return True, 'Ready to choose a NEW destination image on another healthy disk.'
++    if kind == 'winfsrepair':
++        return True, 'Ready to select a mounted Windows volume on this disk and review the write risks.'
+     if kind in EXPERIMENTAL_OPERATIONS:
+         return True, 'Ready for required safety review, fingerprint confirmation and journaling.'
+     return True, 'Ready to start read-only diagnostics.'
+ 
+ 
+ def operation_impact(kind: str | None) -> tuple[str, str]:
++    if kind == 'winfsrepair':
++        return ('ON-DEVICE FILESYSTEM WRITE', 'CHKDSK /f can modify filesystem metadata and lose damaged file records. Backup and explicit approval required; no physical media repair.')
+     if kind == 'capacity':
+         return ('WRITES / RESTORES SOURCE', 'High-risk test. Temporarily writes sampled USB regions and tries to restore originals; full backup required.')
+     if kind in IMAGE_OPERATIONS:
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index 1674ed9..8f9c699 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b29"
++version = "0.3.3b30"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_b25_repair_routes.py b/desktop/tests/test_b25_repair_routes.py
+index f5ccf6f..06a29ec 100644
+--- a/desktop/tests/test_b25_repair_routes.py
++++ b/desktop/tests/test_b25_repair_routes.py
+@@ -12,9 +12,10 @@ class RepairRoutesTests(unittest.TestCase):
+ 
+     def test_ssd_has_usable_safe_next_step_not_hdd_rewrite(self):
+         route = choose_repair_route(self.ssd)
+-        self.assertEqual(route.action, 'rescue')
+-        self.assertIn('SSD', route.button)
+-        self.assertFalse(route.patient_write_possible)
++        self.assertEqual(route.action, 'filesystem')
++        self.assertIn('filesystem', route.button)
++        self.assertTrue(route.patient_write_possible)
++        self.assertFalse(route.hdd_region_write_candidate)
+         self.assertFalse(ui_repair_readiness(self.ssd, 'carequick')[0])
+ 
+     def test_unidentified_hdd_starts_with_readonly_probe(self):
+@@ -26,8 +27,9 @@ class RepairRoutesTests(unittest.TestCase):
+         snapshot = {'source': 'windows_native_unverified', 'status': 'unknown',
+                     'smart_unavailable_reason': 'bridge rejected command'}
+         route = choose_repair_route(self.hdd, snapshot)
+-        self.assertEqual(route.action, 'rescue')
+-        self.assertFalse(route.patient_write_possible)
++        self.assertEqual(route.action, 'filesystem')
++        self.assertTrue(route.patient_write_possible)
++        self.assertFalse(route.hdd_region_write_candidate)
+ 
+     def test_confirmed_hdd_can_request_guarded_review_only(self):
+         snapshot = {'status':'smart_passed_limited', 'reported_medium':'hdd',
+@@ -35,6 +37,7 @@ class RepairRoutesTests(unittest.TestCase):
+         route = choose_repair_route(self.hdd, snapshot)
+         self.assertEqual(route.action, 'review')
+         self.assertTrue(route.patient_write_possible)
++        self.assertTrue(route.hdd_region_write_candidate)
+         self.assertIn('journal', route.explanation)
+ 
+     def test_no_device_cannot_start(self):
+@@ -43,7 +46,7 @@ class RepairRoutesTests(unittest.TestCase):
+     def test_no_health_never_becomes_smart_pass(self):
+         snap = {'source': 'windows_storage_healthstatus',
+                 'status': 'windows_health_limited', 'reported_medium': 'unknown'}
+-        self.assertFalse(choose_repair_route(self.hdd, snap).patient_write_possible)
++        self.assertFalse(choose_repair_route(self.hdd, snap).hdd_region_write_candidate)
+ 
+ if __name__=='__main__':
+     unittest.main()
+diff --git a/desktop/tests/test_b29_recovery_and_hardware.py b/desktop/tests/test_b29_recovery_and_hardware.py
+index 120c855..134a9a0 100644
+--- a/desktop/tests/test_b29_recovery_and_hardware.py
++++ b/desktop/tests/test_b29_recovery_and_hardware.py
+@@ -15,25 +15,26 @@ ROOT=Path(__file__).resolve().parents[2]
+ 
+ 
+ class RepairViewTests(unittest.TestCase):
+-    def test_ssd_restore_is_image_and_never_authorizes_hdd_write(self):
++    def test_ssd_repair_routes_to_logical_filesystem_not_hdd_write(self):
+         drive={'model':'SanDisk SDSSDH3 500G USB Device','bus':'usb',
+                'sector_size':512,'serial_suffix':'***0000','identity_hint':'abc'}
+         route=choose_repair_route(drive)
+-        self.assertEqual(route.action,'rescue')
+-        self.assertIn('image',route.button.lower())
+-        self.assertFalse(route.patient_write_possible)
++        self.assertEqual(route.action,'filesystem')
++        self.assertIn('filesystem',route.button.lower())
++        self.assertNotIn('image',route.button.lower())
++        self.assertTrue(route.patient_write_possible)
++        self.assertFalse(route.hdd_region_write_candidate)
+         self.assertFalse(ui_repair_readiness(drive,'carequick')[0])
+ 
+-    def test_qt_uses_common_rescue_engine_without_switching_workspaces(self):
++    def test_qt_repair_does_not_auto_redirect_to_image_rescue(self):
+         src=(ROOT/'desktop/driverepair_desktop/qtgui.py').read_text(encoding='utf-8')
+         start=src[src.index('        def start_job('):src.index('        def reveal_job_evidence(')]
+-        self.assertIn("kind='rescue' if recovery_here",start)
+-        self.assertIn('recovery_here = True',start)
+-        self.assertIn("'rescue-external'",start)
+-        # Workspace switch may still exist for other entry points; the Start path
+-        # itself must not leave Repair & Restore for image-first recovery.
++        self.assertIn("if route.action == 'filesystem':",start)
++        self.assertIn('self.start_windows_filesystem_repair()',start)
++        self.assertNotIn('recovery_here = True',start)
+         self.assertNotIn("self.select_goal('rescue')",start)
+-        self.assertIn("lambda:self.start_job(repair_copy=True)",src)
++        self.assertIn("'repair-windows-filesystem'",src)
++        self.assertIn('Restore data',src)
+ 
+ 
+ class LinuxEvidenceTests(unittest.TestCase):
+diff --git a/desktop/tests/test_b30_on_device_repair.py b/desktop/tests/test_b30_on_device_repair.py
+new file mode 100644
+index 0000000..5de2d46
+--- /dev/null
++++ b/desktop/tests/test_b30_on_device_repair.py
+@@ -0,0 +1,117 @@
++"""Guardrails for the independent Windows filesystem repair workflow."""
++import argparse
++import json
++import subprocess
++import unittest
++from unittest import mock
++
++from driverepair_desktop import release_policy
++from driverepair_desktop import windows_volume_repair as wr
++from driverepair_desktop.devices import Device
++from driverepair_desktop.repair_routes import choose_repair_route
++from driverepair_desktop.workstation_ui import WORKSPACES, operation_family, can_start
++
++
++class VolumeRepairSafety(unittest.TestCase):
++    def setUp(self):
++        self.device=Device('windows:PhysicalDrive4', r'\\.\PhysicalDrive4',
++                           'SanDisk SDSSDH3 500G USB Device', 500000000000, 512,
++                           'usb', 'USBSERIAL0000')
++        self.binding={
++            'disk_number':4, 'disk_size':500000000000, 'is_boot':False,
++            'is_system':False,'is_offline':False, 'volume_letter':'E',
++            'filesystem':'NTFS','volume_health':'Warning'}
++
++    def parse(self, **change):
++        return wr.parse_volume_binding(json.dumps({**self.binding, **change}).encode(),
++                                       device=self.device,letter='E')
++
++    def test_requires_exact_volume_disk_relation(self):
++        self.assertEqual(self.parse()['filesystem'], 'NTFS')
++        for change in ({'disk_number':3}, {'disk_size':200000},
++                       {'is_boot':True}, {'is_system':True},
++                       {'is_offline':True}, {'volume_letter':'F'},
++                       {'filesystem':'RAW'}, {'filesystem':'ReFS'}):
++            with self.subTest(change=change), self.assertRaises((ValueError, PermissionError, RuntimeError)):
++                self.parse(**change)
++
++    def test_refuses_malformed_json_and_unsafe_drive_letter(self):
++        with self.assertRaises(RuntimeError):
++            wr.parse_volume_binding(b'{invalid',device=self.device,letter='E')
++        for token in ('C','C:', 'E; rm', '/dev/sdb','Z: /f', '1'):
++            with self.subTest(token=token), self.assertRaises(ValueError):
++                wr._letter(token)
++        self.assertEqual(wr._letter('e:'),'E')
++
++    @mock.patch.object(wr.sys,'platform','win32')
++    def test_check_never_calls_chkdsk_and_write_requires_both_acks(self):
++        with (mock.patch.object(wr,'select_external_device',return_value=self.device),
++              mock.patch.object(wr,'inspect_windows_volume',return_value=self.parse()),
++              mock.patch.object(wr,'assert_windows_external_write_gate')):
++            plan=wr.windows_filesystem_maintenance(self.device.id, 'E',
++                confirm_identity=self.device.fingerprint[:12])
++            self.assertEqual(plan['mode'],'read_only_plan')
++            self.assertIs(plan['writes_performed'],False)
++            for a,b in [(False,False),(True,False),(False,True)]:
++                with self.subTest(acks=(a,b)), self.assertRaises(PermissionError):
++                    wr.windows_filesystem_maintenance(self.device.id, 'E',
++                        confirm_identity=self.device.fingerprint[:12],
++                        execute=True,ack_backup=a,ack_write=b)
++
++    @mock.patch.object(wr.sys,'platform','win32')
++    def test_command_uses_exact_chkdsk_f_and_verification_not_claimed(self):
++        fake=subprocess.CompletedProcess(['chkdsk.exe','E:','/f'],0,b'Windows repaired the filesystem')
++        with (mock.patch.object(wr,'select_external_device',return_value=self.device),
++              mock.patch.object(wr,'inspect_windows_volume',return_value=self.parse()),
++              mock.patch.object(wr,'assert_windows_external_write_gate'),
++              mock.patch.object(wr,'assert_stable_identity'),
++              mock.patch.object(release_policy,'PUBLIC_BETA_IMAGE_ONLY',False)):
++            run=mock.Mock(return_value=fake)
++            outcome=wr.windows_filesystem_maintenance(self.device.id,'E',
++                confirm_identity=self.device.fingerprint[:12],execute=True,
++                ack_backup=True,ack_write=True,runner=run)
++        self.assertEqual(outcome['status'],'repair_command_completed_unverified')
++        self.assertEqual(run.call_args.args[0],['chkdsk.exe','E:','/f'])
++        self.assertEqual(run.call_args.kwargs['stdin'],subprocess.DEVNULL)
++        self.assertNotIn('/r',run.call_args.args[0])
++
++    @mock.patch.object(wr.sys,'platform','win32')
++    def test_public_beta_refuses_write_even_if_cli_called_directly(self):
++        with (mock.patch.object(wr,'select_external_device',return_value=self.device),
++              mock.patch.object(wr,'inspect_windows_volume',return_value=self.parse()),
++              mock.patch.object(release_policy,'PUBLIC_BETA_IMAGE_ONLY',True)):
++            with self.assertRaises(PermissionError):
++                wr.windows_filesystem_maintenance(self.device.id,'E',
++                    confirm_identity=self.device.fingerprint[:12],execute=True,
++                    ack_backup=True,ack_write=True)
++
++    def test_release_policy_allows_read_only_plan_never_public_write(self):
++        with mock.patch.object(release_policy,'PUBLIC_BETA_IMAGE_ONLY',True):
++            release_policy.block_public_physical_writes('repair-windows-filesystem',execute_optimization=False)
++            with self.assertRaises(ValueError):
++                release_policy.block_public_physical_writes('repair-windows-filesystem',execute_optimization=True)
++
++    def test_qt_never_terminates_chkdsk_as_readonly_scan(self):
++        from pathlib import Path
++        qt=Path(__file__).resolve().parents[1] / 'driverepair_desktop' / 'qtgui.py'
++        src=qt.read_text(encoding='utf-8')
++        self.assertIn("self.stop.setEnabled(self._last_job_kind != 'winfsrepair')",src)
++        self.assertIn("if self._last_job_kind == 'winfsrepair':",src)
++        self.assertIn('Filesystem repair cannot be interrupted safely',src)
++
++    def test_repair_restore_workspaces_are_distinct_and_ssd_stays_repair(self):
++        self.assertEqual(operation_family('winfsrepair'),'fix')
++        self.assertNotIn('restore',WORKSPACES['fix'].title.lower())
++        self.assertIn('Restore',WORKSPACES['recover'].title)
++        route=choose_repair_route(self.device.public())
++        self.assertEqual(route.action,'filesystem')
++        self.assertNotIn('image',route.button.lower())
++        self.assertTrue(route.patient_write_possible)
++        self.assertFalse(route.hdd_region_write_candidate)
++        self.assertTrue(can_start('winfsrepair',device_selected=True,image_exists=False,
++                                  running=False,public_beta=False)[0])
++        self.assertFalse(can_start('winfsrepair',device_selected=True,image_exists=False,
++                                   running=False,public_beta=True)[0])
++
++if __name__=='__main__':
++    unittest.main()
+diff --git a/docs/B30_REPAIR_VS_RESTORE_QA.md b/docs/B30_REPAIR_VS_RESTORE_QA.md
+new file mode 100644
+index 0000000..2c20050
+--- /dev/null
++++ b/docs/B30_REPAIR_VS_RESTORE_QA.md
+@@ -0,0 +1,35 @@
++# DriveRepair b30 — Repair/Restore Windows qualification
++
++## What changed
++
++**Repair drive** now has a distinct **Repair filesystem on selected drive (Windows)** operation that uses the native Windows `chkdsk.exe X: /f` procedure against a mapped *external* NTFS/FAT/exFAT volume. A model-specific SSD classification does not redirect users to image restoration. The existing **Targeted HDD region repair** remains a separate guarded procedure. **Restore data** contains imaging and salvage.
++
++**Important:** filesystem metadata repair can modify allocation records and potentially lose access to damaged files. It is not SSD NAND repair, HDD reallocation, physical media rejuvenation, or proof that an entire drive is reliable. Run on a disposable or already-backed-up drive first.
++
++## Windows hardware test checklist (sacrificial USB devices only)
++
++1. In **Repair drive**, select a disposable SanDisk SSD/external flash device. Check that the default operation is Windows filesystem repair, **not** image rescue. Do not execute on any irreplaceable data.
++2. Select a volume letter on that disk and confirm the app requires prior backup affirmation plus the exact `REPAIR E:`-style typed phrase. Confirm Cancel makes no write.
++3. On a different physical disk select a volume letter that actually belongs elsewhere; the engine must refuse the mismatched `DiskNumber` before invoking CHKDSK.
++4. Confirm OS boot/system disks, absent volumes, ambiguous disk numbers, RAW/ReFS filesystems, and incorrect identity hint all fail without invoking CHKDSK.
++5. Run a **read-only plan** first using `repair-windows-filesystem --device ... --letter E --confirm-identity ... --json` and verify the reported volume belongs to the selected disk.
++6. If the disposable filesystem has a reproducible *logical* metadata problem and a verified backup exists, authorize `CHKDSK /f` from the guarded beta. Inspect output and separately re-run a read-only check; review files directly and compare known-good checksums. No success claim should be made from the CHKDSK process exit alone.
++7. While CHKDSK runs, check that the GUI reports Windows filesystem repair in progress, does not offer Stop, and does not forcibly terminate it on window close.
++8. Test a busy volume: the app must not force a dismount (`/x`) or schedule repair at restart, and must report that repair was not confirmed.
++9. Test **Targeted HDD region repair** with an independently verified sacrificial rotational disk. It must continue to require identity, external/bus confirmation, suitable media, journal, exclusive access and independent readback. SSD must NEVER enter this path.
++10. Test the read-only public beta: attempting `repair-windows-filesystem --execute ...` must fail **before** touching the disk.
++11. Confirm **Restore data** separately launches imaging/recovery without changing the Repair operation. Confirm both workspaces fit at common display sizes and the media-policy graphics reflect the selected workspace.
++
++## Synthetic validation in this environment
++
++- 577 pytest tests passed; 11 environment-dependent skips.
++- Both public and guarded builds should be re-tested after packaging.
++- No native PySide6 visual clickthrough, real Windows CHKDSK write operation, media remapping, or physical HDD repair was performed here.
++
++## Known limitations
++
++- SMART and device-inventory APIs can still fail behind certain USB bridges. Windows volume/disk binding permits *logical filesystem* repair when verified, but cannot prove physical media health.
++- NTFS/exFAT/FAT mounted Windows volumes only for the new in-place logical repair path; unmounted/RAW volumes need a different offline workflow.
++- CHKDSK does not reconstruct physically unreadable bytes. Disk failure, SSD wear or reallocation remain distinct hardware concerns.
++- A storage-controller hang may leave Windows waiting for I/O; no user-mode utility can guarantee driver cancellation.
++- A bootable recovery ISO with CPU/RAM diagnostics remains a separate hardware and boot-qualification item.

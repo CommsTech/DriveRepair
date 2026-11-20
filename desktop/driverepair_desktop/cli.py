@@ -73,6 +73,15 @@ def parser() -> argparse.ArgumentParser:
     cli = argparse.ArgumentParser(
         prog="driverepair", description="Disk diagnostics, image rescue and file recovery without reboot")
     sub = cli.add_subparsers(dest="command", required=True)
+    winfs = sub.add_parser('repair-windows-filesystem',
+        help='Guarded on-device NTFS/exFAT/FAT logical repair with Windows CHKDSK /f; NOT physical sector repair')
+    winfs.add_argument('--device', required=True)
+    winfs.add_argument('--letter', required=True)
+    winfs.add_argument('--confirm-identity', required=True)
+    winfs.add_argument('--execute', action='store_true')
+    winfs.add_argument('--ack-backed-up', action='store_true')
+    winfs.add_argument('--ack-filesystem-write', action='store_true')
+    winfs.add_argument('--json', action='store_true')
     usb = sub.add_parser('flash-usb', help='DESTRUCTIVE: write a hybrid ISO to verified external USB and read back')
     usb.add_argument('--iso', required=True)
     usb.add_argument('--device', required=True)
@@ -1949,6 +1958,15 @@ def run(argv: list[str] | None = None) -> int:
             print(json.dumps(result,indent=2) if args.json else
                   f"{result['status']} · verified spots {result.get('verified_regions',0)}",flush=True)
             return (0 if result['status'] in {'SAMPLED_REGIONS_VERIFIED','ORIGINAL_RESTORED_VERIFIED'} else 2)
+        if args.command == 'repair-windows-filesystem':
+            from .windows_volume_repair import windows_filesystem_maintenance
+            result = windows_filesystem_maintenance(args.device, args.letter,
+                confirm_identity=args.confirm_identity, execute=args.execute,
+                ack_backup=args.ack_backed_up,
+                ack_write=args.ack_filesystem_write)
+            print(json.dumps(result, indent=2) if args.json else result, flush=True)
+            return 0 if result.get('status') in {
+                'volume_bound_readonly', 'repair_command_completed_unverified'} else 2
         if args.command == 'flash-usb':
             from .usb_flash import flash_usb_iso
             def report(e):

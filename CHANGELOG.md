@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.3b30 — 2026-11-20: On-device repair and Restore workspace separation
+
+- Separated the Qt **Repair drive** and **Restore data** workspaces. SSD/flash repair actions no longer silently image drives or switch to Restore.
+- Added a guarded **on-device Windows filesystem repair** route using CHKDSK `/f` on mounted NTFS, FAT and exFAT volumes. It is deliberately *logical filesystem repair*, not physical NAND rejuvenation or reconstructed unreadable sectors.
+- Windows checks an independent Get-Disk external/non-system gate, re-selects the drive, confirms the volume belongs to the exact selected PhysicalDrive and has supported geometry, and requires backup affirmation and an exact typed repair consent before any write command.
+- Preserved the existing independent, journaled rotational HDD repair engine. No SSD is admitted to that engine, and a filesystem repair does not bypass it.
+- Updated the Qt workflow selector, risk labels, visible primary action and results. Restore remains a separate workflow. Changed the stepper graphics to reflect Diagnose, Restore and Repair separately.
+- Added regression tests (including forbidden interruption of an active CHKDSK subprocess) for altered volume/disk identity, system/boot drive refusal, unsupported filesystems, missing authorizations, public-beta write denial, and actual CHKDSK invocation arguments.
+- No native Windows GUI clickthrough or hardware write/boot qualification performed here. Do not market this as demonstrated physical media recovery.
+
+
 ## 0.3.3b29 — 2026-11-20: Repair workflow and live hardware diagnostics
 
 - Image-first restoration can start **inside Repair & Restore**, without silently switching workspaces.

@@ -12,9 +12,10 @@ class RepairRoutesTests(unittest.TestCase):
 
     def test_ssd_has_usable_safe_next_step_not_hdd_rewrite(self):
         route = choose_repair_route(self.ssd)
-        self.assertEqual(route.action, 'rescue')
-        self.assertIn('SSD', route.button)
-        self.assertFalse(route.patient_write_possible)
+        self.assertEqual(route.action, 'filesystem')
+        self.assertIn('filesystem', route.button)
+        self.assertTrue(route.patient_write_possible)
+        self.assertFalse(route.hdd_region_write_candidate)
         self.assertFalse(ui_repair_readiness(self.ssd, 'carequick')[0])
 
     def test_unidentified_hdd_starts_with_readonly_probe(self):
@@ -26,8 +27,9 @@ class RepairRoutesTests(unittest.TestCase):
         snapshot = {'source': 'windows_native_unverified', 'status': 'unknown',
                     'smart_unavailable_reason': 'bridge rejected command'}
         route = choose_repair_route(self.hdd, snapshot)
-        self.assertEqual(route.action, 'rescue')
-        self.assertFalse(route.patient_write_possible)
+        self.assertEqual(route.action, 'filesystem')
+        self.assertTrue(route.patient_write_possible)
+        self.assertFalse(route.hdd_region_write_candidate)
 
     def test_confirmed_hdd_can_request_guarded_review_only(self):
         snapshot = {'status':'smart_passed_limited', 'reported_medium':'hdd',
@@ -35,6 +37,7 @@ class RepairRoutesTests(unittest.TestCase):
         route = choose_repair_route(self.hdd, snapshot)
         self.assertEqual(route.action, 'review')
         self.assertTrue(route.patient_write_possible)
+        self.assertTrue(route.hdd_region_write_candidate)
         self.assertIn('journal', route.explanation)
 
     def test_no_device_cannot_start(self):
@@ -43,7 +46,7 @@ class RepairRoutesTests(unittest.TestCase):
     def test_no_health_never_becomes_smart_pass(self):
         snap = {'source': 'windows_storage_healthstatus',
                 'status': 'windows_health_limited', 'reported_medium': 'unknown'}
-        self.assertFalse(choose_repair_route(self.hdd, snap).patient_write_possible)
+        self.assertFalse(choose_repair_route(self.hdd, snap).hdd_region_write_candidate)
 
 if __name__=='__main__':
     unittest.main()
