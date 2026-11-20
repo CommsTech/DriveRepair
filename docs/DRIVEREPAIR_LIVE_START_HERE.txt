@@ -1,0 +1,36 @@
+DRIVE REPAIR  |  RECOVERY WORKSTATION  |  UNVERIFIED LIVE BUILD
+==============================================================
+
+Which boot option should I select?
+  1. Start recovery workstation (recommended): boot Linux + XFCE desktop.
+     DriveRepair should open automatically once the desktop session starts.
+  2. Compatibility graphics: try if boot stalls or you see a black screen.
+     This uses nomodeset and may reduce graphics performance.
+  3. Troubleshooting text console: use only for inspecting boot failures.
+     You will not see the DriveRepair graphical desktop.
+
+Login:
+  The live ISO configures user "driverepair" for LightDM autologin.
+  If a login prompt appears, try username "driverepair", password "live".
+  These are disposable LIVE-session credentials; never rely on this
+  environment for personal authentication or confidential key storage.
+  Autologin and credentials MUST be confirmed by a physical boot test.
+
+Once you see XFCE:
+  Open the DriveRepair application if it does not start automatically.
+  Start with READ-ONLY diagnosis and imaging to a separate healthy drive.
+  Do not choose an internal system disk as the output destination.
+  Do not mount/reformat a patient disk to fix a boot issue.
+
+If the laptop fails to boot:
+  - Record the last visible message, EFI/Legacy mode, and Secure Boot setting.
+  - Try Compatibility graphics; do not assume the graphics problem is a disk error.
+  - The current unsigned/unverified ISO is NOT certified to boot with
+    UEFI Secure Boot. Changing firmware security settings carries risk;
+    restore original settings afterward.
+  - Log whether the Live menu appears, Linux kernel loads, login appears,
+    desktop loads, and DriveRepair starts. These are separate checks.
+
+WARNING: Boot-media structure checks are NOT boot tests. The live system
+has not been validated on this computer until both boot and read-only
+storage enumeration have been exercised in a disposable environment.

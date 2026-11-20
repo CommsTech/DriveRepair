@@ -2,7 +2,7 @@
 
 **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
 
-> **Release status:** `0.3.3b34` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+> **Release status:** `0.3.3b35` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
 
 **Drive models:** The bundled [offline model catalog](docs/DRIVE_MODEL_CATALOG.md) currently documents four vendor-backed model entries (three Seagate SMR models and one SanDisk SSD family). It guides scanning; it is not a comprehensive database or authorization to rewrite a disk.
 
@@ -11,6 +11,17 @@ The Qt workstation now selects an **automatic, bounded HDD investigation level**
 [Get started](#get-started) · [Choose a workflow](#choose-a-workflow) · [Recovery USB](#create-a-recovery-usb) · [Command line](#command-line-examples) · [Troubleshooting](#troubleshooting) · [Changelog](CHANGELOG.md) · [Support](https://github.com/sponsors/CommsTech)
 
 ## Repair a drive versus Restore data
+
+**Repair drive** now preserves the selected HDD technique even if the media is
+ineligible; the diagnostic next-step dialog no longer silently starts CHKDSK.
+A button previously labeled "HDD method unavailable" despite a qualified HDD
+now correctly says "Review guarded HDD maintenance". Physical writes are still
+blocked without independently verified HDD identity, supported health evidence
+(or separately qualified unknown-health native evidence), external-disk identity,
+volume locks, and a durable separate-drive journal. The SMART probe now uses
+smartmontools-documented `/dev/pdN` paths for Windows `PhysicalDriveN`; raw
+Win32 I/O still uses its original physical-device path. smartctl exit status bit 0
+means **invalid smartctl command line**, not evidence that the dock hides SMART.
 
 **Repair drive** performs supported *on-device* operations. It no longer sends
 SSD owners to imaging just because magnetic-disk rewriting does not apply.
@@ -49,6 +60,19 @@ unreadable/unprocessed areas. This is **not** filesystem-aware free-space
 analysis or a compressed container, and copying the sparse image to another
 filesystem may expand it. Disable this option for the simplest regular-file
 workflow; neither mode proves forensic chain of custody.
+
+**Recovery USB boot choices (next build, still unverified):** The rebuilt ISO
+provides a **DriveRepair - Start recovery workstation** option (select this
+first), **Compatibility graphics** (`nomodeset` for black-screen/frozen display
+symptoms), and a **Troubleshooting text console** for diagnosis. The live XFCE
+session is configured to autologin as `driverepair` and launch the DriveRepair
+Qt workstation automatically. If a login prompt is shown, the expected Debian
+Live fallback is **username `driverepair`, password `live`** (must be tested on
+actual hardware). There is no hard-drive installer menu. The new build checks
+that the ISO really contains the branded GRUB config, not just Debian's default
+menu. Neither firmware compatibility nor Secure Boot is certified; see
+[`docs/BOOT_RECOVERY.md`](docs/BOOT_RECOVERY.md) and
+[`docs/DRIVEREPAIR_LIVE_START_HERE.txt`](docs/DRIVEREPAIR_LIVE_START_HERE.txt).
 
 **Recovery USB creation:** Debian WSL builds now show an indeterminate live
 progress window, keep a complete `DriveRepair-iso-build.log` in the chosen

@@ -53,7 +53,9 @@ def export_build_kit(repo: str | Path | None, output: str | Path) -> dict:
                 members = [root / 'scripts' / 'build_live_iso.sh',
                     root / 'scripts' / 'check_live_iso.sh',
                     root / 'scripts' / 'driverepair-hardware-diagnostics.sh',
-                    root / 'docs' / 'BOOT_RECOVERY.md', root / 'README.md']
+                    root / 'scripts' / 'driverepair-grub.cfg',
+                    root / 'docs' / 'BOOT_RECOVERY.md',
+                    root / 'docs' / 'DRIVEREPAIR_LIVE_START_HERE.txt', root / 'README.md']
                 members.extend(sorted((root / 'desktop' / 'driverepair_desktop').glob('*.py')))
                 members.extend(sorted((root / 'desktop' / 'driverepair_desktop' / 'filesystems').glob('*.py')))
                 for path in members:
@@ -63,12 +65,12 @@ def export_build_kit(repo: str | Path | None, output: str | Path) -> dict:
                 # importlib.resources works with Python zipapps and installed
                 # package trees; no temp extraction or network connection.
                 pkg = resources.files('driverepair_desktop')
-                for name in ('build_live_iso.sh','check_live_iso.sh','driverepair-hardware-diagnostics.sh','BOOT_RECOVERY.md','README.md'):
+                for name in ('build_live_iso.sh','check_live_iso.sh','driverepair-hardware-diagnostics.sh','driverepair-grub.cfg','BOOT_RECOVERY.md','DRIVEREPAIR_LIVE_START_HERE.txt','README.md'):
                     member = pkg.joinpath('boot_resources',name)
                     if not member.is_file():
                         raise ValueError('Boot-media assets missing from application package')
-                    dst = ('scripts/' if name.endswith('.sh') else
-                           'docs/' if name == 'BOOT_RECOVERY.md' else '') + name
+                    dst = ('scripts/' if name.endswith(('.sh','.cfg')) else
+                           'docs/' if name in ('BOOT_RECOVERY.md','DRIVEREPAIR_LIVE_START_HERE.txt') else '') + name
                     z.writestr('driverepair/' + dst, member.read_bytes())
                     count += 1
                 for folder in ('','filesystems'):

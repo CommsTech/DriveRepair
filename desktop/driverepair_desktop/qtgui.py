@@ -1386,10 +1386,14 @@ def launch():
                 'the engine never treats an unverified model or healthy-looking '
                 'Windows status as permission to rewrite a patient.')
             info.addButton('Understood',QMessageBox.AcceptRole)
-            rescue=info.addButton('Rescue data',QMessageBox.ActionRole)
+            rescue=info.addButton('Rescue data to separate image',QMessageBox.ActionRole)
+            filesystem=(info.addButton('Review Windows filesystem repair',QMessageBox.ActionRole)
+                        if sys.platform=='win32' and not PUBLIC_BETA_IMAGE_ONLY else None)
             info.exec()
             if info.clickedButton()==rescue:
                 self.start_job(repair_copy=True)
+            elif filesystem is not None and info.clickedButton()==filesystem:
+                self.start_windows_filesystem_repair()
 
         def resolve_repair_next(self):
             if self.proc and self.proc.state()!=QProcess.NotRunning:
@@ -1405,12 +1409,11 @@ def launch():
             elif decision['action']=='setup':
                 self.enable_smart_tools()
             elif decision['action']=='rescue':
-                # Repair remains a distinct workspace. Offer only eligible
-                # on-device filesystem repair; never silently start imaging.
-                if sys.platform=='win32':
-                    self.start_windows_filesystem_repair()
-                else:
-                    self.explain_repair_eligibility()
+                # A failed HDD eligibility check MUST NOT silently turn an
+                # explicitly selected surface-maintenance operation into CHKDSK.
+                # Filesystem metadata repair is a separate potentially
+                # destructive operation, requiring a new operator selection.
+                self.explain_repair_eligibility()
             elif decision['action']=='select':
                 self.device_box.setFocus()
             else:
@@ -1572,20 +1575,9 @@ def launch():
                 if self.job_box.itemData(i) == goal:
                     self.job_box.setCurrentIndex(i)
                     break
-            # SSD/flash cannot use the HDD rewrite workflow; the default
-            # Repair method becomes an explicit on-device filesystem operation.
-            if family == 'fix' and sys.platform == 'win32':
-                d=self.selected() or {}
-                try:
-                    from .repair_readiness import _flash_profile
-                    snap=self._health_by_device.get(d.get('identity_hint'))
-                    if _flash_profile(d, snap) is not None:
-                        index=next((i for i in range(self.job_box.count())
-                            if self.job_box.itemData(i)=='winfsrepair'), -1)
-                        if index >= 0:
-                            self.job_box.setCurrentIndex(index)
-                except (ValueError,TypeError):
-                    pass
+            # Preserve the operator's explicitly selected maintenance method.
+            # SSD/flash is still blocked from magnetic HDD writes by independent
+            # readiness/CLI guards; NEVER silently switch that intent to CHKDSK.
             self.job_box.blockSignals(False)
             self.media_pipeline.set_workflow(family)
             self.smart_check_note.setVisible(family=='fix')
@@ -2153,9 +2145,10 @@ def launch():
                 route=choose_repair_route(device,
                     self._health_by_device.get((device or {}).get('identity_hint')),
                     smartctl_available=bool(smartctl_path()))
-                self.start.setText('Review HDD maintenance' if route.action == 'repair' else
+                self.start.setText('Review guarded HDD maintenance' if route.action == 'review' else
                     'Identify physical HDD' if route.action == 'probe' else
-                    'HDD method unavailable')
+                    'Select a drive' if route.action == 'select' else
+                    'HDD repair blocked - see reason')
                 if (not running and not PUBLIC_BETA_IMAGE_ONLY and
                     route.action in {'probe'} and
                     not (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning)):

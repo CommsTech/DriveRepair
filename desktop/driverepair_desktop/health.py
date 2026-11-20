@@ -29,6 +29,23 @@ SMART_LOG_ENTRY_LIMIT = 5
 PROBE_BUDGET_SECONDS = 18.0
 
 
+def smartctl_device_path(device: Device) -> str:
+    """Use smartmontools' documented Windows path syntax for a *selected* disk.
+
+    Raw Win32 I/O uses \\.\\PhysicalDriveN, but smartctl's Windows backend
+    documents /dev/pdN. These must not be confused or reused as a write path.
+    Validate agreement with selected physical-drive ID before SMART probing.
+    """
+    match = re.fullmatch(r'windows:PhysicalDrive(\d+)', str(getattr(device, 'id', '')))
+    if not match:
+        return device.path
+    number = int(match.group(1))
+    expected = r'\\.\PhysicalDrive' + str(number)
+    if number > 255 or device.path.casefold() != expected.casefold():
+        raise RuntimeError('SMART device identity/path mismatch; select the external disk again')
+    return f'/dev/pd{number}'
+
+
 def _decode_json(proc) -> dict | None:
     try:
         parsed = json.loads(proc.stdout.decode('utf-8-sig'))
@@ -56,9 +73,13 @@ def _smartctl_low_bits_message(returncode: int) -> str:
     if bits & 0x04:
         meanings.append('SMART or ATA identity command failed')
     detail = '; '.join(meanings) if meanings else 'unspecified low-status failure'
-    return (f'SMART probe failed (status bits {bits}: {detail}); health unknown. '
-            'For USB enclosures this often means the bridge does not expose ATA SMART; '
-            'try a different cable/dock or direct SATA for HDD maintenance.')
+    guidance = ('smartctl rejected the command line or device type. Check the exact installed '
+                'smartctl version, executable, command arguments and supported -d modes; '
+                'this is NOT evidence that the USB bridge lacks SMART.'
+                if bits & 0x01 else
+                'USB/SAT passthrough or access may be unavailable. Check administrator rights, '
+                'the USB dock/cable and the supported smartctl device type before retrying.')
+    return f'SMART probe failed (status bits {bits}: {detail}); health unknown. {guidance}'
 
 
 def _smart_logs(run: Callable[..., subprocess.CompletedProcess], executable: str,
@@ -126,7 +147,8 @@ def health_snapshot(device: Device,
     executable = smartctl_path()
     if not executable:
         raise RuntimeError('SMART support requires smartctl (smartmontools), not installed')
-    cmd = [executable, '--json', '--all', device.path]
+    query_path = smartctl_device_path(device)
+    cmd = [executable, '--json', '--all', query_path]
     deadline = time.monotonic() + PROBE_BUDGET_SECONDS
     try:
         proc = run(cmd, capture_output=True, timeout=12, check=False)
@@ -175,7 +197,7 @@ def health_snapshot(device: Device,
                 break
             extra_probes += 1
             try:
-                sat = run([cmd[0], '--json', '--all', '-d', device_type, device.path],
+                sat = run([cmd[0], '--json', '--all', '-d', device_type, query_path],
                           capture_output=True,
                           timeout=min(EXTRA_PROBE_TIMEOUT_SECONDS, remaining),
                           check=False)
@@ -249,7 +271,7 @@ def health_snapshot(device: Device,
         smart_logs = {'available': False,
                       'reason': 'skipped: NVMe health log already reports error counters'}
     else:
-        smart_logs = _smart_logs(run, cmd[0], device.path, deadline,
+        smart_logs = _smart_logs(run, cmd[0], query_path, deadline,
                                  device_type=accepted_device_type)
     result = {
         'status': status,

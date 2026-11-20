@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.3b35 — 2026-11-20: Live session/Windows repair routing and archive verification UX (experimental)
+
+- Added DriveRepair-branded GRUB menu for normal graphical live boot, `nomodeset` compatibility graphics, and text-only troubleshooting, using live-build's resolved kernel/initrd paths. No OS installer entry. This is a RECIPE ONLY until a rebuilt ISO passes physical BIOS/UEFI and HP tests.
+- Configured live user `driverepair`, LightDM graphical autologin and Xfce Qt app autostart; documented expected Debian Live fallback credentials (`driverepair` / `live`), pending boot verification.
+- Tightened ISO structural qualification to check the actual emitted GRUB menu and reject unresolved template tokens or unbranded output. Updated both source and portable-build kit assets.
+- Fixed Qt action label error for approved HDD review (`review` route had been checked against the nonexistent `repair` route).
+- Removed implicit on-device CHKDSK redirection for blocked HDD techniques, including silent Windows SSD-first selection, so operator intent remains explicit. No raw-write gate was weakened.
+- Corrected Windows SMART paths to smartmontools `/dev/pdN` aliases (instead of raw Win32 paths), with identity/path cross-checks, and updated all primary, SAT and SMART-log probes. This is a suspected cause of status-bit-1 failures but requires a Windows dock retest.
+- Corrected SMART parse-error guidance: exit status bit 0 is smartctl CLI/device-type rejection, not proof of bridge hardware hiding SMART.
+- Added determinate file-count progress for cold-storage baseline hashing, with fail-closed archive-list drift detection; no image or source write.
+- All live boot, hardware write and Secure Boot capabilities remain unverified on target hardware.
+
 ## 0.3.3b34 — 2026-11-20: Cold-storage archive fixity and ISO-host prerequisite
 
 - Added read-only, file-level SHA-256 baseline and periodic verification of removable photo/file archives without creating disk images. Detects changed, missing, newly added, and unreadable items. Baselines are never overwritten; output must be outside the archive.
