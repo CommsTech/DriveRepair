@@ -1334,7 +1334,12 @@ def launch():
             elif decision['action']=='setup':
                 self.enable_smart_tools()
             elif decision['action']=='rescue':
-                self.start_job(repair_copy=True)
+                # Repair remains a distinct workspace. Offer only eligible
+                # on-device filesystem repair; never silently start imaging.
+                if sys.platform=='win32':
+                    self.start_windows_filesystem_repair()
+                else:
+                    self.explain_repair_eligibility()
             elif decision['action']=='select':
                 self.device_box.setFocus()
             else:
@@ -1381,6 +1386,23 @@ def launch():
             except (ValueError,TypeError):
                 self.profile_note.setText('Unverified drive geometry — read-only rescue recommended.')
                 self.media_pipeline.set_policy('unknown',False)
+            # A change of source device must also update the actual operation.
+            # Otherwise a newly selected SSD still displays 'Full scan + HDD
+            # repair' while the Start button silently routes to CHKDSK.
+            if sys.platform=='win32' and operation_family(self.job_box.currentData())=='fix':
+                try:
+                    from .repair_readiness import _flash_profile
+                    flash=_flash_profile(d,snap)
+                except (ValueError,TypeError):
+                    flash=None
+                if flash is not None and self.job_box.currentData()!='winfsrepair':
+                    index=next((i for i in range(self.job_box.count())
+                                if self.job_box.itemData(i)=='winfsrepair'),-1)
+                    if index>=0:
+                        self.job_box.blockSignals(True)
+                        self.job_box.setCurrentIndex(index)
+                        self.job_box.blockSignals(False)
+                        self.choice_changed()
             if (not snap and key not in self._auto_probe_attempted
                     and not (self.proc and self.proc.state()!=QProcess.NotRunning)):
                 self._auto_probe_timer.start()
@@ -1736,6 +1758,25 @@ def launch():
                 self.dest.setText(path)
         def choice_changed(self):
             kind=self.job_box.currentData()
+            # A manual selection must not leave a known SSD/flash device labeled
+            # as if a magnetic HDD surface refresh were an available method.
+            if (sys.platform=='win32' and kind in {'carequick','carefull','careresume'}
+                    and operation_family(kind)=='fix'):
+                selected=self.selected() or {}
+                try:
+                    from .repair_readiness import _flash_profile
+                    flash=_flash_profile(selected,
+                        self._health_by_device.get(selected.get('identity_hint')))
+                except (ValueError,TypeError):
+                    flash=None
+                if flash is not None:
+                    index=next((i for i in range(self.job_box.count())
+                                if self.job_box.itemData(i)=='winfsrepair'),-1)
+                    if index>=0:
+                        self.job_box.blockSignals(True)
+                        self.job_box.setCurrentIndex(index)
+                        self.job_box.blockSignals(False)
+                        kind='winfsrepair'
             is_image=kind=='rescueimage'
             self.dest.setVisible(is_image)
             self.browse.setVisible(is_image)
@@ -1831,7 +1872,10 @@ def launch():
 
         def update_action_state(self, *_):
             kind=self.job_box.currentData()
-            running=self._batch_running or bool(self.proc and self.proc.state()!=QProcess.NotRunning)
+            running=(self._batch_running or
+                bool(self.proc and self.proc.state()!=QProcess.NotRunning) or
+                bool(getattr(self,'_volume_lookup',None) and
+                     self._volume_lookup.state()!=QProcess.NotRunning))
             enabled, advice=can_start(kind, device_selected=bool(self.selected()),
                 image_exists=bool(self.dest.text().strip() and Path(self.dest.text().strip()).is_file()),
                 running=running, public_beta=PUBLIC_BETA_IMAGE_ONLY)
@@ -2778,52 +2822,113 @@ def launch():
             QMessageBox.information(self,'Drive details (read-only)',
                 drive_inspection_text(identified,report,error=err.strip()[:220])[:4000])
         def start_windows_filesystem_repair(self):
-            """Windows CHKDSK /f on a selected external volume, not image rescue.
+            """Discover selectable Windows volumes without freezing the Qt event loop.
 
-            The CLI independently checks current Get-Disk and Get-Partition
-            binding and requires fresh identity and explicit authorizations.
+            Both discovery and the selected-volume CHKDSK are independently
+            preflighted in isolated CLI workers; neither permits arbitrary
+            paths, another disk, or a hidden patient write.
             """
             if sys.platform != 'win32':
                 QMessageBox.information(self, 'Windows volume repair',
-                    'This logical filesystem repair requires Windows. HDD region maintenance is separate.')
+                    'On-device Windows filesystem repair requires Windows.')
                 return
             if PUBLIC_BETA_IMAGE_ONLY:
                 QMessageBox.warning(self, 'Public beta',
-                    'On-device filesystem changes are unavailable in the read-only public build.')
+                    'The read-only public build cannot change a patient filesystem.')
                 return
             d=self.selected()
             if not d:
-                QMessageBox.information(self, 'Select a drive', 'Select the external drive to repair.')
+                QMessageBox.information(self, 'Select a drive',
+                    'Select an external drive before choosing its filesystem.')
                 return
-            if self.proc and self.proc.state()!=QProcess.NotRunning:
+            if (self.proc and self.proc.state()!=QProcess.NotRunning) or (
+                    getattr(self,'_volume_lookup',None) and
+                    self._volume_lookup.state()!=QProcess.NotRunning):
+                return
+            self._volume_lookup_device=dict(d)
+            child=QProcess(self)
+            self._volume_lookup=child
+            child.setProgram(cli_prefix()[0])
+            child.setArguments(cli_prefix()[1:]+['list-repair-volumes',
+                '--device',d['id'],'--confirm-identity',d['identity_hint'],'--json'])
+            child.finished.connect(lambda code,_status,worker=child:self.repair_volumes_ready(worker,code))
+            child.errorOccurred.connect(lambda error:self.note_log('Windows repair volume picker process error: '+str(error)))
+            self.start.setEnabled(False)
+            self.ready_note.setText('Locating eligible filesystem volumes on the selected external disk (read-only)…')
+            child.start()
+            def deadline():
+                if self._volume_lookup is child and child.state()!=QProcess.NotRunning:
+                    child.kill()
+                    self.note_log('Windows volume lookup exceeded 17 seconds; no repair started.')
+            QTimer.singleShot(17000,deadline)
+
+        def repair_volumes_ready(self, child, exit_code):
+            if self._volume_lookup is not child:
+                return
+            self._volume_lookup=None
+            d=getattr(self,'_volume_lookup_device',{})
+            self.update_action_state()
+            if not self.selected() or d.get('identity_hint')!=self.selected().get('identity_hint'):
+                QMessageBox.warning(self,'Disk selection changed',
+                    'The selected external disk changed during preflight. No repair started.')
+                return
+            stdout=bytes(child.readAllStandardOutput()).decode('utf-8','replace')
+            stderr=bytes(child.readAllStandardError()).decode('utf-8','replace')
+            if exit_code!=0:
+                self.note_log('Read-only volume lookup failed: '+stderr[-1600:])
+                QMessageBox.warning(self,'Cannot identify a repairable volume',
+                    'Windows did not supply a verified filesystem-to-disk mapping. '
+                    'Open Disk Management to check whether the selected disk has a mounted '
+                    'NTFS, FAT or exFAT volume. Raw/unformatted partitions cannot be repaired '
+                    'with CHKDSK. No writes started.\n\n'+stderr[-450:])
+                return
+            try:
+                volumes=json.loads(stdout)
+                if not isinstance(volumes,list) or not all(isinstance(v,dict) for v in volumes):
+                    raise ValueError('Expected volume list')
+                if any(not re.fullmatch(r'[D-Z]',str(v.get('letter',''))) for v in volumes):
+                    raise ValueError('Invalid drive letter')
+            except (ValueError,TypeError):
+                QMessageBox.warning(self,'Invalid Windows volume result',
+                    'Windows returned unrecognized metadata. No repair started.')
+                return
+            if not volumes:
+                QMessageBox.information(self,'No supported mounted filesystem',
+                    'No mounted NTFS, FAT or exFAT partition was found on the selected external '
+                    'disk. A device-level read scan is not the same as filesystem corruption. '
+                    'If the disk is RAW, unallocated, or has no drive letter, CHKDSK /f '
+                    'cannot repair it. No writes started.')
                 return
             from PySide6.QtWidgets import QInputDialog
-            letter, ok=QInputDialog.getText(self, 'Repair a Windows filesystem',
-                f"Selected physical disk: {d.get('model')} ({d.get('identity_hint')})\n\n"
-                'Enter the Windows volume letter ON THIS DISK (for example, E).\n'
-                'DriveRepair will independently verify the volume-to-disk binding:')
+            choices=[f"{v['letter']}:  ·  {v['filesystem']}  ·  Health: {v.get('health','Unknown')}" for v in volumes]
+            selected,ok=QInputDialog.getItem(self,'Choose the filesystem to repair',
+                f"Selected external disk: {d.get('model')} ({d.get('identity_hint')})\n"
+                'Only partitions independently associated with THIS disk are shown.\n'
+                'Choose the volume whose filesystem requires repair:', choices,0,False)
             if not ok:
                 return
-            letter=letter.strip().upper().rstrip(':')
-            if not re.fullmatch(r'[D-Z]', letter):
-                QMessageBox.warning(self, 'Invalid Windows volume',
-                    'Enter one external volume letter from D through Z. No disk was changed.')
+            try:
+                index=choices.index(selected)
+                letter=str(volumes[index]['letter']).upper()
+            except (ValueError,IndexError,KeyError):
                 return
             backup=QMessageBox.question(self,'Backup and data-loss risk',
-                f'Windows CHKDSK /f on {letter}: will MODIFY filesystem metadata on the original drive.\n\n'
-                'It may discard orphaned/damaged file records or worsen data loss on unstable media. '
-                'This is not physical NAND repair, magnetic sector remapping, or deleted-file recovery.\n\n'
-                'Have you already made an independent backup of everything important on this volume?',
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if backup != QMessageBox.Yes:
+                f'Windows CHKDSK /f on {letter}: MODIFIES the source filesystem.\n\n'
+                'It may discard damaged metadata or worsen data loss on unstable media. '
+                'It cannot repair NAND wear or physically damaged HDD sectors.\n\n'
+                'Have you independently backed up everything important on this volume?',
+                QMessageBox.Yes | QMessageBox.No,QMessageBox.No)
+            if backup!=QMessageBox.Yes:
                 return
-            typed, ok=QInputDialog.getText(self,'Authorize on-device filesystem repair',
-                f'Confirm the disk identity {d["identity_hint"]}, volume {letter}:, and risk of data loss.\n'
-                f'Type exactly REPAIR {letter}: to authorize CHKDSK /f:')
-            if not ok or typed.strip().upper() != f'REPAIR {letter}:':
-                QMessageBox.information(self,'Not authorized','No filesystem repair started.')
+            typed,ok=QInputDialog.getText(self,'Authorize external filesystem repair',
+                f"Disk: {d.get('model')} · {d.get('identity_hint')}\n"
+                f'Type exactly REPAIR {letter}: to authorize Windows CHKDSK /f:')
+            if not ok or typed.strip().upper()!=f'REPAIR {letter}:':
+                QMessageBox.information(self,'Not authorized',
+                    'The authorization did not match. No repair started.')
                 return
-            # Native worker enforces mapping and source policy; no UI-only permit.
+            # The modifying worker independently repeats volume binding,
+            # system/boot exclusion, identity, and external-disk checks.
             self._last_good_device=d
             self._last_job_kind='winfsrepair'
             self._job_args=['repair-windows-filesystem','--device',d['id'],

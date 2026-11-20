@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.3b32 — 2026-11-20: Repair operation selection and Windows volume binding
+
+- Corrected the Qt repair-method selection when switching drives: a recognized SSD/flash source now displays the on-device Windows filesystem method instead of leaving an HDD targeted/full-scan rewrite selected while silently changing the Start action.
+- Added an asynchronous read-only CLI volume lookup (`list-repair-volumes`), returning only NTFS/FAT/exFAT volumes whose partition DiskNumber, size, and non-system state match the selected external PhysicalDrive. A missing, RAW, or unmounted filesystem yields an explicit explanation, not a fake physical repair.
+- The modifying CHKDSK `/f` worker still independently repeats device identity, external/non-system and exact partition mapping checks, requests backup and typed write consent, and never assumes that a successful command fixes underlying NAND or sectors.
+- Repair workspace no longer uses the contextual assistance control to silently start image restoration.
+- Added synthetic tests for wrong-disk binding, changing identity, duplicated or invalid volumes, Windows enumeration timeouts, and the Qt/CLI selection contract.
+- **Qualification:** synthetic Python tests passed. Native Windows Qt, successful on-device filesystem maintenance, and physical HDD journaled repair are still unverified. The uploaded debug logs only prove read-only scans.
+
+
 ## 0.3.3b31 — 2026-11-20: Windows repair-lock lifetime and Debian WSL startup fixes
 
 - **Windows raw-disk access:** after obtaining and retaining exclusive locks on every discoverable patient filesystem volume, open the physical disk using Win32 `FILE_SHARE_READ | FILE_SHARE_WRITE` rather than unnecessarily requesting an incompatible `share=0` handle. A successfully opened raw handle is not itself proof of exclusive disk access; filesystem-volume locks, external/system checks, independent identity verification, separate journal, write consent and readback remain mandatory.

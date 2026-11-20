@@ -64,6 +64,79 @@ def parse_volume_binding(raw: bytes, *, device: Device, letter: str) -> dict:
             'status': 'volume_bound_readonly', 'media_identity_hint': device.fingerprint[:12]}
 
 
+def parse_repairable_volumes(raw: bytes, *, device: Device) -> list[dict]:
+    """Read-only, exact PhysicalDrive-to-partition bindings for a repair picker.
+
+    The picker is NOT an authorization. The modifying CLI re-enumerates the
+    selected disk and rechecks the exact volume immediately before CHKDSK.
+    """
+    try:
+        records = json.loads(raw.decode('utf-8-sig'))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError('Windows did not return usable partition information') from exc
+    if not isinstance(records, list):
+        raise RuntimeError('Windows did not return a partition list')
+    matched: list[dict] = []
+    letters: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            raise RuntimeError('Ambiguous Windows partition information')
+        letter = str(record.get('volume_letter') or '').strip().upper()
+        if not re.fullmatch(r'[D-Z]', letter):
+            continue
+        if letter in letters:
+            raise RuntimeError('Windows listed the same volume more than once')
+        letters.add(letter)
+        if str(record.get('filesystem') or '').upper() not in _SUPPORTED:
+            continue
+        # Every candidate is independently validated, including disk number,
+        # disk capacity, OS boot/system flags, and the volume-to-disk binding.
+        matched.append(parse_volume_binding(json.dumps(record).encode('utf-8'),
+                                            device=device, letter=letter))
+    return sorted(matched, key=lambda record: record['letter'])
+
+
+def inspect_windows_repairable_volumes(device: Device, *, run=None) -> list[dict]:
+    """List mounted, eligible filesystem volumes on ONE selected external disk.
+
+    This is a READ-ONLY convenience query. It does not open any raw disk for
+    writing, lock volumes, or grant permission for in-place filesystem repair.
+    """
+    if sys.platform != 'win32':
+        raise RuntimeError('Windows volume selection requires Windows')
+    number_match = re.fullmatch(r'windows:PhysicalDrive(\d+)', device.id)
+    if not number_match:
+        raise PermissionError('Select a Windows physical external disk first')
+    number = int(number_match.group(1))
+    script = (
+        "$ErrorActionPreference='Stop';"
+        f"$d=Get-Disk -Number {number} -ErrorAction Stop;"
+        "if($d.IsBoot -or $d.IsSystem -or $d.IsOffline){throw 'Unsafe disk'};"
+        f"$parts=@(Get-Partition -DiskNumber {number} -ErrorAction Stop);"
+        "$result=@(foreach($p in $parts){"
+        "if([string]$p.DriveLetter -match '^[D-Z]$'){"
+        "$v=$p | Get-Volume -ErrorAction SilentlyContinue;"
+        "if($null -ne $v){"
+        "[pscustomobject]@{disk_number=[int]$p.DiskNumber;disk_size=[long]$d.Size;"
+        "is_boot=[bool]$d.IsBoot;is_system=[bool]$d.IsSystem;"
+        "is_offline=[bool]$d.IsOffline;volume_letter=[string]$p.DriveLetter;"
+        "filesystem=[string]$v.FileSystem;volume_health=[string]$v.HealthStatus}"
+        "}}});"
+        "ConvertTo-Json -InputObject $result -Compress -Depth 4"
+    )
+    runner = run if run is not None else subprocess.run
+    try:
+        response = runner(['powershell.exe', '-NoProfile', '-NonInteractive',
+                           '-Command', script], stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                          timeout=12, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError('Windows volume discovery timed out; no repair was started') from exc
+    if response.returncode != 0:
+        raise RuntimeError('Windows could not enumerate partitions on the selected disk; no repair started')
+    return parse_repairable_volumes(response.stdout, device=device)
+
+
 def inspect_windows_volume(device: Device, letter: str, *, run=None) -> dict:
     """Read-only Windows metadata. No volume opened for writes."""
     if sys.platform != 'win32':
