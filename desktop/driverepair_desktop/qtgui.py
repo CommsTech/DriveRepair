@@ -643,6 +643,11 @@ def launch():
             self.device_tools_button.setToolTip('Read-only device capabilities, firmware, sampled speed and failed-offset investigation')
             self.device_tools_button.clicked.connect(self.open_device_tools)
             nav.addWidget(self.device_tools_button)
+            self.archive_button=QPushButton('Cold storage integrity')
+            self.archive_button.setObjectName('nav')
+            self.archive_button.setToolTip('Verify stored photos and files against compact SHA-256 hashes. No second image; source files stay read-only.')
+            self.archive_button.clicked.connect(self.open_cold_storage)
+            nav.addWidget(self.archive_button)
             self.prereq_button=QPushButton('System readiness')
             self.prereq_button.setObjectName('nav')
             self.prereq_button.clicked.connect(self.review_prerequisites)
@@ -1647,6 +1652,180 @@ def launch():
         def note_log(self, text: str) -> None:
             self.log.appendPlainText(text)
             debug_trace(text)
+        def open_cold_storage(self):
+            """File-level fixity checks. The archive stays read-only; never substitute for a backup."""
+            if self.proc and self.proc.state()!=QProcess.NotRunning:
+                QMessageBox.information(self,'Complete the current job',
+                    'Finish the active disk operation before checking a stored file archive.')
+                return
+            previous=getattr(self,'_cold_dialog',None)
+            if previous and previous.isVisible():
+                previous.raise_()
+                previous.activateWindow()
+                return
+            dlg=QDialog(self)
+            dlg.setWindowTitle('Cold storage · Photo and file integrity')
+            dlg.resize(760,570)
+            dlg.setMinimumWidth(610)
+            self._cold_dialog=dlg
+            layout=QVBoxLayout(dlg)
+            title=QLabel('Verify files without making another disk image')
+            title.setObjectName('heading')
+            layout.addWidget(title)
+            subtitle=QLabel('Create a small SHA-256 baseline when files are known-good. On every later connection, '
+                'compare all files with that saved baseline. DriveRepair never changes the protected photos. '
+                'A matching hash means unchanged since the baseline, not that the original was perfect.')
+            subtitle.setWordWrap(True)
+            subtitle.setObjectName('muted')
+            layout.addWidget(subtitle)
+            folder_row=QHBoxLayout()
+            layout.addLayout(folder_row)
+            folder=QLineEdit()
+            folder.setPlaceholderText('Select the root folder of the archived photos / files')
+            folder_row.addWidget(folder,1)
+            browse=QPushButton('Choose archive folder')
+            folder_row.addWidget(browse)
+            browse.clicked.connect(lambda: folder.setText(QFileDialog.getExistingDirectory(
+                dlg,'Select archive folder to read',folder.text() or str(Path.home())) or folder.text()))
+            notice=QLabel('Baselines and reports must be saved OUTSIDE the archived folder, ideally on another physical disk. '
+                          'When you add photos, preserve the previous baseline and create a new one after reviewing changes.')
+            notice.setWordWrap(True)
+            notice.setObjectName('muted')
+            layout.addWidget(notice)
+            actions=QHBoxLayout()
+            layout.addLayout(actions)
+            make=QPushButton('Create new baseline')
+            verify=QPushButton('Verify against saved baseline')
+            make.setObjectName('primary')
+            verify.setObjectName('primary')
+            actions.addWidget(make)
+            actions.addWidget(verify)
+            progress=QProgressBar()
+            progress.setRange(0,1)
+            progress.setValue(0)
+            layout.addWidget(progress)
+            state=QLabel('No files read yet.')
+            state.setWordWrap(True)
+            state.setObjectName('muted')
+            layout.addWidget(state)
+            summary=QPlainTextEdit()
+            summary.setReadOnly(True)
+            summary.setPlaceholderText('The results will distinguish unchanged, changed, missing, new and unreadable files.')
+            layout.addWidget(summary,1)
+            foot=QHBoxLayout()
+            layout.addLayout(foot)
+            stop=QPushButton('Stop read-only check')
+            stop.setEnabled(False)
+            close=QPushButton('Close')
+            foot.addWidget(stop)
+            foot.addStretch()
+            foot.addWidget(close)
+            close.clicked.connect(dlg.reject)
+            child=[None]
+            stderr_buf=['']
+            def stopped():
+                worker=child[0]
+                if worker and worker.state()!=QProcess.NotRunning:
+                    worker.kill()  # Never writes source; an incomplete baseline is not committed.
+                    state.setText('Stopping the read-only integrity process…')
+            stop.clicked.connect(stopped)
+            dlg.rejected.connect(stopped)
+            def begin(mode):
+                root=folder.text().strip()
+                if not root or not Path(root).is_dir():
+                    QMessageBox.warning(dlg,'Choose archive folder','Select the folder containing the files to verify.')
+                    return
+                if child[0] and child[0].state()!=QProcess.NotRunning:
+                    return
+                if mode=='baseline':
+                    destination,_=QFileDialog.getSaveFileName(dlg,'NEW integrity baseline outside archive',
+                        str(Path.home() / 'DriveRepair-photos-baseline.json'),'JSON manifests (*.json)')
+                    if not destination:
+                        return
+                    args=['archive-baseline','--folder',root,'--output',destination,'--json']
+                    report_path=None
+                else:
+                    selected,_=QFileDialog.getOpenFileName(dlg,'Select previous integrity baseline',
+                        str(Path.home()),'JSON manifests (*.json)')
+                    if not selected:
+                        return
+                    report_path,_=QFileDialog.getSaveFileName(dlg,'NEW HTML integrity report outside archive',
+                        str(Path.home() / 'DriveRepair-Cold-Storage-Report.html'),'HTML reports (*.html)')
+                    if not report_path:
+                        return
+                    args=['archive-verify','--folder',root,'--manifest',selected,'--report-html',report_path,'--json']
+                worker=QProcess(dlg)
+                child[0]=worker
+                stderr_buf[0]=''
+                worker.setProgram(cli_prefix()[0])
+                worker.setArguments(cli_prefix()[1:]+args)
+                make.setEnabled(False)
+                verify.setEnabled(False)
+                stop.setEnabled(True)
+                close.setEnabled(False)
+                progress.setRange(0,0)
+                state.setText('Reading files and calculating SHA-256 checksums; no source writes…')
+                summary.clear()
+                def drain():
+                    data=bytes(worker.readAllStandardError()).decode('utf-8',errors='replace')
+                    stderr_buf[0]+=data
+                    lines=stderr_buf[0].split('\n')
+                    stderr_buf[0]=lines.pop()
+                    for line in lines:
+                        if line.startswith('ARCHIVE_PROGRESS '):
+                            try:
+                                info=json.loads(line[len('ARCHIVE_PROGRESS '):])
+                            except ValueError:
+                                continue
+                            total=info.get('files_total')
+                            done=int(info.get('files_processed') or 0)
+                            if total:
+                                progress.setRange(0,int(total))
+                                progress.setValue(min(done,int(total)))
+                            state.setText(f'Read {done:,} files'+(f' of {total:,}' if total else '')+' · '+str(info.get('current_file',''))[-90:])
+                        elif line.strip():
+                            summary.appendPlainText(line[:400])
+                worker.readyReadStandardError.connect(drain)
+                def finished(code,_exit_status):
+                    drain()
+                    stop.setEnabled(False)
+                    make.setEnabled(True)
+                    verify.setEnabled(True)
+                    close.setEnabled(True)
+                    progress.setRange(0,1)
+                    progress.setValue(1 if code==0 else 0)
+                    raw=bytes(worker.readAllStandardOutput()).decode('utf-8',errors='replace')
+                    try:
+                        result=json.loads(raw)
+                    except ValueError:
+                        summary.appendPlainText('Check failed or interrupted. '+raw[-2000:])
+                        state.setText('Check did not complete. No source files were modified.')
+                        return
+                    status=result.get('status','unknown')
+                    summary.setPlainText(json.dumps(result,indent=2,ensure_ascii=False))
+                    if mode=='baseline':
+                        state.setText(f'Baseline saved: {result.get("files_baselined",0):,} files. Keep the JSON separately.')
+                    else:
+                        state.setText(('All tracked files match.' if status=='matches_baseline' else
+                                       'Changes or missing/unreadable files need review.' if code else
+                                       'New files detected; previous files match.'))
+                        if result.get('report_html'):
+                            if QMessageBox.question(dlg,'Open detailed report',
+                               'Open the local DriveRepair integrity report now?',QMessageBox.Yes|QMessageBox.No,
+                               QMessageBox.Yes)==QMessageBox.Yes:
+                                QDesktopServices.openUrl(QUrl.fromLocalFile(result['report_html']))
+                worker.finished.connect(finished)
+                worker.start()
+                if not worker.waitForStarted(250):
+                    state.setText('Could not start the local integrity worker.')
+                    make.setEnabled(True)
+                    verify.setEnabled(True)
+                    stop.setEnabled(False)
+                    close.setEnabled(True)
+            make.clicked.connect(lambda:begin('baseline'))
+            verify.clicked.connect(lambda:begin('verify'))
+            dlg.show()
+
         def open_device_tools(self):
             """Read-only hardware tools; device IDs are revalidated by the child CLI."""
             from .device_tools import DEVICE_ACTIONS, device_tool_args

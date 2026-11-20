@@ -1,0 +1,2 @@
+84abd0dc2b90393d22d741a712bc67761a13f6ebe72ecda1f763099ef11fc4b0  DriveRepair_0.3.3b34_Clean_Source.zip
+87e7f6ad375e5f66a5c9791e33815542fd1c713319118e96de8c994d63124b5a  DriveRepair_0.3.3b34_Cold_Storage_Integrity.patch

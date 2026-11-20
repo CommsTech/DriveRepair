@@ -106,10 +106,10 @@ if ! mknod -m 600 "$WORK/test-dev-null" c 1 3 2>/dev/null; then
   exit 6
 fi
 rm -f "$WORK/test-dev-null"
-if ! command -v lb >/dev/null || ! command -v debootstrap >/dev/null || ! command -v xorriso >/dev/null; then
+if ! command -v lb >/dev/null || ! command -v debootstrap >/dev/null || ! command -v xorriso >/dev/null || ! command -v python3 >/dev/null; then
   echo 'Installing Debian live-build prerequisites in isolated WSL distro (approved by operator).' >&2
   apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends live-build debootstrap xorriso
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends live-build debootstrap xorriso python3
 fi
 trap 'echo "Build workspace retained for review: $WORK"' EXIT
 cp -a -- "$SOURCE_DIR/driverepair" "$WORK/driverepair"

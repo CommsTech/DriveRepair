@@ -8,9 +8,9 @@ if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   echo 'ERROR: Debian live-build requires root in an isolated build VM.' >&2
   exit 2
 fi
-for tool in lb debootstrap sha256sum; do
+for tool in lb debootstrap sha256sum python3; do
   if ! command -v "$tool" >/dev/null; then
-    echo "ERROR: missing $tool; on Debian install live-build debootstrap" >&2
+    echo "ERROR: missing $tool; on Debian install live-build debootstrap xorriso python3" >&2
     exit 2
   fi
 done

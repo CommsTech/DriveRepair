@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.3b34 — 2026-11-20: Cold-storage archive fixity and ISO-host prerequisite
+
+- Added read-only, file-level SHA-256 baseline and periodic verification of removable photo/file archives without creating disk images. Detects changed, missing, newly added, and unreadable items. Baselines are never overwritten; output must be outside the archive.
+- Added a Qt **Cold storage integrity** workflow with progress and a modern, offline HTML report. A different drive letter on reconnect is supported, and status distinguishes byte changes from intentional new files.
+- Enforced no symlink traversal, immutable baseline creation, streaming bounded-memory hashing, and rejection of incomplete baselines. Added fault and tampering regression tests.
+- Corrected Debian WSL ISO-build prerequisites to include host-side `python3`, which the structural validator requires. The November 20 debug log showed the build reached ISO generation but failed at validation because `python3` was absent. Bootability still requires actual BIOS/UEFI tests.
+- Source-only and synthetic tests do not prove the GUI on Windows, physical disk repair, ISO boot, or integrity of an already-corrupt baseline.
+
+
 ## 0.3.3b33 — 2026-11-20: Recovery ISO visibility, sparse output, truthful repair selection
 
 - Added a nonmodal Debian/WSL ISO-build progress window with ongoing stage messages, an indeterminate progress indicator, and a persistent full log. Distinguishes a completed image from a failed build, with WSL device-node preflight and no claim of verified BIOS/UEFI boot.

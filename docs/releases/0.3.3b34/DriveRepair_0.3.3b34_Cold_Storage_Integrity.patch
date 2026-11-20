@@ -1,0 +1,832 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 5e5f767..e27ca24 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,14 @@
+ # Changelog
+ 
++## 0.3.3b34 — 2026-11-20: Cold-storage archive fixity and ISO-host prerequisite
++
++- Added read-only, file-level SHA-256 baseline and periodic verification of removable photo/file archives without creating disk images. Detects changed, missing, newly added, and unreadable items. Baselines are never overwritten; output must be outside the archive.
++- Added a Qt **Cold storage integrity** workflow with progress and a modern, offline HTML report. A different drive letter on reconnect is supported, and status distinguishes byte changes from intentional new files.
++- Enforced no symlink traversal, immutable baseline creation, streaming bounded-memory hashing, and rejection of incomplete baselines. Added fault and tampering regression tests.
++- Corrected Debian WSL ISO-build prerequisites to include host-side `python3`, which the structural validator requires. The November 20 debug log showed the build reached ISO generation but failed at validation because `python3` was absent. Bootability still requires actual BIOS/UEFI tests.
++- Source-only and synthetic tests do not prove the GUI on Windows, physical disk repair, ISO boot, or integrity of an already-corrupt baseline.
++
++
+ ## 0.3.3b33 — 2026-11-20: Recovery ISO visibility, sparse output, truthful repair selection
+ 
+ - Added a nonmodal Debian/WSL ISO-build progress window with ongoing stage messages, an indeterminate progress indicator, and a persistent full log. Distinguishes a completed image from a failed build, with WSL device-node preflight and no claim of verified BIOS/UEFI boot.
+diff --git a/README.md b/README.md
+index 4b93bdf..6ea81c6 100644
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,7 @@
+ 
+ **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
+ 
+-> **Release status:** `0.3.3b33` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
++> **Release status:** `0.3.3b34` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+ 
+ **Drive models:** The bundled [offline model catalog](docs/DRIVE_MODEL_CATALOG.md) currently documents four vendor-backed model entries (three Seagate SMR models and one SanDisk SSD family). It guides scanning; it is not a comprehensive database or authorization to rewrite a disk.
+ 
+@@ -67,6 +67,42 @@ salvage. Recover files or use a restored image when the data matters more than
+ reuse of a potentially failing drive. These are distinct workflows and should
+ not be presented as interchangeable repairs.
+ 
++## Cold storage integrity — check archived photos without another image
++
++DriveRepair can now verify **ordinary files and folders** on an occasionally connected
++USB hard drive or SSD. Open **Cold storage integrity** from the Qt sidebar. On the
++first connection, choose the photo/archive folder and **Create new baseline**.
++DriveRepair reads each regular file and saves a small, external **SHA-256 manifest**
++(paths, sizes, hashes, and baseline timestamp). No full disk image is created and
++**no source files are modified**. Store the manifest on a *different* physical disk
++or in a trusted backup location — not in the protected folder. The manifest is
++marked `UNATTESTED_BASELINE`: DriveRepair cannot know if an old photo was already
++corrupt the first time it was scanned.
++
++When you connect the drive again (for example every 3–9 months), choose the same
++folder and **Verify against saved baseline**. The Qt flow compares file contents
++against the earlier hashes, even if the drive letter has changed, and generates an
++offline, navy-and-teal HTML report. It separates **unchanged, changed, missing,
++new, and unreadable** files. Newly added pictures are *not* automatically called
++corrupt. Review legitimate changes, **retain the old baseline**, then create a
++new baseline under a different filename. Unlike a new baseline, old manifests
++allow detection of historical changes.
++
++**Important:** A matching checksum means the bits read now match the original
++baseline; it is not a health guarantee, proof the baseline was correct, or a
++backup. SHA-256 detects differences but cannot reconstruct lost photos. Keep at
++least one independent copy of irreplaceable files, even if you do not retain a
++full drive image. The archive check is read-only, but extra reads can stress an
++already-failing drive; rescue critical data first if the drive is unstable.
++Symbolic links and inaccessible files are not silently trusted.
++
++CLI equivalent (works on Windows/Linux/macOS; drive letter can change):
++
++```powershell
++python -m driverepair_desktop archive-baseline --folder "E:\FamilyPhotos" --output "C:\ArchiveChecks\photos-2026-11.json" --json
++python -m driverepair_desktop archive-verify --folder "F:\FamilyPhotos" --manifest "C:\ArchiveChecks\photos-2026-11.json" --report-html "C:\ArchiveChecks\photos-verify.html" --json
++```
++
+ ## What DriveRepair does
+ 
+ | Workspace | You can do | What it **does not** mean |
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index 0084a0b..c5a680a 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b33"
++__version__ = "0.3.3b34"
+diff --git a/desktop/driverepair_desktop/boot_resources/build_live_iso.sh b/desktop/driverepair_desktop/boot_resources/build_live_iso.sh
+index 4e513db..eba073c 100644
+--- a/desktop/driverepair_desktop/boot_resources/build_live_iso.sh
++++ b/desktop/driverepair_desktop/boot_resources/build_live_iso.sh
+@@ -8,9 +8,9 @@ if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+   echo 'ERROR: Debian live-build requires root in an isolated build VM.' >&2
+   exit 2
+ fi
+-for tool in lb debootstrap sha256sum; do
++for tool in lb debootstrap sha256sum python3; do
+   if ! command -v "$tool" >/dev/null; then
+-    echo "ERROR: missing $tool; on Debian install live-build debootstrap" >&2
++    echo "ERROR: missing $tool; on Debian install live-build debootstrap xorriso python3" >&2
+     exit 2
+   fi
+ done
+diff --git a/desktop/driverepair_desktop/cli.py b/desktop/driverepair_desktop/cli.py
+index 747445a..2817f2f 100644
+--- a/desktop/driverepair_desktop/cli.py
++++ b/desktop/driverepair_desktop/cli.py
+@@ -33,6 +33,7 @@ from .fat32_undelete import undelete_fat32, list_deleted_fat32
+ from .filesystem_repair import check_ext_image, repair_ext_image
+ from .verification import verify_images
+ from .integrity import build_manifest, audit_image, restore_image_from_reference
++from .cold_storage import create_baseline as archive_baseline, audit_archive, write_html_report
+ from .media_refresh import (
+     ImageReadWriter,
+     JournalStore,
+@@ -330,6 +331,15 @@ def parser() -> argparse.ArgumentParser:
+     cmd.add_argument('--before', required=True)
+     cmd.add_argument('--after', required=True)
+     cmd.add_argument('--json', action='store_true')
++    cmd = sub.add_parser('archive-baseline', help='READ-ONLY: baseline all regular files on a stored photo/archive drive using SHA-256')
++    cmd.add_argument('--folder', required=True, help='Existing archive folder/drive root; source files never changed')
++    cmd.add_argument('--output', required=True, help='NEW small manifest outside protected folder, ideally on another disk')
++    cmd.add_argument('--json', action='store_true')
++    cmd = sub.add_parser('archive-verify', help='READ-ONLY: compare files to an earlier saved cold-storage manifest')
++    cmd.add_argument('--folder', required=True, help='Same archive content folder as baseline (drive letter may change)')
++    cmd.add_argument('--manifest', required=True, help='Previously saved trusted-by-owner baseline JSON')
++    cmd.add_argument('--report-html', help='NEW offline DriveRepair HTML report outside archive folder')
++    cmd.add_argument('--json', action='store_true')
+     cmd = sub.add_parser('integrity-baseline', help='Create untrusted SHA-256 chunk baseline from a stable image; preserve independently')
+     cmd.add_argument('--image', required=True)
+     cmd.add_argument('--output', required=True, help='NEW manifest JSON, not on the failing device')
+@@ -1900,6 +1910,24 @@ def run(argv: list[str] | None = None) -> int:
+         from .release_policy import block_public_physical_writes
+         block_public_physical_writes(args.command,
+                                      execute_optimization=bool(getattr(args, 'execute', False)))
++        if args.command in {'archive-baseline', 'archive-verify'}:
++            def progress(item):
++                # Machine progress on stderr, not mixed into stdout result JSON.
++                print('ARCHIVE_PROGRESS '+json.dumps(item,ensure_ascii=True),file=sys.stderr,flush=True)
++            if args.command == 'archive-baseline':
++                result = archive_baseline(args.folder,args.output,progress=progress)
++            else:
++                result = audit_archive(args.folder,args.manifest,progress=progress)
++                if args.report_html:
++                    result['report_html'] = write_html_report(result,args.report_html,args.folder)
++            if args.json:
++                print(json.dumps(result,indent=2))
++            else:
++                print(f"Cold storage: {result['status']} | "
++                      f"unchanged {result.get('files_unchanged',result.get('files_baselined',0))} | "
++                      f"changed {result.get('files_changed',0)} | missing {result.get('files_missing',0)} | "
++                      f"unreadable {result.get('files_unreadable_or_skipped',0)}")
++            return 0 if result['status'] in {'matches_baseline','new_files_found','baseline_created_unattested'} else 2
+         if args.command in {'validate-image-capacity','validate-usb-capacity'}:
+             from .capacity_validation import RegularImageWriter, validate_spots, restore_pending
+             from .drive_report import save_report
+diff --git a/desktop/driverepair_desktop/cold_storage.py b/desktop/driverepair_desktop/cold_storage.py
+new file mode 100644
+index 0000000..fc2d886
+--- /dev/null
++++ b/desktop/driverepair_desktop/cold_storage.py
+@@ -0,0 +1,301 @@
++"""Read-only cold-storage file fixity checks for intermittently connected drives.
++
++A SHA-256 manifest is small compared with a second drive image, but cannot
++reconstruct lost bytes and cannot tell if the original baseline was healthy.
++"""
++from __future__ import annotations
++
++import hashlib
++import html
++import json
++import os
++from pathlib import Path, PurePosixPath
++import stat
++import sys
++from datetime import datetime, timezone
++from typing import Callable
++
++SCHEMA = 'driverepair.cold-storage.v1'
++MAX_MANIFEST_BYTES = 128 * 1024 * 1024
++MAX_FILES = 2_000_000
++MAX_DETAILS = 2000
++_READ_SIZE = 1024 * 1024
++
++
++def _when() -> str:
++    return datetime.now(timezone.utc).isoformat(timespec='seconds')
++
++
++def _root(directory: str) -> Path:
++    path = Path(directory).resolve(strict=True)
++    if not path.is_dir():
++        raise ValueError('Select a directory, not a raw disk, file, or image')
++    return path
++
++
++def _new_output(path: str, root: Path) -> Path:
++    output = Path(path).absolute()
++    if output.exists() or output.is_symlink():
++        raise FileExistsError('Result already exists; keep old baselines and use a NEW filename')
++    if not output.parent.is_dir() or output.parent.is_symlink():
++        raise ValueError('Select an existing, non-symlinked output directory')
++    parent = output.parent.resolve(strict=True)
++    if parent == root or root in parent.parents:
++        raise ValueError('Store manifests and reports OUTSIDE the protected archive directory')
++    return parent / output.name
++
++
++def _regular_nofollow(path: Path):
++    before = path.lstat()
++    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
++        raise OSError('Symbolic links and non-regular files are not checked')
++    if getattr(before, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0):
++        raise OSError('Windows reparse-point files are not followed')
++    flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOFOLLOW', 0)
++    fd = os.open(path, flags)
++    try:
++        opened = os.fstat(fd)
++        if not stat.S_ISREG(opened.st_mode):
++            raise OSError('Not a regular file')
++        identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
++        if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != identity:
++            raise OSError('File changed during opening')
++        h = hashlib.sha256()
++        with os.fdopen(fd, 'rb', closefd=False) as f:
++            while True:
++                data = f.read(_READ_SIZE)
++                if not data:
++                    break
++                h.update(data)
++        after = os.fstat(fd)
++        if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != identity:
++            raise OSError('File changed during hashing')
++        return opened.st_size, h.hexdigest()
++    finally:
++        os.close(fd)
++
++
++def _valid_relative(name: str) -> bool:
++    if not isinstance(name, str) or not name or '\\' in name or '\x00' in name:
++        return False
++    p = PurePosixPath(name)
++    return (not p.is_absolute() and len(p.parts) > 0
++            and all(x not in {'.', '..', ''} for x in p.parts)
++            and p.as_posix() == name and ':' not in p.parts[0])
++
++
++def _walk(root: Path, *, issues: list[dict]):
++    def onerror(exc):
++        issues.append({'path': str(getattr(exc, 'filename', '?')), 'reason': type(exc).__name__})
++
++    for base, dirs, files in os.walk(root, topdown=True, followlinks=False, onerror=onerror):
++        basepath = Path(base)
++        safe_dirs = []
++        for name in sorted(dirs):
++            entry = basepath / name
++            try:
++                st = entry.lstat()
++                if stat.S_ISLNK(st.st_mode) or getattr(st, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0):
++                    issues.append({'path': entry.relative_to(root).as_posix(), 'reason': 'directory_link_skipped'})
++                elif stat.S_ISDIR(st.st_mode):
++                    safe_dirs.append(name)
++                else:
++                    issues.append({'path': entry.relative_to(root).as_posix(), 'reason': 'not_a_directory'})
++            except OSError as exc:
++                issues.append({'path': entry.relative_to(root).as_posix(), 'reason': type(exc).__name__})
++        dirs[:] = safe_dirs
++        for name in sorted(files):
++            entry = basepath / name
++            rel = entry.relative_to(root).as_posix()
++            if not _valid_relative(rel):
++                issues.append({'path': rel, 'reason': 'invalid_relative_path'})
++                continue
++            try:
++                st = entry.lstat()
++                if not stat.S_ISREG(st.st_mode) or getattr(st, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0):
++                    issues.append({'path': rel, 'reason': 'link_or_special_file_skipped'})
++                    continue
++            except OSError as exc:
++                issues.append({'path': rel, 'reason': type(exc).__name__})
++                continue
++            yield rel, entry
++
++
++def _atomic_new(path: Path, content: bytes):
++    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0), 0o600)
++    try:
++        with os.fdopen(fd, 'wb', closefd=False) as out:
++            out.write(content)
++            out.flush()
++        os.fsync(fd)
++    except BaseException:
++        os.close(fd)
++        path.unlink(missing_ok=True)
++        raise
++    else:
++        os.close(fd)
++    if os.name == 'posix':
++        directory_fd = os.open(path.parent, os.O_RDONLY)
++        try:
++            os.fsync(directory_fd)
++        finally:
++            os.close(directory_fd)
++
++
++def _notify(callback: Callable | None, count: int, path: str, total: int | None = None):
++    if callback and (count == 1 or count % 25 == 0 or (total is not None and count == total)):
++        callback({'files_processed': count, 'files_total': total, 'current_file': path})
++
++
++def create_baseline(directory: str, output: str, *, progress: Callable | None = None) -> dict:
++    """Build a NEW, immutable baseline outside the archive; refuses incomplete scans."""
++    root = _root(directory)
++    outfile = _new_output(output, root)
++    issues: list[dict] = []
++    entries = []
++    size_total = 0
++    for rel, path in _walk(root, issues=issues):
++        if len(entries) >= MAX_FILES:
++            raise ValueError('Archive contains too many files for this manifest format')
++        try:
++            size, digest = _regular_nofollow(path)
++        except (OSError, PermissionError) as exc:
++            issues.append({'path': rel, 'reason': type(exc).__name__})
++            continue
++        entries.append({'path': rel, 'size_bytes': size, 'sha256': digest})
++        size_total += size
++        _notify(progress, len(entries), rel)
++    # Cannot stamp an incomplete archive as a verified baseline.
++    if issues:
++        raise RuntimeError(f'Baseline not written: {len(issues)} files, links or folders could not be checked. '
++                           f'First issue: {issues[0]["path"]} ({issues[0]["reason"]}).')
++    if not entries:
++        raise ValueError('No ordinary files to baseline')
++    manifest = {'schema': SCHEMA, 'algorithm': 'sha256', 'created_utc': _when(),
++                'label': root.name, 'trust': 'UNATTESTED_BASELINE',
++                'file_count': len(entries), 'total_bytes': size_total, 'files': entries,
++                'notes': 'Records bytes found today, not proof that they were originally correct. '
++                         'Keep this baseline on another disk and retain old versions after additions.'}
++    content = (json.dumps(manifest, sort_keys=True, separators=(',', ':'), ensure_ascii=True)+'\n').encode('utf-8')
++    if len(content) > MAX_MANIFEST_BYTES:
++        raise ValueError('Manifest exceeds size limit')
++    _atomic_new(outfile, content)
++    return {'status': 'baseline_created_unattested', 'manifest': str(outfile),
++            'files_baselined': len(entries), 'bytes_hashed': size_total,
++            'manifest_bytes': len(content), 'created_utc': manifest['created_utc'],
++            'notes': manifest['notes']}
++
++
++def _read_manifest(path: str) -> dict:
++    p = Path(path)
++    st = p.lstat()
++    if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_MANIFEST_BYTES:
++        raise ValueError('Manifest must be a regular file within the size limit')
++    data = p.read_bytes()
++    if len(data) > MAX_MANIFEST_BYTES:
++        raise ValueError('Manifest too large')
++    doc = json.loads(data)
++    if (not isinstance(doc, dict) or doc.get('schema') != SCHEMA
++            or doc.get('algorithm') != 'sha256'):
++        raise ValueError('Unrecognized cold-storage manifest')
++    entries = doc.get('files')
++    if not isinstance(entries, list) or len(entries) > MAX_FILES or len(entries) != doc.get('file_count'):
++        raise ValueError('Invalid manifest file count')
++    seen = set()
++    for e in entries:
++        if not isinstance(e, dict) or not _valid_relative(e.get('path')):
++            raise ValueError('Unsafe path in manifest')
++        if (type(e.get('size_bytes')) is not int or e['size_bytes'] < 0 or
++                not isinstance(e.get('sha256'), str) or len(e['sha256']) != 64 or
++                any(c not in '0123456789abcdef' for c in e['sha256']) or e['path'] in seen):
++            raise ValueError('Corrupt or duplicate manifest entry')
++        seen.add(e['path'])
++    return doc
++
++
++def audit_archive(directory: str, manifest: str, *, progress: Callable | None = None) -> dict:
++    root = _root(directory)
++    baseline = _read_manifest(manifest)
++    old = {e['path']: e for e in baseline['files']}
++    changed, missing, added, unreadable = [], [], [], []
++    seen = set()
++    checked = verified_bytes = 0
++    walk_issues: list[dict] = []
++    for rel, path in _walk(root, issues=walk_issues):
++        if rel not in old:
++            added.append(rel)
++            continue
++        seen.add(rel)
++        expected = old[rel]
++        try:
++            size, digest = _regular_nofollow(path)
++        except (OSError, PermissionError) as exc:
++            unreadable.append({'path': rel, 'reason': type(exc).__name__})
++            continue
++        checked += 1
++        if size != expected['size_bytes'] or digest != expected['sha256']:
++            changed.append({'path': rel, 'expected_size': expected['size_bytes'],
++                            'observed_size': size, 'expected_sha256': expected['sha256'],
++                            'observed_sha256': digest})
++        else:
++            verified_bytes += size
++        _notify(progress, checked, rel, len(old))
++    missing = sorted(set(old) - seen)
++    # An inaccessible folder may contain original files. Never call those truly missing.
++    if walk_issues:
++        unreadable.extend(walk_issues)
++    if changed or missing or unreadable:
++        status = 'integrity_alert'
++    elif added:
++        status = 'new_files_found'
++    else:
++        status = 'matches_baseline'
++    return {'status': status, 'baseline_created_utc': baseline.get('created_utc'),
++            'baseline_label': baseline.get('label'), 'manifest': str(Path(manifest).absolute()),
++            'files_expected': len(old), 'files_compared': checked,
++            'verified_bytes': verified_bytes, 'files_unchanged': checked-len(changed),
++            'files_changed': len(changed), 'files_missing': len(missing),
++            'files_new': len(added), 'files_unreadable_or_skipped': len(unreadable),
++            'changed': changed[:MAX_DETAILS], 'missing': missing[:MAX_DETAILS],
++            'new': added[:MAX_DETAILS], 'unreadable_or_skipped': unreadable[:MAX_DETAILS],
++            'details_truncated': any(len(x)>MAX_DETAILS for x in (changed, missing, added, unreadable)),
++            'checked_utc': _when(),
++            'notes': 'File hashes prove agreement with this baseline, not authenticity of the baseline. '
++                     'Changes may be intentional. A hash cannot repair damaged files. '
++                     'If any folders were unreadable, some files may be missing from the audit.'}
++
++
++def write_html_report(result: dict, output: str, root: str) -> str:
++    """Create an offline report outside the archive. Does not edit files or baseline."""
++    path = _new_output(output, _root(root))
++    status = result['status']
++    verdict = ('Matching baseline' if status == 'matches_baseline' else
++               'New files to baseline' if status == 'new_files_found' else 'Attention required')
++    status_color = '#31cab5' if status == 'matches_baseline' else '#f0b35e'
++    details=[]
++    for key,title in (('changed','Changed files'),('missing','Missing files'),
++                      ('unreadable_or_skipped','Unreadable / skipped'),('new','New files')):
++        val=result.get(key, [])
++        if not val: continue
++        rows=''.join('<li>'+html.escape(x if isinstance(x,str) else str(x.get('path','?')))
++                     +'</li>' for x in val)
++        details.append(f'<section><h2>{html.escape(title)}</h2><ul>{rows}</ul></section>')
++    cards=''.join(f'<article><small>{html.escape(title)}</small><strong>{int(result.get(field,0)):,}</strong></article>'
++                  for field,title in [('files_unchanged','Unchanged'),('files_changed','Changed'),
++                                      ('files_missing','Missing'),('files_new','New'),
++                                      ('files_unreadable_or_skipped','Unreadable')])
++    document=f'''<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
++<title>DriveRepair | Cold Storage Integrity</title><style>
++*{{box-sizing:border-box}}body{{font:15px Segoe UI,Arial,sans-serif; background:#0c1420;color:#edf5fa;margin:0}}
++main{{max-width:1150px;margin:30px auto;padding:20px}}header,section{{background:#152337;border:1px solid #2d4258;border-radius:14px;padding:22px;margin-bottom:16px}}
++h1{{margin:5px 0 12px;font-size:29px}}.eyebrow{{color:#39ccb6;letter-spacing:2px;font-weight:750}}.verdict{{font-size:20px;color:{status_color};font-weight:700}}
++.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0}}article{{border:1px solid #324a63;border-radius:9px;padding:16px;background:#1a2d42}}
++article small{{display:block;color:#b3c8d9}}article strong{{font-size:26px;display:block;margin-top:6px}}li{{padding:5px;overflow-wrap:anywhere}}
++p{{line-height:1.6;color:#c6d8e7}}code{{color:#a5efdf}}@media print{{body{{color:#101822;background:white}}header,section,article{{background:white;color:#101822}}p{{color:#101822}}}}
++</style></head><body><main><header><div class="eyebrow">DR / DRIVE REPAIR</div><h1>Cold Storage Integrity</h1><div class="verdict">{html.escape(verdict)}</div>
++<p>Compared against a SHA-256 baseline created {html.escape(str(result.get('baseline_created_utc') or 'unknown'))}. Run: {html.escape(str(result.get('checked_utc') or 'unknown'))}.</p></header>
++<div class="grid">{cards}</div><section><h2>What this means</h2><p>{html.escape(result.get('notes',''))}</p>
++<p>This is a file-content verification, not a full physical-media test. Review intentional changes before creating a new baseline. Retain a separate backup of irreplaceable files.</p></section>{''.join(details)}
++</main></body></html>'''
++    _atomic_new(path, document.encode('utf-8'))
++    return str(path)
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+index 6cd1fad..5d8dfb9 100644
+--- a/desktop/driverepair_desktop/qtgui.py
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -643,6 +643,11 @@ def launch():
+             self.device_tools_button.setToolTip('Read-only device capabilities, firmware, sampled speed and failed-offset investigation')
+             self.device_tools_button.clicked.connect(self.open_device_tools)
+             nav.addWidget(self.device_tools_button)
++            self.archive_button=QPushButton('Cold storage integrity')
++            self.archive_button.setObjectName('nav')
++            self.archive_button.setToolTip('Verify stored photos and files against compact SHA-256 hashes. No second image; source files stay read-only.')
++            self.archive_button.clicked.connect(self.open_cold_storage)
++            nav.addWidget(self.archive_button)
+             self.prereq_button=QPushButton('System readiness')
+             self.prereq_button.setObjectName('nav')
+             self.prereq_button.clicked.connect(self.review_prerequisites)
+@@ -1647,6 +1652,175 @@ def launch():
+         def note_log(self, text: str) -> None:
+             self.log.appendPlainText(text)
+             debug_trace(text)
++        def open_cold_storage(self):
++            """File-level fixity checks. The archive stays read-only; never substitute for a backup."""
++            if self.proc and self.proc.state()!=QProcess.NotRunning:
++                QMessageBox.information(self,'Complete the current job',
++                    'Finish the active disk operation before checking a stored file archive.')
++                return
++            previous=getattr(self,'_cold_dialog',None)
++            if previous and previous.isVisible():
++                previous.raise_()
++                previous.activateWindow()
++                return
++            dlg=QDialog(self)
++            dlg.setWindowTitle('Cold storage · Photo and file integrity')
++            dlg.resize(760,570)
++            dlg.setMinimumWidth(610)
++            self._cold_dialog=dlg
++            layout=QVBoxLayout(dlg)
++            title=QLabel('Verify files without making another disk image')
++            title.setObjectName('heading')
++            layout.addWidget(title)
++            subtitle=QLabel('Create a small SHA-256 baseline when files are known-good. On every later connection, '
++                'compare all files with that saved baseline. DriveRepair never changes the protected photos. '
++                'A matching hash means unchanged since the baseline, not that the original was perfect.')
++            subtitle.setWordWrap(True)
++            subtitle.setObjectName('muted')
++            layout.addWidget(subtitle)
++            folder_row=QHBoxLayout()
++            layout.addLayout(folder_row)
++            folder=QLineEdit()
++            folder.setPlaceholderText('Select the root folder of the archived photos / files')
++            folder_row.addWidget(folder,1)
++            browse=QPushButton('Choose archive folder')
++            folder_row.addWidget(browse)
++            browse.clicked.connect(lambda: folder.setText(QFileDialog.getExistingDirectory(
++                dlg,'Select archive folder to read',folder.text() or str(Path.home())) or folder.text()))
++            notice=QLabel('Baselines and reports must be saved OUTSIDE the archived folder, ideally on another physical disk. '
++                          'When you add photos, preserve the previous baseline and create a new one after reviewing changes.')
++            notice.setWordWrap(True)
++            notice.setObjectName('muted')
++            layout.addWidget(notice)
++            actions=QHBoxLayout()
++            layout.addLayout(actions)
++            make=QPushButton('Create new baseline')
++            verify=QPushButton('Verify against saved baseline')
++            make.setObjectName('primary')
++            verify.setObjectName('primary')
++            actions.addWidget(make)
++            actions.addWidget(verify)
++            progress=QProgressBar()
++            progress.setRange(0,1)
++            progress.setValue(0)
++            layout.addWidget(progress)
++            state=QLabel('No files read yet.')
++            state.setWordWrap(True)
++            state.setObjectName('muted')
++            layout.addWidget(state)
++            summary=QPlainTextEdit()
++            summary.setReadOnly(True)
++            summary.setPlaceholderText('The results will distinguish unchanged, changed, missing, new and unreadable files.')
++            layout.addWidget(summary,1)
++            foot=QHBoxLayout()
++            layout.addLayout(foot)
++            stop=QPushButton('Stop read-only check')
++            stop.setEnabled(False)
++            close=QPushButton('Close')
++            foot.addWidget(stop)
++            foot.addStretch()
++            foot.addWidget(close)
++            close.clicked.connect(dlg.reject)
++            child=[None]
++            stderr_buf=['']
++            def stopped():
++                worker=child[0]
++                if worker and worker.state()!=QProcess.NotRunning:
++                    worker.kill()  # Never writes source; an incomplete baseline is not committed.
++                    state.setText('Stopping the read-only integrity process…')
++            stop.clicked.connect(stopped)
++            dlg.rejected.connect(stopped)
++            def begin(mode):
++                root=folder.text().strip()
++                if not root or not Path(root).is_dir():
++                    QMessageBox.warning(dlg,'Choose archive folder','Select the folder containing the files to verify.')
++                    return
++                if child[0] and child[0].state()!=QProcess.NotRunning:
++                    return
++                if mode=='baseline':
++                    destination,_=QFileDialog.getSaveFileName(dlg,'NEW integrity baseline outside archive',
++                        str(Path.home() / 'DriveRepair-photos-baseline.json'),'JSON manifests (*.json)')
++                    if not destination: return
++                    args=['archive-baseline','--folder',root,'--output',destination,'--json']
++                    report_path=None
++                else:
++                    selected,_=QFileDialog.getOpenFileName(dlg,'Select previous integrity baseline',
++                        str(Path.home()),'JSON manifests (*.json)')
++                    if not selected: return
++                    report_path,_=QFileDialog.getSaveFileName(dlg,'NEW HTML integrity report outside archive',
++                        str(Path.home() / 'DriveRepair-Cold-Storage-Report.html'),'HTML reports (*.html)')
++                    if not report_path: return
++                    args=['archive-verify','--folder',root,'--manifest',selected,'--report-html',report_path,'--json']
++                worker=QProcess(dlg)
++                child[0]=worker
++                stderr_buf[0]=''
++                worker.setProgram(cli_prefix()[0])
++                worker.setArguments(cli_prefix()[1:]+args)
++                make.setEnabled(False)
++                verify.setEnabled(False)
++                stop.setEnabled(True)
++                close.setEnabled(False)
++                progress.setRange(0,0)
++                state.setText('Reading files and calculating SHA-256 checksums; no source writes…')
++                summary.clear()
++                def drain():
++                    data=bytes(worker.readAllStandardError()).decode('utf-8',errors='replace')
++                    stderr_buf[0]+=data
++                    lines=stderr_buf[0].split('\n')
++                    stderr_buf[0]=lines.pop()
++                    for line in lines:
++                        if line.startswith('ARCHIVE_PROGRESS '):
++                            try: info=json.loads(line[len('ARCHIVE_PROGRESS '):])
++                            except ValueError: continue
++                            total=info.get('files_total')
++                            done=int(info.get('files_processed') or 0)
++                            if total:
++                                progress.setRange(0,int(total))
++                                progress.setValue(min(done,int(total)))
++                            state.setText(f'Read {done:,} files'+(f' of {total:,}' if total else '')+' · '+str(info.get('current_file',''))[-90:])
++                        elif line.strip():
++                            summary.appendPlainText(line[:400])
++                worker.readyReadStandardError.connect(drain)
++                def finished(code,_exit_status):
++                    drain()
++                    stop.setEnabled(False)
++                    make.setEnabled(True)
++                    verify.setEnabled(True)
++                    close.setEnabled(True)
++                    progress.setRange(0,1)
++                    progress.setValue(1 if code==0 else 0)
++                    raw=bytes(worker.readAllStandardOutput()).decode('utf-8',errors='replace')
++                    try:
++                        result=json.loads(raw)
++                    except ValueError:
++                        summary.appendPlainText('Check failed or interrupted. '+raw[-2000:])
++                        state.setText('Check did not complete. No source files were modified.')
++                        return
++                    status=result.get('status','unknown')
++                    summary.setPlainText(json.dumps(result,indent=2,ensure_ascii=False))
++                    if mode=='baseline':
++                        state.setText(f'Baseline saved: {result.get("files_baselined",0):,} files. Keep the JSON separately.')
++                    else:
++                        state.setText(('All tracked files match.' if status=='matches_baseline' else
++                                       'Changes or missing/unreadable files need review.' if code else
++                                       'New files detected; previous files match.'))
++                        if result.get('report_html'):
++                            if QMessageBox.question(dlg,'Open detailed report',
++                               'Open the local DriveRepair integrity report now?',QMessageBox.Yes|QMessageBox.No,
++                               QMessageBox.Yes)==QMessageBox.Yes:
++                                QDesktopServices.openUrl(QUrl.fromLocalFile(result['report_html']))
++                worker.finished.connect(finished)
++                worker.start()
++                if not worker.waitForStarted(250):
++                    state.setText('Could not start the local integrity worker.')
++                    make.setEnabled(True)
++                    verify.setEnabled(True)
++                    stop.setEnabled(False)
++                    close.setEnabled(True)
++            make.clicked.connect(lambda:begin('baseline'))
++            verify.clicked.connect(lambda:begin('verify'))
++            dlg.show()
++
+         def open_device_tools(self):
+             """Read-only hardware tools; device IDs are revalidated by the child CLI."""
+             from .device_tools import DEVICE_ACTIONS, device_tool_args
+diff --git a/desktop/driverepair_desktop/windows_iso_build.py b/desktop/driverepair_desktop/windows_iso_build.py
+index 33f898d..17bba4a 100644
+--- a/desktop/driverepair_desktop/windows_iso_build.py
++++ b/desktop/driverepair_desktop/windows_iso_build.py
+@@ -106,10 +106,10 @@ if ! mknod -m 600 "$WORK/test-dev-null" c 1 3 2>/dev/null; then
+   exit 6
+ fi
+ rm -f "$WORK/test-dev-null"
+-if ! command -v lb >/dev/null || ! command -v debootstrap >/dev/null || ! command -v xorriso >/dev/null; then
++if ! command -v lb >/dev/null || ! command -v debootstrap >/dev/null || ! command -v xorriso >/dev/null || ! command -v python3 >/dev/null; then
+   echo 'Installing Debian live-build prerequisites in isolated WSL distro (approved by operator).' >&2
+   apt-get update
+-  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends live-build debootstrap xorriso
++  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends live-build debootstrap xorriso python3
+ fi
+ trap 'echo "Build workspace retained for review: $WORK"' EXIT
+ cp -a -- "$SOURCE_DIR/driverepair" "$WORK/driverepair"
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index 5fd3f7c..4361d77 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b33"
++version = "0.3.3b34"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_cold_storage.py b/desktop/tests/test_cold_storage.py
+new file mode 100644
+index 0000000..89bae82
+--- /dev/null
++++ b/desktop/tests/test_cold_storage.py
+@@ -0,0 +1,128 @@
++"""Cold-storage file-level bit-integrity regression tests (no physical disk needed)."""
++import contextlib
++import io
++import json
++from pathlib import Path
++import tempfile
++import unittest
++
++from driverepair_desktop.cold_storage import (
++    create_baseline, audit_archive, write_html_report,
++)
++from driverepair_desktop.cli import run
++
++
++class ColdStorageTests(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.addCleanup(self.tmp.cleanup)
++        self.base = Path(self.tmp.name)
++        self.archive = self.base / 'family-photos'
++        self.archive.mkdir()
++        (self.archive / '2001').mkdir()
++        (self.archive / '2001' / 'photo.jpg').write_bytes(b'\xff\xd8\x00JPEG\xff\xd9')
++        (self.archive / '2001' / 'video.mov').write_bytes(b'video\0' * 1000)
++        self.manifest = self.base / 'snapshot-2026.json'
++
++    def baseline(self):
++        result = create_baseline(str(self.archive), str(self.manifest))
++        self.assertEqual(result['status'], 'baseline_created_unattested')
++        return result
++
++    def test_detects_one_bit_with_no_second_image(self):
++        original = (self.archive / '2001' / 'photo.jpg').read_bytes()
++        self.baseline()
++        self.assertEqual(audit_archive(str(self.archive), str(self.manifest))['status'], 'matches_baseline')
++        (self.archive / '2001' / 'photo.jpg').write_bytes(original[:-1] + b'\xd8')
++        result = audit_archive(str(self.archive), str(self.manifest))
++        self.assertEqual(result['files_changed'], 1)
++        self.assertEqual(result['files_unchanged'], 1)
++        self.assertEqual(result['status'], 'integrity_alert')
++        self.assertEqual(result['changed'][0]['path'], '2001/photo.jpg')
++        self.assertEqual((self.archive / '2001' / 'photo.jpg').read_bytes(),original[:-1]+b'\xd8')
++
++    def test_added_and_missing_not_confused_with_corruption(self):
++        self.baseline()
++        (self.archive / 'new-photo.jpg').write_bytes(b'more photos')
++        out = audit_archive(str(self.archive), str(self.manifest))
++        self.assertEqual(out['status'], 'new_files_found')
++        self.assertEqual(out['files_new'], 1)
++        self.assertEqual(out['files_changed'], 0)
++        (self.archive / '2001' / 'video.mov').unlink()
++        out = audit_archive(str(self.archive), str(self.manifest))
++        self.assertEqual(out['status'], 'integrity_alert')
++        self.assertEqual(out['files_missing'], 1)
++        self.assertEqual(out['files_new'], 1)
++        self.assertEqual(out['files_changed'], 0)
++
++    def test_refuses_baseline_on_unreadable_symlink(self):
++        outside = self.base / 'outside.txt'
++        outside.write_text('NOT to be hashed')
++        try:
++            (self.archive / 'link.txt').symlink_to(outside)
++        except (NotImplementedError, OSError):
++            self.skipTest('Symlink privileges unavailable')
++        with self.assertRaisesRegex(RuntimeError,'Baseline not written'):
++            self.baseline()
++        self.assertFalse(self.manifest.exists())
++
++    def test_rejects_baseline_overwrite_or_inside_archive(self):
++        with self.assertRaisesRegex(ValueError,'OUTSIDE'):
++            create_baseline(str(self.archive), str(self.archive/'inside.json'))
++        self.baseline()
++        with self.assertRaises(FileExistsError):
++            create_baseline(str(self.archive), str(self.manifest))
++
++    def test_manifest_traversal_rejected(self):
++        self.baseline()
++        m=json.loads(self.manifest.read_text())
++        m['files'][0]['path'] = '../outside'
++        self.manifest.write_text(json.dumps(m))
++        with self.assertRaisesRegex(ValueError,'Unsafe path'):
++            audit_archive(str(self.archive), str(self.manifest))
++
++    def test_create_readable_html_with_no_source_mutation(self):
++        self.baseline()
++        (self.archive / 'new <photo>.jpg').write_bytes(b'new')
++        report = audit_archive(str(self.archive), str(self.manifest))
++        outfile=self.base/'integrity.html'
++        self.assertEqual(write_html_report(report,str(outfile),str(self.archive)),str(outfile))
++        html=outfile.read_text()
++        self.assertIn('Cold Storage Integrity',html)
++        self.assertIn('new &lt;photo&gt;.jpg',html)
++        self.assertNotIn('new <photo>.jpg',html)
++        with self.assertRaises(FileExistsError):
++            write_html_report(report,str(outfile),str(self.archive))
++
++    def test_exact_cli_read_only_baseline_verify(self):
++        with contextlib.redirect_stdout(io.StringIO()) as out,contextlib.redirect_stderr(io.StringIO()):
++            self.assertEqual(run(['archive-baseline','--folder',str(self.archive),
++                                  '--output',str(self.manifest),'--json']),0)
++        self.assertEqual(json.loads(out.getvalue())['files_baselined'],2)
++        report=self.base/'report.html'
++        with contextlib.redirect_stdout(io.StringIO()) as out,contextlib.redirect_stderr(io.StringIO()):
++            self.assertEqual(run(['archive-verify','--folder',str(self.archive),
++                                  '--manifest',str(self.manifest),'--report-html',str(report),'--json']),0)
++        self.assertEqual(json.loads(out.getvalue())['status'],'matches_baseline')
++        self.assertTrue(report.exists())
++        (self.archive / '2001' / 'photo.jpg').write_bytes(b'changed')
++        with contextlib.redirect_stdout(io.StringIO()) as out,contextlib.redirect_stderr(io.StringIO()):
++            self.assertEqual(run(['archive-verify','--folder',str(self.archive),
++                                  '--manifest',str(self.manifest),'--json']),2)
++        self.assertEqual(json.loads(out.getvalue())['files_changed'],1)
++
++    def test_manifest_after_move_drive_letter_works(self):
++        self.baseline()
++        moved=self.base/'reconnected-drive'
++        self.archive.rename(moved)
++        self.assertEqual(audit_archive(str(moved),str(self.manifest))['status'],'matches_baseline')
++
++
++if __name__=='__main__':
++    unittest.main()
++
++class IsoBuildDependencyTests(unittest.TestCase):
++    def test_wsl_installs_python_for_structural_verification(self):
++        from driverepair_desktop.windows_iso_build import _WSL_BUILD_SCRIPT
++        self.assertIn('command -v python3',_WSL_BUILD_SCRIPT)
++        self.assertIn('live-build debootstrap xorriso python3',_WSL_BUILD_SCRIPT)
+diff --git a/scripts/build_live_iso.sh b/scripts/build_live_iso.sh
+index 4e513db..eba073c 100644
+--- a/scripts/build_live_iso.sh
++++ b/scripts/build_live_iso.sh
+@@ -8,9 +8,9 @@ if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+   echo 'ERROR: Debian live-build requires root in an isolated build VM.' >&2
+   exit 2
+ fi
+-for tool in lb debootstrap sha256sum; do
++for tool in lb debootstrap sha256sum python3; do
+   if ! command -v "$tool" >/dev/null; then
+-    echo "ERROR: missing $tool; on Debian install live-build debootstrap" >&2
++    echo "ERROR: missing $tool; on Debian install live-build debootstrap xorriso python3" >&2
+     exit 2
+   fi
+ done

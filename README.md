@@ -2,7 +2,7 @@
 
 **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
 
-> **Release status:** `0.3.3b33` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+> **Release status:** `0.3.3b34` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
 
 **Drive models:** The bundled [offline model catalog](docs/DRIVE_MODEL_CATALOG.md) currently documents four vendor-backed model entries (three Seagate SMR models and one SanDisk SSD family). It guides scanning; it is not a comprehensive database or authorization to rewrite a disk.
 
@@ -66,6 +66,42 @@ installation of supported Windows tools. No installer runs automatically.
 salvage. Recover files or use a restored image when the data matters more than
 reuse of a potentially failing drive. These are distinct workflows and should
 not be presented as interchangeable repairs.
+
+## Cold storage integrity — check archived photos without another image
+
+DriveRepair can now verify **ordinary files and folders** on an occasionally connected
+USB hard drive or SSD. Open **Cold storage integrity** from the Qt sidebar. On the
+first connection, choose the photo/archive folder and **Create new baseline**.
+DriveRepair reads each regular file and saves a small, external **SHA-256 manifest**
+(paths, sizes, hashes, and baseline timestamp). No full disk image is created and
+**no source files are modified**. Store the manifest on a *different* physical disk
+or in a trusted backup location — not in the protected folder. The manifest is
+marked `UNATTESTED_BASELINE`: DriveRepair cannot know if an old photo was already
+corrupt the first time it was scanned.
+
+When you connect the drive again (for example every 3–9 months), choose the same
+folder and **Verify against saved baseline**. The Qt flow compares file contents
+against the earlier hashes, even if the drive letter has changed, and generates an
+offline, navy-and-teal HTML report. It separates **unchanged, changed, missing,
+new, and unreadable** files. Newly added pictures are *not* automatically called
+corrupt. Review legitimate changes, **retain the old baseline**, then create a
+new baseline under a different filename. Unlike a new baseline, old manifests
+allow detection of historical changes.
+
+**Important:** A matching checksum means the bits read now match the original
+baseline; it is not a health guarantee, proof the baseline was correct, or a
+backup. SHA-256 detects differences but cannot reconstruct lost photos. Keep at
+least one independent copy of irreplaceable files, even if you do not retain a
+full drive image. The archive check is read-only, but extra reads can stress an
+already-failing drive; rescue critical data first if the drive is unstable.
+Symbolic links and inaccessible files are not silently trusted.
+
+CLI equivalent (works on Windows/Linux/macOS; drive letter can change):
+
+```powershell
+python -m driverepair_desktop archive-baseline --folder "E:\FamilyPhotos" --output "C:\ArchiveChecks\photos-2026-11.json" --json
+python -m driverepair_desktop archive-verify --folder "F:\FamilyPhotos" --manifest "C:\ArchiveChecks\photos-2026-11.json" --report-html "C:\ArchiveChecks\photos-verify.html" --json
+```
 
 ## What DriveRepair does
 
