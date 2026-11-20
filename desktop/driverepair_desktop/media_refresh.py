@@ -198,6 +198,11 @@ def _windows_lock_paths(partitions, *, allow_mounted: bool) -> list[str]:
                 raise RuntimeError('Unsupported patient volume mount path: ' + path)
         if len(guids) > 1 or len(letters) > 1:
             raise RuntimeError('Ambiguous patient volume paths')
+        # A GUID path does not make a mounted volume unmounted: a partition
+        # can expose BOTH a GUID and a drive letter. Always require the same
+        # explicit mounted-volume authorization before dismounting either.
+        if letters and not allow_mounted:
+            raise RuntimeError('Mounted patient volume requires explicit lock/dismount authorization')
         if guids:
             volume_paths.append(guids[0])
         elif letters:
@@ -273,16 +278,22 @@ class WindowsReadWriter:
             raise RuntimeError('Raw patient already open')
         access = 0x80000000 | 0x40000000
         flags = 0x80000000  # FILE_FLAG_WRITE_THROUGH
-        self.handle = self.kernel.CreateFileW(self._device.path, access, 0, None, 3, flags, None)
+        # Windows raw-disk handles commonly coexist with storage stack handles.
+        # Share READ|WRITE (documented Win32 DASD pattern); the exclusive
+        # filesystem access guarantee is provided by the HELD volume locks,
+        # not by a zero-share physical-disk handle.
+        self.handle = self.kernel.CreateFileW(self._device.path, access, 0x3, None, 3, flags, None)
         if self.handle == ctypes.c_void_p(-1).value or self.handle is None:
             err = ctypes.get_last_error()
             self.handle = None
             if err == 5:  # ERROR_ACCESS_DENIED
                 raise PermissionError(
-                    'Windows refused GENERIC_WRITE on the physical drive (WinError 5). '
-                    'Re-run DriveRepair from an elevated Administrator terminal for '
-                    'in-place refresh. Read-only physical-drive scans may also require '
-                    'Administrator access; image-file operations do not.'
+                    'Windows refused the physical-disk write handle (WinError 5) '
+                    'after volume-lock preflight. Administrator elevation is required, '
+                    'but is not sufficient when a filter driver, encryption layer, '
+                    'USB bridge or another process denies raw access. Check the '
+                    'patient volume locks and Windows storage events; never bypass '
+                    'an access denial or retry writes to an unverified target.'
                 )
             raise ctypes.WinError(err)
 
@@ -311,18 +322,28 @@ class WindowsReadWriter:
         ]
         self.kernel.DeviceIoControl.restype = wintypes.BOOL
         for path in sorted(set(volume_paths)):
+            # Share flags are required even for a volume that will be locked.
+            # The LOCK ioctl, not CreateFile share=0, establishes exclusivity.
             handle = self.kernel.CreateFileW(path, 0x80000000 | 0x40000000, 0x3, None, 3, 0, None)
             if handle == ctypes.c_void_p(-1).value or handle is None:
-                raise RuntimeError(f"Cannot open patient volume exclusively: {path}")
+                error = ctypes.get_last_error()
+                raise RuntimeError(f"Cannot open patient volume {path} for locking "
+                                   f"(WinError {error}); no writes attempted")
             returned = wintypes.DWORD(0)
             if not self.kernel.DeviceIoControl(handle, FSCTL_LOCK_VOLUME, None, 0, None, 0,
                                                ctypes.byref(returned), None):
+                error = ctypes.get_last_error()
                 self.kernel.CloseHandle(handle)
-                raise RuntimeError(f"FSCTL_LOCK_VOLUME failed for {path}: volume is in use")
+                raise RuntimeError(f"FSCTL_LOCK_VOLUME failed for {path} (WinError {error}). "
+                                   'Close Explorer windows, scanners, backup and indexing jobs '
+                                   'using this volume. An occupied volume cannot be forcibly '
+                                   'locked for raw repair; no writes attempted.')
             self._volume_handles.append(handle)
             if not self.kernel.DeviceIoControl(handle, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0,
                                                ctypes.byref(returned), None):
-                raise RuntimeError(f"FSCTL_DISMOUNT_VOLUME failed for {path}")
+                error = ctypes.get_last_error()
+                raise RuntimeError(f"FSCTL_DISMOUNT_VOLUME failed for {path} "
+                                   f"(WinError {error}); no writes attempted")
         # Fail closed if partitions appeared/changed while locks were acquired.
         after = _windows_partition_lock_signature(_windows_partition_inventory(disk_number))
         if after != before:
@@ -355,12 +376,15 @@ class WindowsReadWriter:
             raise ctypes.WinError(ctypes.get_last_error())
 
     def close(self) -> None:
-        for handle in self._volume_handles:
-            self.kernel.CloseHandle(handle)
-        self._volume_handles.clear()
+        # Keep volume locks for the ENTIRE lifetime of the raw writer.
+        # Releasing them while the raw write handle remains open can permit a
+        # filesystem remount/race before I/O is fully finished.
         if self.handle is not None:
             self.kernel.CloseHandle(self.handle)
             self.handle = None
+        for handle in reversed(self._volume_handles):
+            self.kernel.CloseHandle(handle)
+        self._volume_handles.clear()
 
 
 class UnixReadWriter:

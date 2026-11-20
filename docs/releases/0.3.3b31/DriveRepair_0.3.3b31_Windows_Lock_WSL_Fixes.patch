@@ -1,0 +1,436 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 818c16b..44c94c1 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,13 @@
+ # Changelog
+ 
++## 0.3.3b31 — 2026-11-20: Windows repair-lock lifetime and Debian WSL startup fixes
++
++- **Windows raw-disk access:** after obtaining and retaining exclusive locks on every discoverable patient filesystem volume, open the physical disk using Win32 `FILE_SHARE_READ | FILE_SHARE_WRITE` rather than unnecessarily requesting an incompatible `share=0` handle. A successfully opened raw handle is not itself proof of exclusive disk access; filesystem-volume locks, external/system checks, independent identity verification, separate journal, write consent and readback remain mandatory.
++- **Lock lifetime:** close the raw physical disk handle **before** releasing acquired volume handles; release in reverse acquisition order. Preserve fail-closed behavior when a volume cannot be locked, is in use, changes partition layout, or has no safe lockable handle. Mounted GUID paths cannot sidestep explicit dismount authorization.
++- Improve Win32 error messages with the failed volume and operating-system error code; never use an unapproved force-dismount to bypass a lock failure.
++- **WSL ISO build on Windows:** stop launching Debian merely to translate staging/output drive paths. Use a deterministic default WSL `/mnt/<drive>/` translation and verify availability inside the asynchronous build. Distinguish an absent Debian distribution from an unresponsive or uninitialized WSL installation, avoiding duplicate `wsl --install` attempts after `ERROR_ALREADY_EXISTS`.
++- New fault-injection tests cover Windows CreateFile sharing, held-lock cleanup and close order, mounted GUID paths, installed/missing/unresponsive Debian cases and Windows-path mapping. Linux-hosted tests prove only the software logic; **real Windows disk locking, filesystem write, WSL ISO build, and BIOS/UEFI USB boot remain unverified.**
++
+ ## 0.3.3b30 — 2026-11-20: On-device repair and Restore workspace separation
+ 
+ - Separated the Qt **Repair drive** and **Restore data** workspaces. SSD/flash repair actions no longer silently image drives or switch to Restore.
+diff --git a/README.md b/README.md
+index 80bb759..1a3dcbb 100644
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,7 @@
+ 
+ **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
+ 
+-> **Release status:** `0.3.3b30` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
++> **Release status:** `0.3.3b31` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+ 
+ **Drive models:** The bundled [offline model catalog](docs/DRIVE_MODEL_CATALOG.md) currently documents four vendor-backed model entries (three Seagate SMR models and one SanDisk SSD family). It guides scanning; it is not a comprehensive database or authorization to rewrite a disk.
+ 
+@@ -139,22 +139,22 @@ On Windows PowerShell, run these same commands using `py` if Python is installed
+ 
+ ```bash
+ python scripts/build_desktop.py --public-beta --no-wheel
+-python dist/DriveRepair-0.3.3b24-public-beta.pyz gui
++python dist/DriveRepair-0.3.3b31-public-beta.pyz gui
+ ```
+ 
+ Install optional `PySide6` in that Python environment if you want the new Qt workstation. The **public-beta** package blocks physical in-place writes. The separate **repair-beta** package may attempt the guided, HDD-only write workflow on sacrificial hardware with all safeguards enabled:
+ 
+ ```bash
+ python scripts/build_desktop.py --repair-beta --no-wheel
+-python dist/DriveRepair-0.3.3b24-repair-beta.pyz qt-gui
++python dist/DriveRepair-0.3.3b31-repair-beta.pyz qt-gui
+ ```
+ 
+ For a CLI image-only example, use a source **regular file** and an unused output path:
+ 
+ ```bash
+-python dist/DriveRepair-0.3.3b24-public-beta.pyz scan-image --image source.img --mode triage --json
+-python dist/DriveRepair-0.3.3b24-public-beta.pyz rescue-image --image source.img --output recovered.img --json
+-python dist/DriveRepair-0.3.3b24-public-beta.pyz rescue-status --output recovered.img --json
++python dist/DriveRepair-0.3.3b31-public-beta.pyz scan-image --image source.img --mode triage --json
++python dist/DriveRepair-0.3.3b31-public-beta.pyz rescue-image --image source.img --output recovered.img --json
++python dist/DriveRepair-0.3.3b31-public-beta.pyz rescue-status --output recovered.img --json
+ ```
+ 
+ A repair-beta build is **not** a recommendation to write to a failing or valuable patient. See [hardware testing requirements](docs/USB_REPAIR_PREFLIGHT_B17.md) and [release gates](docs/RELEASE_STATUS.md).
+@@ -256,10 +256,12 @@ Drive condition scores are **evidence-based diagnostics**, not exact remaining-l
+ 
+ **Targeted HDD repair is disabled.** This is usually missing stable identity or SMART rotation/health evidence from the USB bridge. Use **Check HDD eligibility**. Install `smartmontools`, ensure the enclosure supports ATA SAT pass-through, or safely test offline via direct SATA; the software will not infer permission to write from a Seagate/SMR model label alone. Rescue to image remains available.
+ 
+-**Windows reports access denied / WinError 5.** Close programs using the disk, verify Administrator privileges and that Windows can grant exclusive access. DriveRepair must not override locks, active volumes or OS-level device protection.
++**Windows reports access denied / WinError 5.** The guarded writer now opens the raw physical disk with Win32 read/write sharing **after acquiring every accessible patient volume lock**, and keeps those locks until the raw handle is closed. This avoids a spurious conflict from `share=0`. It does **not** circumvent an actual lock denial. Close File Explorer/windows, antivirus scanners and file-indexing or backup jobs using the patient; verify Administrator privileges and review the exact `FSCTL_LOCK_VOLUME` / `FSCTL_DISMOUNT_VOLUME` error in the operator log. If a partition exposes no safe lockable volume handle, work offline rather than forcing an unmounted raw write. For an NTFS/FAT/exFAT filesystem correction, Windows CHKDSK manages its own volume locking; it cannot be made safe by borrowing the physical HDD writer's handle.
+ 
+ **A read stalls indefinitely.** The USB device/driver may have stopped responding. A cooperative Stop can only act after the current kernel request returns; an isolated read-only worker can be stopped, but the hardware may still need a safe disconnect. Avoid repeated stress on deteriorating media.
+ 
++**Windows WSL builder reports `ERROR_ALREADY_EXISTS` or Debian path translation times out.** Do not repeat `wsl --install -d Debian` blindly. Run `wsl --list --verbose` to see whether Debian is already registered, launch the Debian app once to initialize it, reboot if Windows requests one, and only then retry the ISO builder. The b31 GUI no longer launches WSL just to translate `C:\...` staging paths; it assumes standard `/mnt/c/...` mounts and checks their availability when the Debian build actually starts. If your WSL automount location is customized, use a Debian VM or adjust the build environment rather than forcing a fallback path. A successful build still needs BIOS/UEFI boot testing.
++
+ **SMART results are unavailable.** Windows `HealthStatus` is only a coarse fallback and cannot authorize HDD repair. `smartctl` and a supporting bridge are needed for stronger evidence. Do not mistake an unavailable SMART report for a healthy drive.
+ 
+ ## Architecture and contributions
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index dfe4674..8fe0c1a 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b30"
++__version__ = "0.3.3b31"
+diff --git a/desktop/driverepair_desktop/media_refresh.py b/desktop/driverepair_desktop/media_refresh.py
+index 87790d0..710a039 100644
+--- a/desktop/driverepair_desktop/media_refresh.py
++++ b/desktop/driverepair_desktop/media_refresh.py
+@@ -198,6 +198,11 @@ def _windows_lock_paths(partitions, *, allow_mounted: bool) -> list[str]:
+                 raise RuntimeError('Unsupported patient volume mount path: ' + path)
+         if len(guids) > 1 or len(letters) > 1:
+             raise RuntimeError('Ambiguous patient volume paths')
++        # A GUID path does not make a mounted volume unmounted: a partition
++        # can expose BOTH a GUID and a drive letter. Always require the same
++        # explicit mounted-volume authorization before dismounting either.
++        if letters and not allow_mounted:
++            raise RuntimeError('Mounted patient volume requires explicit lock/dismount authorization')
+         if guids:
+             volume_paths.append(guids[0])
+         elif letters:
+@@ -273,16 +278,22 @@ class WindowsReadWriter:
+             raise RuntimeError('Raw patient already open')
+         access = 0x80000000 | 0x40000000
+         flags = 0x80000000  # FILE_FLAG_WRITE_THROUGH
+-        self.handle = self.kernel.CreateFileW(self._device.path, access, 0, None, 3, flags, None)
++        # Windows raw-disk handles commonly coexist with storage stack handles.
++        # Share READ|WRITE (documented Win32 DASD pattern); the exclusive
++        # filesystem access guarantee is provided by the HELD volume locks,
++        # not by a zero-share physical-disk handle.
++        self.handle = self.kernel.CreateFileW(self._device.path, access, 0x3, None, 3, flags, None)
+         if self.handle == ctypes.c_void_p(-1).value or self.handle is None:
+             err = ctypes.get_last_error()
+             self.handle = None
+             if err == 5:  # ERROR_ACCESS_DENIED
+                 raise PermissionError(
+-                    'Windows refused GENERIC_WRITE on the physical drive (WinError 5). '
+-                    'Re-run DriveRepair from an elevated Administrator terminal for '
+-                    'in-place refresh. Read-only physical-drive scans may also require '
+-                    'Administrator access; image-file operations do not.'
++                    'Windows refused the physical-disk write handle (WinError 5) '
++                    'after volume-lock preflight. Administrator elevation is required, '
++                    'but is not sufficient when a filter driver, encryption layer, '
++                    'USB bridge or another process denies raw access. Check the '
++                    'patient volume locks and Windows storage events; never bypass '
++                    'an access denial or retry writes to an unverified target.'
+                 )
+             raise ctypes.WinError(err)
+ 
+@@ -311,18 +322,28 @@ class WindowsReadWriter:
+         ]
+         self.kernel.DeviceIoControl.restype = wintypes.BOOL
+         for path in sorted(set(volume_paths)):
++            # Share flags are required even for a volume that will be locked.
++            # The LOCK ioctl, not CreateFile share=0, establishes exclusivity.
+             handle = self.kernel.CreateFileW(path, 0x80000000 | 0x40000000, 0x3, None, 3, 0, None)
+             if handle == ctypes.c_void_p(-1).value or handle is None:
+-                raise RuntimeError(f"Cannot open patient volume exclusively: {path}")
++                error = ctypes.get_last_error()
++                raise RuntimeError(f"Cannot open patient volume {path} for locking "
++                                   f"(WinError {error}); no writes attempted")
+             returned = wintypes.DWORD(0)
+             if not self.kernel.DeviceIoControl(handle, FSCTL_LOCK_VOLUME, None, 0, None, 0,
+                                                ctypes.byref(returned), None):
++                error = ctypes.get_last_error()
+                 self.kernel.CloseHandle(handle)
+-                raise RuntimeError(f"FSCTL_LOCK_VOLUME failed for {path}: volume is in use")
++                raise RuntimeError(f"FSCTL_LOCK_VOLUME failed for {path} (WinError {error}). "
++                                   'Close Explorer windows, scanners, backup and indexing jobs '
++                                   'using this volume. An occupied volume cannot be forcibly '
++                                   'locked for raw repair; no writes attempted.')
+             self._volume_handles.append(handle)
+             if not self.kernel.DeviceIoControl(handle, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0,
+                                                ctypes.byref(returned), None):
+-                raise RuntimeError(f"FSCTL_DISMOUNT_VOLUME failed for {path}")
++                error = ctypes.get_last_error()
++                raise RuntimeError(f"FSCTL_DISMOUNT_VOLUME failed for {path} "
++                                   f"(WinError {error}); no writes attempted")
+         # Fail closed if partitions appeared/changed while locks were acquired.
+         after = _windows_partition_lock_signature(_windows_partition_inventory(disk_number))
+         if after != before:
+@@ -355,12 +376,15 @@ class WindowsReadWriter:
+             raise ctypes.WinError(ctypes.get_last_error())
+ 
+     def close(self) -> None:
+-        for handle in self._volume_handles:
+-            self.kernel.CloseHandle(handle)
+-        self._volume_handles.clear()
++        # Keep volume locks for the ENTIRE lifetime of the raw writer.
++        # Releasing them while the raw write handle remains open can permit a
++        # filesystem remount/race before I/O is fully finished.
+         if self.handle is not None:
+             self.kernel.CloseHandle(self.handle)
+             self.handle = None
++        for handle in reversed(self._volume_handles):
++            self.kernel.CloseHandle(handle)
++        self._volume_handles.clear()
+ 
+ 
+ class UnixReadWriter:
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+index a24e5ac..9c1e1ad 100644
+--- a/desktop/driverepair_desktop/qtgui.py
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -2318,11 +2318,17 @@ def launch():
+ 
+         def build_iso_windows(self):
+             """Build Debian live recovery ISO on Windows in preinstalled WSL2."""
+-            from .windows_iso_build import require_debian_wsl, prepare_wsl_build
++            from .windows_iso_build import require_debian_wsl, prepare_wsl_build, WSLPrerequisiteError
+             import tempfile
+             try:
+                 require_debian_wsl()
+-            except RuntimeError as exc:
++            except WSLPrerequisiteError as exc:
++                if not exc.missing_distro:
++                    QMessageBox.warning(self,'Debian WSL needs initialization',
++                        str(exc)+'\n\nOpen Windows Terminal and run `wsl --list --verbose`; '
++                        'then launch Debian once. DriveRepair will not attempt to '
++                        'reinstall a distro that may already exist.')
++                    return
+                 # Offer a single explicitly approved setup action, not a dead-end
+                 # error with command lines John Doe must copy by hand.
+                 dialog=QMessageBox(self)
+diff --git a/desktop/driverepair_desktop/windows_iso_build.py b/desktop/driverepair_desktop/windows_iso_build.py
+index 4a39029..0d59e9b 100644
+--- a/desktop/driverepair_desktop/windows_iso_build.py
++++ b/desktop/driverepair_desktop/windows_iso_build.py
+@@ -11,17 +11,50 @@ from pathlib import Path
+ import subprocess
+ import sys
+ import zipfile
++import re
++
++
++class WSLPrerequisiteError(RuntimeError):
++    """Distinguish a truly missing distro from a broken/stalled WSL service."""
++
++    def __init__(self, message: str, *, missing_distro: bool = False):
++        super().__init__(message)
++        self.missing_distro = missing_distro
++
++
++def _standard_wsl_mount(value: str) -> str | None:
++    """Convert a local Windows drive path using WSL's documented default mount.
++
++    Pure string conversion deliberately does NOT start the Debian VM from the
++    Qt GUI thread. The actual asynchronous build verifies that the directory
++    exists in WSL, and refuses custom automount roots with an actionable error.
++    """
++    match = re.fullmatch(r'([A-Za-z]):[\\/](.*)', value)
++    if not match:
++        return None
++    segments = re.split(r'[\\/]+', match.group(2))
++    if any(part in ('.', '..') for part in segments):
++        raise ValueError('Unsafe Windows staging path')
++    return '/mnt/' + match.group(1).lower() + '/' + '/'.join(part for part in segments if part)
+ 
+ 
+ def wsl_path(path: str | Path, *, runner=subprocess.run) -> str:
+-    """Convert an absolute Windows filesystem path without shell interpolation."""
+-    value = str(Path(path).resolve())
++    """Convert a local build path without starting WSL merely for path math."""
++    value = str(Path(path).resolve()) if sys.platform == 'win32' else str(path)
++    if sys.platform == 'win32':
++        mapped = _standard_wsl_mount(value)
++        if not mapped:
++            raise WSLPrerequisiteError('Only local drive-letter paths under the default '
++                'WSL /mnt/<drive>/ mount are supported for ISO builds. UNC paths and '
++                'custom WSL automount locations must be built in a Debian VM.')
++        return mapped
++    # Non-Windows compatibility for existing portable unit tests.
+     done = runner(['wsl.exe', '-d', 'Debian', '--exec', 'wslpath', '-u', value],
+                   capture_output=True, text=True, timeout=15, check=False)
+-    if done.returncode or not done.stdout.strip().startswith('/'):
++    if done.returncode or not str(done.stdout).strip().startswith('/'):
+         raise RuntimeError('Debian WSL could not resolve the Windows build path: '
+-                           + (done.stderr or '').strip()[:220])
+-    return done.stdout.strip()
++                           + str(getattr(done, 'stderr', '') or '').strip()[:220])
++    return str(done.stdout).strip()
+ 
+ 
+ def require_debian_wsl(*, runner=subprocess.run) -> None:
+@@ -31,13 +64,20 @@ def require_debian_wsl(*, runner=subprocess.run) -> None:
+         done = runner(['wsl.exe', '--list', '--quiet'], capture_output=True,
+                       timeout=18, check=False)
+     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+-        raise RuntimeError('WSL is unavailable. Install WSL and Debian first; no USB was written.') from exc
++        raise WSLPrerequisiteError('WSL inventory is unavailable or timed out. Debian may already '
++            'be installed: check `wsl --list --verbose` and launch Debian once to finish first-run '
++            'setup. Do not reinstall over an existing distro; no USB was written.') from exc
+     # Windows WSL may output UTF-16LE (even without an explicit encoding flag).
+     content = done.stdout if isinstance(done.stdout, bytes) else str(done.stdout).encode()
+     decoded = content.decode('utf-16-le', 'ignore') if b'\x00' in content else content.decode('utf-8', 'ignore')
+-    if done.returncode or 'Debian' not in [line.strip().strip('\x00') for line in decoded.splitlines()]:
+-        raise RuntimeError('Debian WSL distribution not installed. Run "wsl --install -d Debian" '
+-                           'from an administrator terminal; reboot if prompted. No installation was started.')
++    if done.returncode:
++        raise WSLPrerequisiteError('Cannot read WSL distribution inventory. Check `wsl --list '
++            '--verbose` and initialize any existing Debian install before retrying. Do not '
++            'reinstall blindly; no USB was written.')
++    if 'Debian' not in [line.strip().strip('\x00') for line in decoded.splitlines()]:
++        raise WSLPrerequisiteError('Debian WSL distribution not installed. Run '
++            '`wsl --install -d Debian` in an elevated terminal if no Debian distro exists.',
++            missing_distro=True)
+ 
+ 
+ # This static shell script copies the checkout to native WSL storage before
+@@ -50,6 +90,11 @@ if [[ -z "$SOURCE_DIR" || -z "$OUTPUT_DIR" || "$OUTPUT_DIR" == / ]]; then
+   echo 'Unsafe WSL build arguments' >&2; exit 2
+ fi
+ if [[ "$(id -u)" != 0 ]]; then echo 'Debian WSL root required' >&2; exit 2; fi
++if [[ ! -d "$SOURCE_DIR/driverepair" || ! -d "$OUTPUT_DIR" ]]; then
++  echo 'Staging/output not accessible in Debian WSL. Confirm /mnt/<drive>/ automount '
++  echo 'or build in a Debian VM. No ISO and no USB were written.' >&2
++  exit 3
++fi
+ if ! command -v lb >/dev/null || ! command -v debootstrap >/dev/null || ! command -v xorriso >/dev/null; then
+   echo 'Installing Debian live-build prerequisites in isolated WSL distro (approved by operator).' >&2
+   apt-get update
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index 8f9c699..bbcc979 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b30"
++version = "0.3.3b31"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_b31_windows_lock_and_wsl.py b/desktop/tests/test_b31_windows_lock_and_wsl.py
+new file mode 100644
+index 0000000..40f0e47
+--- /dev/null
++++ b/desktop/tests/test_b31_windows_lock_and_wsl.py
+@@ -0,0 +1,119 @@
++"""Regression checks: raw disk sharing, lock lifetime, and WSL startup issues."""
++import ctypes
++import subprocess
++import unittest
++from unittest.mock import patch
++
++from driverepair_desktop.devices import Device
++from driverepair_desktop.media_refresh import (WindowsReadWriter,
++                                                 _windows_lock_paths)
++from driverepair_desktop import windows_iso_build as wsl
++
++
++class _API:
++    """Mockable ctypes-style API callable (supports argtypes/restype)."""
++    def __init__(self, name, fn, calls):
++        self.name, self.fn, self.calls = name, fn, calls
++
++    def __call__(self, *args):
++        self.calls.append((self.name, args))
++        return self.fn(*args)
++
++
++class _Kernel:
++    def __init__(self):
++        self.calls=[]
++        self.CreateFileW=_API('open', lambda *args: 200 if 'PhysicalDrive' in args[0] else 100,
++                              self.calls)
++        self.CloseHandle=_API('close', lambda *args: 1, self.calls)
++        self.DeviceIoControl=_API('ioctl', lambda *args: 1, self.calls)
++
++
++class WindowsVolumeLockRegressions(unittest.TestCase):
++    def new_writer(self):
++        writer=WindowsReadWriter.__new__(WindowsReadWriter)
++        writer._device=Device('windows:PhysicalDrive3', r'\\.\PhysicalDrive3',
++                              'Synthetic external HDD', 1024 * 1024, 512, 'usb', 'UNITTEST1234')
++        writer.kernel=_Kernel()
++        writer.handle=None
++        writer._volume_handles=[]
++        return writer
++
++    def test_raw_disk_share_read_write_during_held_lock(self):
++        writer=self.new_writer()
++        writer._volume_handles=[100]
++        writer.open_raw()
++        self.assertEqual(writer.handle,200)
++        op=[args for name,args in writer.kernel.calls if name=='open'][0]
++        self.assertEqual(op[2],3, 'Windows raw handle must coexist with system storage handles')
++        self.assertEqual(op[1],0xC0000000)
++        self.assertEqual(op[5],0x80000000, 'Keep write-through')
++        writer.close()
++        self.assertEqual([args[0] for name,args in writer.kernel.calls if name=='close'],
++                         [200,100], 'Raw writer must close before the last volume lock')
++
++    def test_partial_acquisition_cleanup_on_second_lock_failure(self):
++        writer=self.new_writer()
++        attempts=[]
++        def lock_or_fail(*args):
++            attempts.append(args[1])
++            # First partition lock and dismount succeeded; second partition lock fails.
++            return args[0] == 100
++        writer.kernel.CreateFileW=_API('open', lambda *args: 100 if 'E:' in args[0] else 101,
++                                        writer.kernel.calls)
++        writer.kernel.DeviceIoControl=_API('ioctl', lock_or_fail,writer.kernel.calls)
++        parts=[{'PartitionNumber':1,'Type':'Basic','GptType':'','Paths':['E:\\']},
++               {'PartitionNumber':2,'Type':'Basic','GptType':'','Paths':['F:\\']}]
++        with patch('driverepair_desktop.media_refresh._windows_partition_inventory',return_value=parts), \
++             patch('driverepair_desktop.media_refresh.ctypes.get_last_error',return_value=32,create=True):
++            with self.assertRaisesRegex(RuntimeError,'FSCTL_LOCK_VOLUME'):
++                try:
++                    writer.lock_volumes(3,allow_mounted=True)
++                finally:
++                    writer.close()
++        self.assertIsNone(writer.handle)
++        self.assertEqual(writer._volume_handles,[])
++        self.assertIn(('close',(100,)),writer.kernel.calls)
++
++    def test_guids_do_not_bypass_mounted_authorization(self):
++        paths=[{'Paths':["E:" + chr(92), chr(92)*2 + "?" + chr(92) + "Volume{12}" + chr(92)]}]
++        with self.assertRaisesRegex(RuntimeError,'explicit|authorization'):
++            _windows_lock_paths(paths, allow_mounted=False)
++
++
++class WSLStartupRegressions(unittest.TestCase):
++    def test_path_conversion_does_not_spawn_linux_vm(self):
++        self.assertEqual(wsl._standard_wsl_mount(r'C:\Users\Public\drive rescue'),
++                         '/mnt/c/Users/Public/drive rescue')
++        self.assertEqual(wsl._standard_wsl_mount(r'D:\builds\test'),'/mnt/d/builds/test')
++        self.assertIsNone(wsl._standard_wsl_mount(r'\\server\share\build'))
++        with self.assertRaisesRegex(ValueError,'Unsafe'):
++            wsl._standard_wsl_mount(r'C:\Users\..\System32')
++
++    def test_installed_debian_does_not_trigger_another_install(self):
++        class Response:
++            returncode=0
++            stdout='Ubuntu\nDebian\n'.encode('utf-16-le')
++        with patch.object(wsl.sys,'platform','win32'):
++            self.assertIsNone(wsl.require_debian_wsl(runner=lambda *a,**k:Response()))
++
++    def test_unavailable_wsl_does_not_propose_duplicate_install(self):
++        def timeout(*args,**kwargs):
++            raise subprocess.TimeoutExpired(['wsl.exe','--list'], 18)
++        with patch.object(wsl.sys,'platform','win32'):
++            with self.assertRaises(wsl.WSLPrerequisiteError) as caught:
++                wsl.require_debian_wsl(runner=timeout)
++            self.assertFalse(caught.exception.missing_distro)
++
++    def test_missing_debian_is_distinct(self):
++        class Response:
++            returncode=0
++            stdout='Ubuntu\n'
++        with patch.object(wsl.sys,'platform','win32'):
++            with self.assertRaises(wsl.WSLPrerequisiteError) as caught:
++                wsl.require_debian_wsl(runner=lambda *a,**k:Response())
++            self.assertTrue(caught.exception.missing_distro)
++
++
++if __name__ == '__main__':
++    unittest.main()

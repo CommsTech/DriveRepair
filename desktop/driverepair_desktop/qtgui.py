@@ -2318,11 +2318,17 @@ def launch():
 
         def build_iso_windows(self):
             """Build Debian live recovery ISO on Windows in preinstalled WSL2."""
-            from .windows_iso_build import require_debian_wsl, prepare_wsl_build
+            from .windows_iso_build import require_debian_wsl, prepare_wsl_build, WSLPrerequisiteError
             import tempfile
             try:
                 require_debian_wsl()
-            except RuntimeError as exc:
+            except WSLPrerequisiteError as exc:
+                if not exc.missing_distro:
+                    QMessageBox.warning(self,'Debian WSL needs initialization',
+                        str(exc)+'\n\nOpen Windows Terminal and run `wsl --list --verbose`; '
+                        'then launch Debian once. DriveRepair will not attempt to '
+                        'reinstall a distro that may already exist.')
+                    return
                 # Offer a single explicitly approved setup action, not a dead-end
                 # error with command lines John Doe must copy by hand.
                 dialog=QMessageBox(self)
