@@ -73,6 +73,11 @@ def parser() -> argparse.ArgumentParser:
     cli = argparse.ArgumentParser(
         prog="driverepair", description="Disk diagnostics, image rescue and file recovery without reboot")
     sub = cli.add_subparsers(dest="command", required=True)
+    volume_list = sub.add_parser('list-repair-volumes',
+        help='READ-ONLY: list NTFS/FAT/exFAT partitions on an exact selected external disk')
+    volume_list.add_argument('--device', required=True)
+    volume_list.add_argument('--confirm-identity', required=True)
+    volume_list.add_argument('--json', action='store_true')
     winfs = sub.add_parser('repair-windows-filesystem',
         help='Guarded on-device NTFS/exFAT/FAT logical repair with Windows CHKDSK /f; NOT physical sector repair')
     winfs.add_argument('--device', required=True)
@@ -1958,6 +1963,14 @@ def run(argv: list[str] | None = None) -> int:
             print(json.dumps(result,indent=2) if args.json else
                   f"{result['status']} · verified spots {result.get('verified_regions',0)}",flush=True)
             return (0 if result['status'] in {'SAMPLED_REGIONS_VERIFIED','ORIGINAL_RESTORED_VERIFIED'} else 2)
+        if args.command == 'list-repair-volumes':
+            from .windows_volume_repair import inspect_windows_repairable_volumes
+            selected = select_external_device(args.device)
+            if selected.fingerprint[:12] != args.confirm_identity:
+                raise PermissionError('Selected disk identity changed during volume lookup')
+            result = inspect_windows_repairable_volumes(selected)
+            print(json.dumps(result, indent=2) if args.json else result, flush=True)
+            return 0
         if args.command == 'repair-windows-filesystem':
             from .windows_volume_repair import windows_filesystem_maintenance
             result = windows_filesystem_maintenance(args.device, args.letter,

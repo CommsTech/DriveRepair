@@ -2,7 +2,7 @@
 
 **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
 
-> **Release status:** `0.3.3b31` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+> **Release status:** `0.3.3b32` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
 
 **Drive models:** The bundled [offline model catalog](docs/DRIVE_MODEL_CATALOG.md) currently documents four vendor-backed model entries (three Seagate SMR models and one SanDisk SSD family). It guides scanning; it is not a comprehensive database or authorization to rewrite a disk.
 
@@ -15,9 +15,17 @@ The Qt workstation now selects an **automatic, bounded HDD investigation level**
 **Repair drive** performs supported *on-device* operations. It no longer sends
 SSD owners to imaging just because magnetic-disk rewriting does not apply.
 Choose **Repair filesystem on selected drive (Windows)** for a supported
-mounted NTFS, exFAT, or FAT volume, or choose **Targeted HDD region repair**
-for a genuinely identified rotational disk. The first method invokes Windows
-CHKDSK `/f` on the **original volume**; it can correct filesystem metadata but
+mounted NTFS, exFAT, or FAT volume. The repair screen discovers the eligible
+volumes attached to the selected external disk asynchronously; operators choose
+one from a bound list instead of typing a speculative drive letter. A RAW,
+unmounted or unknown filesystem is NOT silently repaired or formatted.
+Known SSDs select this logical repair method in the actual task dropdown,
+not a misleading HDD rewrite workflow. The command performs a second,
+independent volume-to-PhysicalDrive check immediately before altering metadata.
+
+Choose **Targeted HDD region repair** separately for a genuinely identified
+rotational disk. The filesystem method invokes Windows CHKDSK `/f` on the
+**original volume**; it can correct filesystem metadata but
 **cannot repair NAND flash cells, an unreadable sector, worn parts, or lost
 content**. It requires an existing backup, two explicit confirmations, a
 fresh match between the chosen drive and the Windows volume, and an independent
