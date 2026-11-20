@@ -129,8 +129,6 @@ class RamOnlyTests(unittest.TestCase):
 
     def test_mock_external_ram_repair_never_creates_a_journal(self):
         from types import SimpleNamespace
-        from driverepair_desktop.guided_repair import plan_targeted_refresh
-        from driverepair_desktop.media_refresh import ReadWriter
         class FakeDrive:
             def __init__(self, size):
                 self.raw = bytearray(b'M' * size)

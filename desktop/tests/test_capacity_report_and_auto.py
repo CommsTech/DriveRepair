@@ -53,7 +53,8 @@ class CapacityTests(unittest.TestCase):
             try:
                 result=validate_spots(media,size=media.size,sector=512,source_token=media.token,
                     journal_dir=Path(root)/'safe-journal',samples=12,skip_edges=0)
-            finally:media.close()
+            finally:
+                media.close()
             self.assertEqual(image.read_bytes(),data)
             self.assertEqual(result['status'],'SAMPLED_REGIONS_VERIFIED')
             self.assertEqual(result['counters']['validated'],12)
@@ -64,20 +65,24 @@ class CapacityTests(unittest.TestCase):
 
     def test_alias_like_mismatch_is_not_pass_even_when_original_restored(self):
         with tempfile.TemporaryDirectory() as root:
-            image=Path(root)/'fake.img';image.write_bytes(b'Z'*(512*1024))
+            image=Path(root)/'fake.img'
+            image.write_bytes(b'Z'*(512*1024))
             media=RegularImageWriter(str(image))
             try:
                 result=validate_spots(CorruptingWriter(media,mismatch=True),size=media.size,
                     sector=512,source_token=media.token,journal_dir=Path(root)/'j',
                     samples=8,skip_edges=0)
-            finally:media.close()
+            finally:
+                media.close()
             self.assertEqual(result['counters']['mismatch'],1)
             self.assertEqual(result['status'],'CAPACITY_INTEGRITY_WARNINGS')
             self.assertEqual(image.read_bytes(),b'Z'*(512*1024))
 
     def test_failed_restoration_keeps_journal_and_can_be_recovered(self):
         with tempfile.TemporaryDirectory() as root:
-            image=Path(root)/'fake.img';data=os.urandom(512*1024);image.write_bytes(data)
+            image=Path(root)/'fake.img'
+            data=os.urandom(512*1024)
+            image.write_bytes(data)
             journal=Path(root)/'journal'
             media=RegularImageWriter(str(image))
             try:
@@ -92,12 +97,14 @@ class CapacityTests(unittest.TestCase):
                     size=media.size,sector=512)
                 self.assertEqual(outcome['status'],'ORIGINAL_RESTORED_VERIFIED')
                 self.assertFalse((journal/'region.bin').exists())
-            finally:media.close()
+            finally:
+                media.close()
             self.assertEqual(image.read_bytes(),data)
 
     def test_windows_fallback_without_pread_pwrite(self):
         with tempfile.TemporaryDirectory() as root:
-            image=Path(root)/'image.img';image.write_bytes(os.urandom(512*1024))
+            image=Path(root)/'image.img'
+            image.write_bytes(os.urandom(512*1024))
             original=image.read_bytes()
             media=RegularImageWriter(str(image))
             try:
@@ -106,26 +113,33 @@ class CapacityTests(unittest.TestCase):
                     outcome=validate_spots(media,size=media.size,sector=512,source_token=media.token,
                         journal_dir=Path(root)/'journal',samples=8,skip_edges=0)
                 self.assertEqual(outcome['status'],'SAMPLED_REGIONS_VERIFIED')
-            finally:media.close()
+            finally:
+                media.close()
             self.assertEqual(image.read_bytes(),original)
 
     def test_symlinked_journal_is_rejected(self):
         with tempfile.TemporaryDirectory() as root:
-            image=Path(root)/'image.img';image.write_bytes(os.urandom(512*1024))
-            real=Path(root)/'real';real.mkdir()
+            image=Path(root)/'image.img'
+            image.write_bytes(os.urandom(512*1024))
+            real=Path(root)/'real'
+            real.mkdir()
             alias=Path(root)/'alias'
-            try:alias.symlink_to(real,target_is_directory=True)
-            except (OSError,NotImplementedError):self.skipTest('Host cannot create symlinks')
+            try:
+                alias.symlink_to(real,target_is_directory=True)
+            except (OSError,NotImplementedError):
+                self.skipTest('Host cannot create symlinks')
             media=RegularImageWriter(str(image))
             try:
                 with self.assertRaises(PermissionError):
                     validate_spots(media,size=media.size,sector=512,source_token=media.token,
                         journal_dir=alias,samples=8,skip_edges=0)
-            finally:media.close()
+            finally:
+                media.close()
 
     def test_stop_between_regions_never_writes_remaining_samples(self):
         with tempfile.TemporaryDirectory() as root:
-            image=Path(root)/'fake.img';image.write_bytes(b'A'*(512*1024))
+            image=Path(root)/'fake.img'
+            image.write_bytes(b'A'*(512*1024))
             media=RegularImageWriter(str(image))
             count=[0]
             try:
@@ -133,7 +147,8 @@ class CapacityTests(unittest.TestCase):
                     journal_dir=Path(root)/'j',samples=8,skip_edges=0,
                     stop_requested=lambda:count[0]>=3,
                     progress=lambda _:count.__setitem__(0,count[0]+1))
-            finally:media.close()
+            finally:
+                media.close()
             self.assertEqual(result['status'],'STOPPED_INCOMPLETE')
             self.assertEqual(result['counters']['untested'],5)
             self.assertEqual(image.read_bytes(),b'A'*(512*1024))
@@ -157,7 +172,8 @@ class CapacityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             path=Path(root)/'report.html'
             save_report(path,result)
-            with self.assertRaises(ValueError):save_report(path,result)
+            with self.assertRaises(ValueError):
+                save_report(path,result)
 
     def test_auto_policy_is_read_stress_selection_not_write_permission(self):
         smr=choose_maintenance(model='ST1000LM048',bus='usb',
@@ -181,7 +197,8 @@ class CapacityTests(unittest.TestCase):
     def test_cli_image_end_to_end_detailed_report(self):
         from driverepair_desktop.cli import run
         with tempfile.TemporaryDirectory() as td:
-            patient=Path(td)/'patient.img';patient.write_bytes(os.urandom(512*1024))
+            patient=Path(td)/'patient.img'
+            patient.write_bytes(os.urandom(512*1024))
             report=Path(td)/'result.html'
             with mock.patch('builtins.print'):
                 exitcode=run(['validate-image-capacity','--image',str(patient),
@@ -190,4 +207,5 @@ class CapacityTests(unittest.TestCase):
             self.assertEqual(exitcode,0)
             self.assertIn('Sampled address map',report.read_text())
 
-if __name__=='__main__':unittest.main()
+if __name__=='__main__':
+    unittest.main()

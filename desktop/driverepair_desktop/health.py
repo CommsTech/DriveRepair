@@ -12,7 +12,7 @@ import re
 import subprocess
 import sys
 import time
-from typing import Callable
+from typing import Any, Callable
 
 from .devices import Device
 
@@ -89,7 +89,7 @@ def _smart_logs(run: Callable[..., subprocess.CompletedProcess], executable: str
     These logs add no device wear: smartctl only reads the controller's
     existing records. Failures are reported as unavailable, never invented.
     """
-    out = {'selftest': None, 'error_log': None, 'available': False}
+    out: dict[str, Any] = {'selftest': None, 'error_log': None, 'available': False}
     for label, flag in (('selftest', 'selftest'), ('error_log', 'error')):
         remaining = deadline - time.monotonic()
         if remaining <= 0.5:

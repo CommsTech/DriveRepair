@@ -64,7 +64,7 @@ def advise(*, model: str = '', bus: str = '', media_type: str = '',
                             ('Transport errors detected; rewrites risk corrupting otherwise readable data.',),
                             profile.kind, 'transport_warning')
     temp = snap.get('temperature_c')
-    if type(temp) in (int, float) and temp >= 55:
+    if isinstance(temp, (int, float)) and not isinstance(temp, bool) and temp >= 55:
         return RepairAdvice('cool_rescue', 'Cool drive and prioritize rescue', False,
                             ('Observed temperature at or above 55 °C.',),
                             profile.kind, 'temperature_warning')

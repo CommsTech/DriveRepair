@@ -1,12 +1,13 @@
 """Actual recent-window throughput; not total bytes divided by total runtime."""
 from __future__ import annotations
+from typing import Any
 from collections import deque
 import time
 
 class RateWindow:
     def __init__(self, seconds: float = 5.0):
         self.seconds = seconds
-        self.points = deque()
+        self.points: deque[tuple[float, int]] = deque()
 
     def update(self, byte_count: int, now: float | None = None) -> float | None:
         now = time.monotonic() if now is None else now
@@ -23,7 +24,7 @@ class RateWindow:
         return max(0.0, (byte_count - self.points[0][1]) / elapsed)
 
 
-def choose_speed(speed_bps, average_bps=None, *, finished: bool = False):
+def choose_speed(speed_bps: Any, average_bps: float | None = None, *, finished: bool = False) -> tuple[float | None, bool]:
     """Pick the throughput value the UI should show.
 
     A job short enough to finish inside one rate-window sample never produces a

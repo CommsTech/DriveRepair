@@ -19,7 +19,8 @@ def assess(snapshot: dict | None, *, scan: dict | None = None,
         return {'score': None, 'band': 'UNKNOWN', 'confidence': 'none',
                 'reasons': ['SMART telemetry unavailable'], 'power_on_hours': None,
                 'notes': 'No score is safer than falsely certifying a drive.'}
-    nvme = snapshot.get('nvme') if isinstance(snapshot.get('nvme'), dict) else {}
+    _nvme_raw = snapshot.get('nvme')
+    nvme = _nvme_raw if isinstance(_nvme_raw, dict) else {}
     ata = {x['id']: x.get('raw_value') for x in snapshot.get('ata_selected_raw_attributes', [])
            if isinstance(x, dict) and type(x.get('id')) is int}
     hours = _number(nvme.get('power_on_hours'))

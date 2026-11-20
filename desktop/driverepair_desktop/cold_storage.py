@@ -12,7 +12,7 @@ import os
 from pathlib import Path, PurePosixPath
 import stat
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Any, Callable
 
 SCHEMA = 'driverepair.cold-storage.v1'
 MAX_MANIFEST_BYTES = 128 * 1024 * 1024
@@ -164,7 +164,7 @@ def create_baseline(directory: str, output: str, *, progress: Callable | None = 
     if count_issues:
         raise RuntimeError(f'Baseline not written: archive enumeration had {len(count_issues)} errors. '
                            f'First issue: {count_issues[0]["path"]} ({count_issues[0]["reason"]}).')
-    entries = []
+    entries: list[dict[str, Any]] = []
     size_total = 0
     for rel, path in _walk(root, issues=issues):
         if len(entries) >= MAX_FILES:
@@ -217,7 +217,8 @@ def _read_manifest(path: str) -> dict:
         raise ValueError('Invalid manifest file count')
     seen = set()
     for e in entries:
-        if not isinstance(e, dict) or not _valid_relative(e.get('path')):
+        _entry_path = e.get('path')
+        if not isinstance(e, dict) or not isinstance(_entry_path, str) or not _valid_relative(_entry_path):
             raise ValueError('Unsafe path in manifest')
         if (type(e.get('size_bytes')) is not int or e['size_bytes'] < 0 or
                 not isinstance(e.get('sha256'), str) or len(e['sha256']) != 64 or

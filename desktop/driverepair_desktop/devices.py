@@ -14,7 +14,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 
 @dataclass(frozen=True)
@@ -128,7 +128,7 @@ def _bool(value: object) -> bool:
 
 def _positive_int(value: object, default: int = 0) -> int:
     try:
-        v = int(value)  # type: ignore[arg-type]
+        v = int(value)  # type: ignore[call-overload]
         return v if v > 0 else default
     except (ValueError, TypeError, OverflowError):
         return default
@@ -498,8 +498,10 @@ def windows_devices(run: Callable[..., bytes] = _run) -> list[Device]:
     for finder in (_windows_devices_from_cim, _windows_devices_from_wmic,
                    _windows_devices_from_get_disk):
         try:
-            found = (finder(run, observed_sizes=cim_sizes)
-                     if finder is _windows_devices_from_cim else finder(run))
+            if finder.__name__ == '_windows_devices_from_cim':
+                found = _windows_devices_from_cim(run, observed_sizes=cim_sizes)
+            else:
+                found = finder(run)
             if found:
                 return found
             last_empty = found

@@ -18,6 +18,7 @@ PUBLIC RELEASE NOT APPROVED. Live hardware use remains unvalidated until
 sacrificial interrupt/USB-disconnect tests pass.
 """
 from __future__ import annotations
+from typing import Any
 
 import ctypes
 import errno
@@ -242,7 +243,7 @@ class WindowsReadWriter:
             raise ValueError("Not a Windows physical drive")
         from ctypes import wintypes
 
-        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel: Any = ctypes.WinDLL("kernel32", use_last_error=True)
         self.kernel.CreateFileW.argtypes = [
             wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
             wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
@@ -266,8 +267,8 @@ class WindowsReadWriter:
         self.kernel.FlushFileBuffers.restype = wintypes.BOOL
         self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
         self.kernel.CloseHandle.restype = wintypes.BOOL
-        self._device = device
-        self.handle = None
+        self._device: Any = device
+        self.handle: Any = None
         self._volume_handles: list[int] = []
         if not defer_raw_open:
             self.open_raw()
@@ -284,7 +285,7 @@ class WindowsReadWriter:
         # not by a zero-share physical-disk handle.
         self.handle = self.kernel.CreateFileW(self._device.path, access, 0x3, None, 3, flags, None)
         if self.handle == ctypes.c_void_p(-1).value or self.handle is None:
-            err = ctypes.get_last_error()
+            err = ctypes.get_last_error()  # type: ignore[attr-defined]
             self.handle = None
             if err == 5:  # ERROR_ACCESS_DENIED
                 raise PermissionError(
@@ -295,7 +296,7 @@ class WindowsReadWriter:
                     'patient volume locks and Windows storage events; never bypass '
                     'an access denial or retry writes to an unverified target.'
                 )
-            raise ctypes.WinError(err)
+            raise ctypes.WinError(err)  # type: ignore[attr-defined]
 
     def lock_volumes(self, disk_number: int, *, allow_mounted: bool = False) -> None:
         """Lock every discoverable filesystem volume, including no-letter volumes.
@@ -326,13 +327,13 @@ class WindowsReadWriter:
             # The LOCK ioctl, not CreateFile share=0, establishes exclusivity.
             handle = self.kernel.CreateFileW(path, 0x80000000 | 0x40000000, 0x3, None, 3, 0, None)
             if handle == ctypes.c_void_p(-1).value or handle is None:
-                error = ctypes.get_last_error()
+                error = ctypes.get_last_error()  # type: ignore[attr-defined]
                 raise RuntimeError(f"Cannot open patient volume {path} for locking "
                                    f"(WinError {error}); no writes attempted")
             returned = wintypes.DWORD(0)
             if not self.kernel.DeviceIoControl(handle, FSCTL_LOCK_VOLUME, None, 0, None, 0,
                                                ctypes.byref(returned), None):
-                error = ctypes.get_last_error()
+                error = ctypes.get_last_error()  # type: ignore[attr-defined]
                 self.kernel.CloseHandle(handle)
                 raise RuntimeError(f"FSCTL_LOCK_VOLUME failed for {path} (WinError {error}). "
                                    'Close Explorer windows, scanners, backup and indexing jobs '
@@ -341,7 +342,7 @@ class WindowsReadWriter:
             self._volume_handles.append(handle)
             if not self.kernel.DeviceIoControl(handle, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0,
                                                ctypes.byref(returned), None):
-                error = ctypes.get_last_error()
+                error = ctypes.get_last_error()  # type: ignore[attr-defined]
                 raise RuntimeError(f"FSCTL_DISMOUNT_VOLUME failed for {path} "
                                    f"(WinError {error}); no writes attempted")
         # Fail closed if partitions appeared/changed while locks were acquired.
@@ -354,26 +355,26 @@ class WindowsReadWriter:
     def read_at(self, offset: int, count: int) -> bytes:
         from ctypes import wintypes
         if not self.kernel.SetFilePointerEx(self.handle, ctypes.c_longlong(offset), None, 0):
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
         buffer = ctypes.create_string_buffer(count)
         received = wintypes.DWORD(0)
         if not self.kernel.ReadFile(self.handle, buffer, count, ctypes.byref(received), None):
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
         return buffer.raw[: received.value]
 
     def write_at(self, offset: int, data: bytes) -> int:
         from ctypes import wintypes
         if not self.kernel.SetFilePointerEx(self.handle, ctypes.c_longlong(offset), None, 0):
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
         written = wintypes.DWORD(0)
         buf = ctypes.create_string_buffer(data)
         if not self.kernel.WriteFile(self.handle, buf, len(data), ctypes.byref(written), None):
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
         return int(written.value)
 
     def flush(self) -> None:
         if not self.kernel.FlushFileBuffers(self.handle):
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
 
     def close(self) -> None:
         # Keep volume locks for the ENTIRE lifetime of the raw writer.

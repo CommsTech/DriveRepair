@@ -1,6 +1,5 @@
 """Read-only USB disconnect/resume and honest live-rate regression cases."""
 import errno
-import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -91,4 +90,5 @@ class ResumeTests(unittest.TestCase):
         self.assertIn('MiB',display_size(1048576))
         self.assertTrue(cli_prefix())
 
-if __name__=='__main__': unittest.main()
+if __name__=='__main__':
+    unittest.main()

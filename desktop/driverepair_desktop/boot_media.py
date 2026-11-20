@@ -37,10 +37,12 @@ def export_build_kit(repo: str | Path | None, output: str | Path) -> dict:
     target = Path(output).resolve()
     if target.exists() or target.is_symlink():
         raise FileExistsError('Select a new build-kit ZIP path; existing files are never overwritten')
-    from_checkout = bool(root is not None and
-        (root / 'scripts' / 'build_live_iso.sh').is_file() and
-        (root / 'desktop' / 'driverepair_desktop' / '__main__.py').is_file())
-    if from_checkout and target.is_relative_to(root):
+    if root is None:
+        from_checkout = False
+    else:
+        from_checkout = ((root / 'scripts' / 'build_live_iso.sh').is_file() and
+            (root / 'desktop' / 'driverepair_desktop' / '__main__.py').is_file())
+    if from_checkout and root is not None and target.is_relative_to(root):
         raise ValueError('Save the build kit OUTSIDE the source checkout')
     target.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, 'O_BINARY', 0)
@@ -50,6 +52,7 @@ def export_build_kit(repo: str | Path | None, output: str | Path) -> dict:
     try:
         with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as z:
             if from_checkout:
+                assert root is not None
                 members = [root / 'scripts' / 'build_live_iso.sh',
                     root / 'scripts' / 'check_live_iso.sh',
                     root / 'scripts' / 'driverepair-hardware-diagnostics.sh',

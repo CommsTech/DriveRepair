@@ -26,12 +26,15 @@ class WindowsNativeTests(unittest.TestCase):
         struct.pack_into('<II',data,16,512,4096)
         self.assertEqual(decode_alignment(bytes(data))['physical_sector_bytes'],4096)
         struct.pack_into('<I',data,16,0)
-        with self.assertRaises(ValueError): decode_alignment(bytes(data))
+        with self.assertRaises(ValueError):
+            decode_alignment(bytes(data))
 
     def test_not_a_windows_write_bypass(self):
         import sys
-        if sys.platform=='win32':return
+        if sys.platform=='win32':
+            return
         with self.assertRaisesRegex(RuntimeError,'Windows-only'):
             probe_physicaldrive(2)
 
-if __name__=='__main__':unittest.main()
+if __name__=='__main__':
+    unittest.main()

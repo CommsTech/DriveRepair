@@ -21,7 +21,8 @@ def pwrite(fd: int, data: bytes, offset: int) -> int:
     # to None while leaving the attribute present.
     writer = getattr(os, "pwrite", None)
     if callable(writer):
-        return writer(fd, data, offset)
+        wrote: int = writer(fd, data, offset)
+        return wrote
     os.lseek(fd, offset, os.SEEK_SET)
     return os.write(fd, data)
 

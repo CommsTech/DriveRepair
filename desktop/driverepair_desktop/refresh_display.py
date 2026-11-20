@@ -9,6 +9,7 @@ Designed for PowerShell / Windows Terminal / macOS / Linux:
 mechanical* is a latency/error proxy — USB docks have no acoustic mic.
 """
 from __future__ import annotations
+from typing import Any
 
 import os
 import sys
@@ -42,8 +43,8 @@ class RefreshDashboard:
     mode: str
     size: int
     enabled: bool = True
-    stream: object = field(default_factory=lambda: sys.stderr)
-    emitter: object | None = None  # ProgressEmitter | None
+    stream: Any = field(default_factory=lambda: sys.stderr)
+    emitter: Any = None  # ProgressEmitter | None
     phase: str = "START"
     probe_done: int = 0
     probe_total: int = 0

@@ -11,7 +11,7 @@ import math
 import statistics
 import time
 from collections import deque
-from typing import Callable
+from typing import Any, Callable
 
 
 # Win32 ERROR_IO_DEVICE (1117) can surface as Python errno EINVAL (22).
@@ -77,14 +77,14 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
     size_now = int(prior.get('size_now', chunk))
     if not min_chunk <= size_now <= max_chunk or size_now % sector:
         size_now = chunk
-    recent_rate = deque(maxlen=32)
+    recent_rate: deque[float] = deque(maxlen=32)
     consecutive_errors = 0
     healthy_streak = 0
     skipped: list[dict] = [dict(x) for x in prior.get('skipped', [])]
     status = 'completed'
     error_count_over_limit = False
     retries_limited = False
-    latency_window = deque(maxlen=256)
+    latency_window: deque[float] = deque(maxlen=256)
     checkpoint_min_interval = 2.0
     last_checkpoint_at = 0.0
 
@@ -142,8 +142,9 @@ def adaptive_full_scan(reader, *, size: int, sector: int, chunk: int,
                 category = 'short_read'
         except OSError as exc:
             category = classify_error(exc)
+            _winerror = getattr(exc, 'winerror', None)
             issue = (f'{type(exc).__name__}: errno={exc.errno}' +
-                     (f', winerror={exc.winerror}' if getattr(exc, 'winerror', None) is not None else ''))
+                     (f', winerror={_winerror}' if _winerror is not None else ''))
         elapsed_ms = (time.monotonic() - t0) * 1000.0
         if issue:
             failures += 1
@@ -288,7 +289,7 @@ def calibrate_initial_read(reader, *, size: int, sector: int,
     while c <= max_chunk:
         candidates.append(c)
         c *= 2
-    readings = []
+    readings: list[dict[str, Any]] = []
     at = 0
     for request in candidates[:5]:
         length = min(request, size - at)

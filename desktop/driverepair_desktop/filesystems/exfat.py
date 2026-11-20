@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+from typing import Any
 import struct
 from dataclasses import dataclass
 
@@ -76,7 +77,8 @@ def _fat_next(fd: int, volume: ExfatVolume, cluster: int) -> int:
     data = _read(fd, volume.fat_offset + cluster * 4, 4)
     if len(data) != 4:
         raise OSError("Short exFAT FAT read")
-    return struct.unpack("<I", data)[0]
+    value = struct.unpack('<I', data)[0]
+    return int(value)
 
 
 def _chain(fd: int, volume: ExfatVolume, first: int, budget: int, no_fat_chain: bool,

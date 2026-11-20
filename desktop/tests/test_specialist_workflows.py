@@ -53,4 +53,5 @@ class SpecialistWorkflowsTests(unittest.TestCase):
             build_specialist_command(action,source=str(self.image),output=str(self.root/'clean'),
                 reference=str(self.image),manifest=str(manifest),clone_approved=True)
 
-if __name__=='__main__':unittest.main()
+if __name__=='__main__':
+    unittest.main()

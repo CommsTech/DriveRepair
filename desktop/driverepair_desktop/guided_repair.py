@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import errno
 from collections import deque
+from typing import Any
 
 from .health import media_from_smart, transport_from_smart
 
@@ -71,7 +72,7 @@ def investigate_failed_ranges(reader, ranges: list[dict], *, sector: int,
     if statistical_samples and (statistical_samples < 2 or statistical_samples > 32):
         raise ValueError('statistical_samples must be 0 or 2–32')
     started = time.monotonic()
-    pending = deque()
+    pending: deque[tuple[int, int]] = deque()
     for raw in ranges[:max_regions]:
         off, length = raw.get('offset'), raw.get('length')
         if type(off) is not int or type(length) is not int or off < 0 or length < sector or off % sector or length % sector:
@@ -197,13 +198,13 @@ def inspect_failed_boundaries(reader, ranges: list[dict], *, size: int,
     deadline = time.monotonic() + max_elapsed_seconds
     probes = 0
     observations = []
-    regions = []
+    regions: list[dict[str, Any]] = []
     for raw in ranges[:8]:
         off, length = raw.get('offset'), raw.get('length')
         if (type(off) is not int or type(length) is not int or off < 0 or
                 length < sector or length % sector or off % sector or off + length > size):
             continue
-        neighbors = {}
+        neighbors: dict[str, Any] = {}
         for side in ('left', 'right'):
             boundary = off if side == 'left' else off + length
             found = None
@@ -332,7 +333,7 @@ def plan_targeted_refresh(scan: dict, *, sector: int, chunk: int,
             reasons.append("SMART health unavailable; requires separate unknown-health acknowledgment")
         if smart:
             temp = smart.get("temperature_c")
-            if type(temp) in {int, float} and temp >= 55:
+            if isinstance(temp, (int, float)) and not isinstance(temp, bool) and temp >= 55:
                 reasons.append("Drive temperature is high; cool/stabilize before write maintenance")
             nvme = smart.get("nvme") or {}
             if type(nvme.get("percentage_used")) is int and nvme["percentage_used"] >= 100:

@@ -20,7 +20,7 @@ def _read_at(handle, offset: int, length: int, size: int) -> bytes:
     if offset < 0 or length < 0 or offset + length > size:
         raise ValueError('ISO references data beyond the end of the file')
     handle.seek(offset)
-    result = handle.read(length)
+    result: bytes = handle.read(length)
     if len(result) != length:
         raise ValueError('Truncated ISO metadata')
     return result

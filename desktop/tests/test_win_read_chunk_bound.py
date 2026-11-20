@@ -39,4 +39,5 @@ class TestWinBoundedPhysicalRead(unittest.TestCase):
         self.assertEqual(inst.read_at(0,0),b'')
         self.assertEqual(inst.kernel.read_sizes,[])
 
-if __name__ == '__main__':unittest.main()
+if __name__ == '__main__':
+    unittest.main()

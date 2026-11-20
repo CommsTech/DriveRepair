@@ -4,6 +4,7 @@ These are *reference hashes*, not hardware ECC and not general-purpose bit repai
 No physical device writes; all repairs create NEW regular-file images.
 """
 from __future__ import annotations
+from typing import Any
 
 import hashlib
 import json
@@ -152,7 +153,8 @@ def _evaluate(image: str, manifest: dict, *, max_details: int = 2048) -> dict:
         if initial[2] != size:
             raise ValueError('Image size does not match integrity manifest')
         unknowns = _untrusted_recovery_regions(image, size)
-        mismatches, unknown_details = [], []
+        mismatches: list[dict[str, Any]] = []
+        unknown_details: list[dict[str, Any]] = []
         verified = unknown = mismatch_count = 0
         r = 0
         for i, expected in enumerate(manifest['chunks']):
@@ -253,7 +255,7 @@ def restore_image_from_reference(image: str, reference: str, manifest_path: str,
         reflinked = _try_linux_reflink(a.fd, fd)
         fixed, unverifiable = 0, 0
         whole = hashlib.sha256()
-        bad_reference = []
+        bad_reference: list[dict[str, Any]] = []
         for i, expected in enumerate(m['chunks']):
             off = i * step
             count = min(step, size - off)

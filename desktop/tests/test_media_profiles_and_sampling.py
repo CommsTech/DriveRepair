@@ -1,11 +1,9 @@
 """No hardware access: SMR profiles, 10% sampling, calibration and neighbors."""
 import errno
-import math
 import unittest
-from unittest import mock
 
 from driverepair_desktop.media_profiles import (
-    identify_profile, quick_coverage_plan, format_quick_preflight, MIB,
+    identify_profile, format_quick_preflight, MIB,
 )
 from driverepair_desktop.guided_repair import tuned_scan, inspect_adjacent_regions
 from driverepair_desktop.scanner import scan_offsets, scan_reader

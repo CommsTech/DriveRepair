@@ -63,7 +63,8 @@ def create_test_iso(path: Path, *, omit_rootfs=False, omit_efi=False):
     root[:sum(map(len,records))]=b''.join(records)
     d[40*BLOCK:41*BLOCK]=root
     files=[b'VMLINUZ',b'INITRD.IMG']
-    if not omit_rootfs:files.append(b'FILESYSTEM.SQUASHFS')
+    if not omit_rootfs:
+        files.append(b'FILESYSTEM.SQUASHFS')
     live=bytearray(BLOCK)
     live_records=[_record(x,50+i,128) for i,x in enumerate(files)]
     live[:sum(map(len,live_records))]=b''.join(live_records)
@@ -98,4 +99,5 @@ class QualificationTests(unittest.TestCase):
             self.assertTrue(result['bios_catalog'])
             self.assertTrue(result['uefi_catalog'])
 
-if __name__=='__main__':unittest.main()
+if __name__=='__main__':
+    unittest.main()

@@ -83,8 +83,8 @@ def _windows_sparse_resize(fd: int, size: int) -> None:
     from ctypes import wintypes
 
     FSCTL_SET_SPARSE = 0x000900C4
-    handle = msvcrt.get_osfhandle(fd)
-    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    handle = msvcrt.get_osfhandle(fd)  # type: ignore[attr-defined]
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)  # type: ignore[attr-defined]
     kernel.DeviceIoControl.argtypes = [
         wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
         ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p,
@@ -99,13 +99,13 @@ def _windows_sparse_resize(fd: int, size: int) -> None:
     returned = wintypes.DWORD(0)
     if not kernel.DeviceIoControl(handle, FSCTL_SET_SPARSE, None, 0, None, 0,
                                   ctypes.byref(returned), None):
-        raise OSError(ctypes.get_last_error(), 'FSCTL_SET_SPARSE failed for rescue image')
+        raise OSError(ctypes.get_last_error(), 'FSCTL_SET_SPARSE failed for rescue image')  # type: ignore[attr-defined]
     new_pos = ctypes.c_longlong(0)
     if not kernel.SetFilePointerEx(handle, ctypes.c_longlong(size),
                                    ctypes.byref(new_pos), 0):
-        raise OSError(ctypes.get_last_error(), 'SetFilePointerEx failed for rescue image')
+        raise OSError(ctypes.get_last_error(), 'SetFilePointerEx failed for rescue image')  # type: ignore[attr-defined]
     if not kernel.SetEndOfFile(handle):
-        raise OSError(ctypes.get_last_error(), 'SetEndOfFile failed for rescue image')
+        raise OSError(ctypes.get_last_error(), 'SetEndOfFile failed for rescue image')  # type: ignore[attr-defined]
 
 
 def _open_output(path: str, size: int, resume: bool) -> int:
@@ -173,7 +173,7 @@ def _rescue_writer_lock(output: str):
                 os.fsync(fd)
             os.lseek(fd, 0, os.SEEK_SET)
             try:
-                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
             except OSError as exc:
                 raise RuntimeError('Recovery already running for this image/map') from exc
         else:
@@ -188,7 +188,7 @@ def _rescue_writer_lock(output: str):
         if acquired:
             if os.name == 'nt':
                 os.lseek(fd, 0, os.SEEK_SET)
-                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
             else:
                 fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
@@ -399,11 +399,11 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
                 state['missing_ranges'] = []
                 state['status'] = 'retry_in_progress'
                 _state_save(journal, state)
-            work = [tuple(item) for item in state['retry_pending_ranges']]
+            work = [tuple(item) for item in state['retry_pending_ranges']]  # type: ignore[assignment]
         else:
             if state.get('retry_pending_ranges'):
                 raise RuntimeError('Interrupted retry pass; resume with --retry-missing')
-            work = ((p, min(chunk, size - p)) for p in range(state['cursor'], size, chunk))
+            work = ((p, min(chunk, size - p)) for p in range(state['cursor'], size, chunk))  # type: ignore[assignment]
         processed = 0
         consensus_budget = int(consensus_sector_budget)
 
@@ -427,7 +427,7 @@ def _rescue_reader_locked(reader: Reader, *, size: int, sector: int, output: str
                 return None
             attempts += max(0, int(outcome.get('attempts', 0)) -
                             int(outcome.get('successful_reads', 0)))
-            data = outcome.get('data')
+            data: bytes | None = outcome.get('data')
             if outcome.get('status') != 'consensus' or not data or len(data) != n:
                 return None
             state['consensus_recovered_bytes'] = int(state.get('consensus_recovered_bytes', 0)) + n

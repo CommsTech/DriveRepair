@@ -16,7 +16,7 @@ import re
 import stat
 import subprocess
 import sys
-from typing import Callable
+from typing import Any, Callable
 
 from .devices import (Device, select_external_device, assert_windows_external_write_gate)
 from .media_refresh import assert_stable_identity
@@ -216,7 +216,7 @@ def flash_usb_iso(iso: str, device_id: str, *, expect_fingerprint: str,
         st=os.fstat(source.fileno())
         if not stat.S_ISREG(st.st_mode) or st.st_size!=image['bytes']:
             raise RuntimeError('ISO changed since inspection')
-        writer=target_opener(device)
+        writer: Any = target_opener(device)
         written_bytes=0
         source_hash=hashlib.sha256()
         try:

@@ -53,4 +53,5 @@ class QtHeadlessSmokeTests(unittest.TestCase):
         # In smoke mode the window exits after 850 ms; no patient I/O is initiated.
         self.assertEqual(launch(),0)
 
-if __name__=='__main__':unittest.main()
+if __name__=='__main__':
+    unittest.main()

@@ -10,6 +10,8 @@ import os
 import re
 import stat
 import zipfile
+from typing import Any
+from typing import Any
 import zlib
 
 from .compat import binary_open_flags
@@ -28,8 +30,8 @@ def salvage_zip(archive: str, output_dir: str, *, max_files: int = 1000,
         raise ValueError('Archive must be a regular non-symlink file')
     if os.path.exists(target):
         raise FileExistsError('Output directory must not already exist')
-    recovered = []
-    skipped = []
+    recovered: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     total = 0
     # Validate ZIP central directory BEFORE making the destination.
     with zipfile.ZipFile(source, 'r') as zf:

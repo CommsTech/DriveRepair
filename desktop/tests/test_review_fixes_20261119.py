@@ -7,7 +7,6 @@
   different signature, hiding the real defect.
 """
 import contextlib
-import errno
 import io
 import os
 import tempfile

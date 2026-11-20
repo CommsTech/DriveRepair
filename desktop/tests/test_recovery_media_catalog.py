@@ -53,8 +53,10 @@ class ImageDiscoveryTests(unittest.TestCase):
         good=self.root/'DriveRepair-Live-good.iso'
         minimal_hybrid(good)
         symlink=self.root/'DriveRepair-Live-new.iso'
-        try: symlink.symlink_to(good)
-        except (OSError,NotImplementedError): self.skipTest('symlink unavailable')
+        try:
+            symlink.symlink_to(good)
+        except (OSError,NotImplementedError):
+            self.skipTest('symlink unavailable')
         found=find_local_recovery_iso(preferred=str(symlink),search_roots=[])
         self.assertIsNone(found)
 
@@ -81,4 +83,5 @@ class RepairReadinessTests(unittest.TestCase):
         self.assertTrue(ui_repair_readiness(device,'rescue')[0])
 
 
-if __name__=='__main__': unittest.main()
+if __name__=='__main__':
+    unittest.main()

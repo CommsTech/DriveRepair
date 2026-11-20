@@ -4,6 +4,7 @@ No rewriting, firmware commands, or unbounded retry loops. A 4 MiB request
 rejected by the OS is not evidence that a 4 MiB physical area is defective.
 """
 from __future__ import annotations
+from typing import Any
 
 import errno
 import hashlib
@@ -16,7 +17,7 @@ def probe_range(reader, *, offset: int, length: int, sector: int,
             length > 8 * 1024 * 1024 or not 1 <= max_reads <= 64):
         raise ValueError('Invalid bounded, sector-aligned probe range')
     work = [(offset, length)]
-    results = []
+    results: list[dict[str, Any]] = []
     calls = 0
     total_bytes = 0
     while work and calls < max_reads:
@@ -44,7 +45,7 @@ def probe_range(reader, *, offset: int, length: int, sector: int,
                     work.extend([(at, half), (at + half, count - half)])
             # Access denied, invalid handle, device-not-ready and I/O device
             # errors require separate host/transport diagnostics, not retries.
-    known_bytes = sum(r['length'] for r in results if r['result'] == 'readable')
+    known_bytes = sum(int(r['length']) for r in results if r['result'] == 'readable')
     unresolved = [r for r in results if r['result'] == 'read_request_failed']
     return {
         'operation': 'bounded_readonly_region_probe',

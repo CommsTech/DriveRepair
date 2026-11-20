@@ -137,13 +137,13 @@ def _jpeg(fd: int, start: int, size: int, limit: int) -> bytes | None:
 def _mp4_box_size(header: bytes, remaining: int) -> int | None:
     if len(header) < 8:
         return None
-    size = struct.unpack('>I', header[:4])[0]
+    size: int = struct.unpack('>I', header[:4])[0]
     if size == 0:
         return None
     if size == 1:
         if len(header) < 16:
             return None
-        size = struct.unpack('>Q', header[8:16])[0]
+        size = int(struct.unpack('>Q', header[8:16])[0])
         if size < 16:
             return None
     elif size < 8:
@@ -274,7 +274,7 @@ def _zip_eocd_size(fd: int, start: int, size: int, limit: int) -> int | None:
     eocd_end = search_start + pos + 22 + comment_len
     if eocd_end > cap or eocd_end <= start:
         return None
-    total = eocd_end - start
+    total = int(eocd_end - start)
     if total < ZIP_MIN_BYTES:
         return None
     return total

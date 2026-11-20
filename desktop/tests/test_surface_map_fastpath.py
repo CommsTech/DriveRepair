@@ -33,4 +33,5 @@ class SequentialCoverageTests(unittest.TestCase):
         self.assertEqual(cov.cells[0].slow_reads,2)
 
 
-if __name__=='__main__': unittest.main()
+if __name__=='__main__':
+    unittest.main()

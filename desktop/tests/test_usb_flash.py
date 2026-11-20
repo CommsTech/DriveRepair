@@ -74,7 +74,8 @@ class USBFlashTests(unittest.TestCase):
                           acknowledge_data_loss=False,expect_fingerprint=self.correct['expect_fingerprint'],
                           typed_confirmation=self.correct['typed_confirmation'])
         self.image.write_bytes(b'not an iso')
-        with self.assertRaises(ValueError): inspect_hybrid_iso(self.image)
+        with self.assertRaises(ValueError):
+            inspect_hybrid_iso(self.image)
 
     def test_reject_system_bus_and_too_small_usb(self):
         internal=Device(self.device.id,self.device.path,self.device.model,
@@ -137,4 +138,5 @@ class USBFlashTests(unittest.TestCase):
         self.assertEqual(events[-1]['phase'],'FAILED')
 
 
-if __name__=='__main__': unittest.main()
+if __name__=='__main__':
+    unittest.main()

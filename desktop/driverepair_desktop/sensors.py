@@ -33,7 +33,7 @@ class AcousticWatcher:
         self.sample_hz = sample_hz
         self.baseline: float | None = None
         self.available = False
-        self._backend = None
+        self._backend: Any = None
         self._last = 0.0
         self._init_backend()
 

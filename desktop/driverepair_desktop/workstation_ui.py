@@ -156,16 +156,19 @@ def repair_presentation(result: dict, *, exit_code: int) -> RepairPresentation |
         'repair_stopped_safely', 'completed_no_refresh_needed',
     }:
         return None
-    scan = result.get('scan') if isinstance(result.get('scan'),dict) else {}
-    repair = result.get('repair') if isinstance(result.get('repair'),dict) else {}
-    verification = result.get('postverification') if isinstance(result.get('postverification'),dict) else {}
+    _scan_raw = result.get('scan')
+    scan = _scan_raw if isinstance(_scan_raw,dict) else {}
+    _repair_raw = result.get('repair')
+    repair = _repair_raw if isinstance(_repair_raw,dict) else {}
+    _verification_raw = result.get('postverification')
+    verification = _verification_raw if isinstance(_verification_raw,dict) else {}
     attempted = scan.get('read_error_chunks')
     attempts = (f'{attempted} failed read attempts in the scan' if type(attempted) is int
                 else 'read-failure count unavailable')
     written = max(0,int(repair.get('rewritten_bytes') or 0))
     independently_verified = (max(0,int(verification.get('verified_bytes') or 0))
                               if verification.get('status') == 'postverify_passed' else 0)
-    def size(n: int) -> str:
+    def size(n: float) -> str:
         for unit in ('B','KiB','MiB','GiB','TiB'):
             if n < 1024 or unit == 'TiB':
                 return f'{n:,.0f} {unit}' if unit == 'B' else f'{n:,.2f} {unit}'

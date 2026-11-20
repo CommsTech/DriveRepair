@@ -13,7 +13,7 @@ import statistics
 import stat
 import sys
 import time
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 
 from .devices import Device
 
@@ -55,7 +55,7 @@ class WindowsReader:
         if sys.platform != "win32" or not device.path.startswith("\\\\.\\PhysicalDrive"):
             raise ValueError("Not a Windows physical drive")
         from ctypes import wintypes
-        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel: Any = ctypes.WinDLL("kernel32", use_last_error=True)
         self.kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD,
                                            wintypes.DWORD, ctypes.c_void_p,
                                            wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
@@ -69,12 +69,12 @@ class WindowsReader:
         self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
         self.kernel.CloseHandle.restype = wintypes.BOOL
         # GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, OPEN_EXISTING.
-        self.handle = self.kernel.CreateFileW(device.path, 0x80000000, 0x3,
+        self.handle: Any = self.kernel.CreateFileW(device.path, 0x80000000, 0x3,
                                               None, 3, 0, None)
         # USB bridge and controller drivers sometimes block long synchronous
         # reads indefinitely. Limit EACH kernel ReadFile (not the logical scan
         # window) to 1 MiB; this cannot make a hung driver cancellable.
-        self.max_transfer = 1024 * 1024
+        self.max_transfer: int = 1024 * 1024
         if self.handle == ctypes.c_void_p(-1).value or self.handle is None:
             error = ctypes.get_last_error()
             if error == 5:  # ERROR_ACCESS_DENIED
@@ -97,11 +97,11 @@ class WindowsReader:
         while total < count:
             requested = min(max_transfer, count - total)
             if not self.kernel.SetFilePointerEx(self.handle, ctypes.c_longlong(offset + total), None, 0):
-                raise ctypes.WinError(ctypes.get_last_error())
+                raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
             buffer = ctypes.create_string_buffer(requested)
             received = wintypes.DWORD(0)
             if not self.kernel.ReadFile(self.handle, buffer, requested, ctypes.byref(received), None):
-                raise ctypes.WinError(ctypes.get_last_error())
+                raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
             actual = int(received.value)
             if actual > requested:
                 raise OSError('Windows ReadFile returned an impossible length')
@@ -237,8 +237,8 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
                 progress_takes_info = len(positional) >= 3
         except (TypeError, ValueError):
             progress_takes_info = True
-    baseline = list(scan_offsets(size, chunk, mode, samples, sample_seed)) if mode != 'full' else None
-    if mode == 'triage' and history_hints:
+    baseline: list[Any] | None = list(scan_offsets(size, chunk, mode, samples, sample_seed)) if mode != 'full' else None
+    if mode == 'triage' and history_hints and baseline is not None:
         # Anomaly history is only a HINT. Every bookmarked location is re-read;
         # never reuse historical success as evidence for a current rewrite.
         known = {off for off, _ in baseline}
@@ -251,7 +251,7 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
                 baseline.append((off, min(chunk, size - off)))
                 known.add(off)
         baseline.sort()
-    planned = blocks if mode == 'full' else len(baseline)
+    planned = blocks if mode == 'full' else len(baseline or [])
     checked = readable = failures = 0
     failed_ranges: list[dict] = []
     completed = 0
@@ -327,7 +327,7 @@ def scan_reader(reader: Reader, *, size: int, sector: int, mode: str,
                         })
                     if mode == 'triage':
                         anomalous_indices.append(offset // chunk)
-        med = _median_ms()
+        med: float | None = _median_ms()  # type: ignore[no-redef]
         info = {
             'offset': offset,
             'length': length,

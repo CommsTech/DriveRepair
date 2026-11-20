@@ -79,7 +79,8 @@ def load_history(path: str) -> list[dict]:
         raise ValueError('Unrecognized monitor history')
     if len(state['history']) > 128:
         raise ValueError('Monitor history exceeds safe bound')
-    return state['history']
+    history: list[dict] = state['history']
+    return history
 
 
 def save_history(path: str, history: list[dict]) -> None:

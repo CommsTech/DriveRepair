@@ -73,7 +73,8 @@ class ResultTruthTests(unittest.TestCase):
 
     def test_cli_rejects_unknown_usb_medium_before_scanning(self):
         from types import SimpleNamespace
-        import contextlib, io
+        import contextlib
+        import io
         from driverepair_desktop.cli import run
         from driverepair_desktop import cli
         disk=SimpleNamespace(id='linux:/dev/fake',path='/dev/fake',model='Unidentified USB',

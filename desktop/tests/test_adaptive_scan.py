@@ -4,7 +4,6 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from driverepair_desktop.adaptive_scan import adaptive_full_scan, classify_error
 from driverepair_desktop.scanner import scan_reader

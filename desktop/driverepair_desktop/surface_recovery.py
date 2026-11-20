@@ -150,14 +150,14 @@ def consensus_read(reader: Reader, offset: int, length: int, *,
             start = 0
         want = length + (offset - start) + pad
         try:
-            data = reader.read_at(start, want)
+            raw = reader.read_at(start, want)
         except OSError as exc:
             errors.append(f"{type(exc).__name__}")
             blocks.append(None)
             continue
         successful += 1
         slice_start = offset - start
-        chunk = data[slice_start:slice_start + length]
+        chunk = raw[slice_start:slice_start + length]
         blocks.append(chunk if len(chunk) == length else None)
     data, agreement, covered = _vote(blocks, length)
     if successful == 0:

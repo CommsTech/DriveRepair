@@ -26,7 +26,7 @@ def _bytes(value) -> str:
     return 'Not measured'
 
 
-def _metric(name, value, detail=''):
+def _metric(name: str, value: object, detail: str = '') -> str:
     return (f'<div class="metric"><div class="label">{_esc(name)}</div>'
             f'<div class="value">{_esc(value)}</div><div class="sub">{_esc(detail)}</div></div>')
 
@@ -83,8 +83,10 @@ def render_report(result: dict, *, device: dict | None = None, title: str='Stora
     kind=str(result.get('test_kind') or ('read_only_scan' if any(k in result for k in ('scan','surface_coverage_pct','readable_bytes')) else 'disk_operation'))
     capacity=kind=='capacity_spot_write_restore'
     status=str(result.get('status') or 'NOT_REPORTED')
-    counters=result.get('counters') if isinstance(result.get('counters'),dict) else {}
-    scan=result.get('scan') if isinstance(result.get('scan'),dict) else result
+    _counters_raw=result.get('counters')
+    counters=_counters_raw if isinstance(_counters_raw,dict) else {}
+    _scan_raw=result.get('scan')
+    scan=_scan_raw if isinstance(_scan_raw,dict) else result
     declared=result.get('declared_bytes') if capacity else device.get('size_bytes',scan.get('size_bytes'))
     if capacity:
         validated=counters.get('validated',0)
@@ -138,8 +140,10 @@ def render_report(result: dict, *, device: dict | None = None, title: str='Stora
              _timings(result.get('write_latency'),'Write latency')) if capacity else ''
     # SMART evidence: attributes are vendor-defined; thresholds and normalised
     # values are shown with their source, never converted into "life remaining".
-    attributes = result.get('ata_attributes') if isinstance(result.get('ata_attributes'), list) else []
-    logs = result.get('smart_logs') if isinstance(result.get('smart_logs'), dict) else {}
+    _attributes_raw = result.get('ata_attributes')
+    attributes = _attributes_raw if isinstance(_attributes_raw, list) else []
+    _logs_raw = result.get('smart_logs')
+    logs = _logs_raw if isinstance(_logs_raw, dict) else {}
     smart_section = ''
     if attributes or logs.get('available'):
         rows = ''.join(

@@ -20,7 +20,7 @@ import stat
 import statistics
 import threading
 import time
-from typing import Callable
+from typing import Any, Callable
 
 from .compat import binary_open_flags, pwrite
 from .media_refresh import JournalStore
@@ -141,7 +141,7 @@ def validate_spots(media, *, size: int, sector: int, source_token: str,
     store.prepare_new()
     counters={'validated':0,'mismatch':0,'read_error':0,'write_error':0,
               'unstable_original':0,'restoration_error':0,'untested':0}
-    records = []
+    records: list[dict[str, Any]] = []
     read_times = []
     write_times = []
     emit=progress or (lambda event:None)
@@ -210,7 +210,7 @@ def validate_spots(media, *, size: int, sector: int, source_token: str,
               'offset':offset})
     # Only the saved sample points are evidence. A high validated offset is
     # NOT a lower bound on valid capacity; holes and aliasing can exist.
-    valid=[r['offset'] for r in records if r['status']=='validated']
+    valid=[int(r['offset']) for r in records if r['status']=='validated']
     status=('STOPPED_INCOMPLETE' if counters['untested'] else
             'SAMPLED_REGIONS_VERIFIED' if counters['validated']==samples else
             'CAPACITY_INTEGRITY_WARNINGS')
@@ -250,7 +250,8 @@ class RegularImageWriter:
     def read_at(self,off:int,n:int)->bytes:
         reader = getattr(os, 'pread', None)
         if callable(reader):
-            return reader(self.fd, n, off)
+            data: bytes = reader(self.fd, n, off)
+            return data
         # Python on Windows does not expose os.pread. Serialized seek/read with
         # a full-length loop matches ImageReadWriter / rescue I/O behavior.
         with self._lock:

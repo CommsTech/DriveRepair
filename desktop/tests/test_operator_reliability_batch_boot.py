@@ -1,7 +1,6 @@
 """Offline guarantees for condition scoring, batch preflight and ISO kit."""
 import io
 import json
-import os
 from pathlib import Path
 import tempfile
 import unittest

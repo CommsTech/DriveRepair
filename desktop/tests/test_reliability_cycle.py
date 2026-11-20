@@ -1,10 +1,9 @@
 """No physical-drive tests: boundary probing and mounted-volume safety."""
 import errno
 import unittest
-from unittest import mock
 
 from driverepair_desktop.guided_repair import inspect_failed_boundaries
-from driverepair_desktop.media_refresh import _windows_lock_paths, assert_patient_idle_windows
+from driverepair_desktop.media_refresh import _windows_lock_paths
 from driverepair_desktop.cli import parser
 
 

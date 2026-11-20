@@ -7,7 +7,7 @@ from pathlib import Path
 from driverepair_desktop.guided_repair import investigate_failed_ranges
 from driverepair_desktop.media_refresh import refresh_media
 from driverepair_desktop.qtgui import estimated_job_percent
-from driverepair_desktop.stop_control import StopControl, StopRequested
+from driverepair_desktop.stop_control import StopRequested
 
 
 class FailingReader:

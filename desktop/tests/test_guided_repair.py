@@ -141,7 +141,8 @@ class GuidedCLIIntegrationTests(unittest.TestCase):
     def test_guided_image_rewrites_only_detected_regions(self):
         with tempfile.TemporaryDirectory() as td:
             image = os.path.join(td,'sample.img')
-            with open(image,'wb') as f:f.write(b'Z' * (1024*1024))
+            with open(image,'wb') as f:
+                f.write(b'Z' * (1024*1024))
             s = scan(device_size_bytes=1024*1024, slow_regions=[{'offset':0,'latency_ms':300}])
             with mock.patch('driverepair_desktop.cli.scan_reader', return_value=s):
                 output = io.StringIO()
@@ -152,12 +153,14 @@ class GuidedCLIIntegrationTests(unittest.TestCase):
             data=json.loads(output.getvalue())
             self.assertEqual(data['status'],'completed_targeted_refresh')
             self.assertEqual(data['repair']['verified_bytes'],1024*1024)
-            with open(image,'rb') as f:self.assertEqual(f.read(),b'Z'*(1024*1024))
+            with open(image,'rb') as f:
+                self.assertEqual(f.read(),b'Z'*(1024*1024))
 
     def test_error_scan_never_creates_write_journal(self):
         with tempfile.TemporaryDirectory() as td:
             image=os.path.join(td,'s.img')
-            with open(image,'wb') as f:f.write(b'Z'*4096)
+            with open(image,'wb') as f:
+                f.write(b'Z'*4096)
             journal=os.path.join(td,'journal')
             with mock.patch('driverepair_desktop.cli.scan_reader',return_value=scan(
                     device_size_bytes=4096, status='completed_with_read_errors',read_error_chunks=1)):
@@ -171,7 +174,8 @@ class GuidedCLIIntegrationTests(unittest.TestCase):
     def test_no_suspects_writes_nothing(self):
         with tempfile.TemporaryDirectory() as td:
             image=os.path.join(td,'s.img')
-            with open(image,'wb') as f:f.write(b'Z'*4096)
+            with open(image,'wb') as f:
+                f.write(b'Z'*4096)
             journal=os.path.join(td,'journal')
             out=io.StringIO()
             with contextlib.redirect_stdout(out):

@@ -8,6 +8,7 @@ original first filename characters, or prove a recovered file is intact.
 from __future__ import annotations
 
 import hashlib
+from typing import Any
 import json
 import os
 import re
@@ -102,7 +103,8 @@ def _fat_entry(fd: int, volume: Volume, cluster: int) -> int:
     data = _read(fd, volume.fat_offset + cluster * 4, 4)
     if len(data) != 4:
         raise OSError('Short FAT read')
-    return struct.unpack('<I', data)[0] & 0x0fffffff
+    value = struct.unpack('<I', data)[0]
+    return int(value) & 0x0fffffff
 
 
 def _chain(fd: int, volume: Volume, first: int, budget: int) -> list[int]:
@@ -307,7 +309,7 @@ def undelete_fat32(image: str, output_dir: str, *, max_files: int = 100,
                    for c in range(item['starting_cluster'], item['starting_cluster'] + count)):
                 raise RuntimeError('Previously free clusters have changed; refusing extraction')
         os.mkdir(target, 0o700)
-        files = []
+        files: list[dict[str, Any]] = []
         for item in chosen:
             name = f"{len(files)+1:05d}_deleted_{item['name_hint']}"
             dest = os.path.join(target, name)

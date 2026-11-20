@@ -26,4 +26,5 @@ class DeviceToolsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             device_tool_args('refresh-external',device_id='disk')
 
-if __name__=='__main__':unittest.main()
+if __name__=='__main__':
+    unittest.main()

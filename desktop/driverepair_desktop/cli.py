@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import time
+from typing import Any
 import zipfile
 
 from .devices import (list_external_devices, select_external_device,
@@ -583,7 +584,7 @@ def _parse_remote_mount(payload: dict, parent: str) -> bool:
         return False
     row = rows[0]
     target, kind, source = row.get("target"), row.get("fstype"), row.get("source")
-    if not all(isinstance(x, str) for x in (target, kind, source)):
+    if not (isinstance(target, str) and isinstance(kind, str) and isinstance(source, str)):
         return False
     target_norm = target.replace("\\", "/").rstrip("/") or "/"
     parent_norm = parent.replace("\\", "/").rstrip("/") or "/"
@@ -827,12 +828,12 @@ def _run_extras(args) -> int:
         command = [executable, 'rescue-image', src, out, '--chunk-mib', str(args.chunk_mib)]
         if args.resume:
             command.append('--resume')
-        result = subprocess.run(command, capture_output=True, text=True, timeout=None, check=False)
-        if result.stderr:
-            print(result.stderr, file=sys.stderr)
-        if result.stdout:
-            print(result.stdout)
-        return result.returncode
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=None, check=False)
+        if proc.stderr:
+            print(proc.stderr, file=sys.stderr)
+        if proc.stdout:
+            print(proc.stdout)
+        return proc.returncode
     elif args.command == 'ram-journal-check':
         guard = VolatilePowerGuard(args.power_source, args.journal, args.chunk_mib * 1024 * 1024)
         try:
@@ -1145,7 +1146,7 @@ def _run_extras(args) -> int:
                             'journal retained. IMU is not platter metrology.'
                         )
 
-            def check_progress(state):
+            def check_progress(state, *, force=False):
                 identity_check()
                 offset = state.get('offset')
                 if type(offset) is int:
@@ -1393,6 +1394,8 @@ def _run_care(args) -> int:
     journal_path = args.journal if not ram_only else 'RAM_ONLY_NO_FILES'
     selected = select_external_device(args.device) if is_hardware else None
     if is_hardware:
+        # selected is only None when is_hardware is False (see assignment above).
+        assert selected is not None
         assert_windows_external_write_gate(selected)
         if ram_only and selected.bus.lower() in {'usb', 'firewire', 'thunderbolt'}:
             if not getattr(args, 'ack_dock_power_backed', False):
@@ -1401,11 +1404,12 @@ def _run_care(args) -> int:
         ack_risk=args.ack_risk, ack_destructive=args.ack_destructive,
         ack_no_backup=args.ack_no_backup, ack_data_loss_risk=args.ack_data_loss_risk,
         ack_usb_bridge_risk=args.ack_usb_bridge_risk if is_hardware else True,
-        bus=selected.bus if is_hardware else 'file',
+        bus=(selected.bus if is_hardware and selected is not None else 'file'),
         ack_unvalidated_hardware=args.ack_unvalidated_hardware,
         require_unvalidated=is_hardware,
     )
     if is_hardware:
+        assert selected is not None
         if args.confirm_identity != selected.fingerprint[:12]:
             raise ValueError('Confirm selected device with --confirm-identity from list --json')
         if not selected.serial:
@@ -1469,11 +1473,12 @@ def _run_care(args) -> int:
         # evidence is still needed while the volume is busy.
         if (is_hardware and not args.resume
                 and getattr(args, 'auto_lock_volumes', False)):
+            assert selected is not None
             try:
                 probe = open_device_readwrite(selected, auto_lock_volumes=True)
                 probe.close()
             except (OSError, RuntimeError, ValueError, PermissionError) as exc:
-                result = {
+                result: dict[str, Any] = {
                     'status': 'repair_blocked_prewrite_access',
                     'scan': None,
                     'repair_plan': None,
@@ -1487,8 +1492,8 @@ def _run_care(args) -> int:
                 return 2
         if not args.resume:
             settings = tuned_scan(size=size, sector=sector, mode=args.mode,
-                                  bus=selected.bus if is_hardware else '',
-                                  model=selected.model if is_hardware else '',
+                                  bus=(selected.bus if is_hardware and selected is not None else ''),
+                                  model=(selected.model if is_hardware and selected is not None else ''),
                                   media_type=(snapshot or {}).get('reported_medium', ''),
                                   protocol=(snapshot or {}).get('device_protocol', ''),
                                   recording='' if args.recording == 'auto' else args.recording)
@@ -1497,8 +1502,8 @@ def _run_care(args) -> int:
             # a driver stall. Bound requests to 1 MiB on Windows USB, including
             # adaptive calibration and follow-up; this does not GUARANTEE a
             # hung USB driver will ever return or honor cancellation.
-            if is_hardware and sys.platform == 'win32' and selected.bus.lower() in {
-                    'usb', 'thunderbolt', 'firewire'}:
+            if (is_hardware and sys.platform == 'win32' and selected is not None
+                    and selected.bus.lower() in {'usb', 'thunderbolt', 'firewire'}):
                 settings['max_chunk'] = min(int(settings.get('max_chunk') or 1024*1024), 1024*1024)
                 settings['min_chunk'] = min(int(settings.get('min_chunk') or 1024*1024),
                                             settings['max_chunk'])
@@ -1519,9 +1524,15 @@ def _run_care(args) -> int:
             effective_max_regions = min(args.max_regions,
                                         16 if profile_kind == 'smr' else
                                         16 if profile_kind in ('ssd','nvme') else args.max_regions)
-            hints = (load_hints(selected.fingerprint, size, sector)
-                     if is_hardware and args.remember_anomalies else [])
-            reader = open_device_readonly(selected) if is_hardware else ImageReader(args.image)
+            hints = []
+            if is_hardware and args.remember_anomalies:
+                assert selected is not None
+                hints = load_hints(selected.fingerprint, size, sector)
+            if is_hardware:
+                assert selected is not None
+                reader: Any = open_device_readonly(selected)
+            else:
+                reader = ImageReader(args.image)
             try:
                 def scan_progress(index, total, info=None):
                     control.check_read_boundary()
@@ -1568,7 +1579,7 @@ def _run_care(args) -> int:
                 # explicitly requests a separate offsets-only scan checkpoint.
                 allow_checkpoint = (not ram_only or bool(args.scan_checkpoint))
                 checkpoint_writer, prior_scan = (_scan_checkpoint_for(
-                    args, (selected.scan_resume_identity or token) if is_hardware else token, size, sector)
+                    args, (selected.scan_resume_identity if is_hardware and selected is not None else token) or token, size, sector)
                     if args.mode == 'full' and allow_checkpoint else (None, None))
                 if args.resume_scan and prior_scan is None:
                     raise ValueError('RAM-only scan resume requires an explicit prior --scan-checkpoint file')
@@ -1636,6 +1647,7 @@ def _run_care(args) -> int:
                 reader.close()
             control.check_read_boundary()
             if is_hardware:
+                assert selected is not None
                 # Keep read-only scan findings even when the USB bridge freezes
                 # during the *post-scan* identity query. Such a query must still
                 # block all writes; a cached identity is never authorization.
@@ -1698,8 +1710,11 @@ def _run_care(args) -> int:
             # SMR/SSD/unknown technologies do not receive automatic neighbor
             # rewrites. Advanced CMR-only rewrites require explicit option and
             # verified repeatable data; the journal engine checks once more.
-            adjacent_reader = (open_device_readonly(selected) if is_hardware
-                               else ImageReader(args.image))
+            if is_hardware:
+                assert selected is not None
+                adjacent_reader = open_device_readonly(selected)
+            else:
+                adjacent_reader = ImageReader(args.image)
             try:
                 neighbors = inspect_adjacent_regions(
                     adjacent_reader, size=size, sector=sector, targets=targets,
@@ -1738,6 +1753,7 @@ def _run_care(args) -> int:
 
         # Select the patient again immediately before RW; fail closed if renumbered.
         if is_hardware:
+            assert selected is not None
             try:
                 try:
                     assert_stable_identity(selected, select_external_device(args.device))
@@ -1836,8 +1852,13 @@ def _run_care(args) -> int:
                 from .postverify import verify_committed_regions
                 try:
                     if is_hardware:
+                        assert selected is not None
                         assert_stable_identity(selected, select_external_device(args.device))
-                    reopened = open_device_readonly(selected) if is_hardware else ImageReader(args.image)
+                    if is_hardware:
+                        assert selected is not None
+                        reopened = open_device_readonly(selected)
+                    else:
+                        reopened = ImageReader(args.image)
                     try:
                         postverify_samples = 2 if maintenance.level < 4 else 3
                         postverify = verify_committed_regions(
@@ -1856,7 +1877,11 @@ def _run_care(args) -> int:
                 postverify = {'status': 'not_available_legacy_journal',
                               'notes': 'Older journal lacks prewrite SHA-256 digest records.'}
         from .health_deltas import compare_health
-        health_after = try_health_snapshot(selected) if is_hardware else None
+        if is_hardware:
+            assert selected is not None
+            health_after = try_health_snapshot(selected)
+        else:
+            health_after = None
         health_delta = compare_health(snapshot, health_after) if is_hardware else None
         from .reliability_score import compare_assessments
         condition_comparison = compare_assessments(snapshot, health_after) if is_hardware else None
@@ -1897,7 +1922,7 @@ def _scan_checkpoint_for(args, source_token: str, size: int, sector: int):
         return None, None
     token = hashlib.sha256(source_token.encode('utf-8')).hexdigest()
     configured = getattr(args, 'scan_checkpoint', None)
-    path = str(default_scan_checkpoint(token)) if configured in (None, 'auto') else configured
+    path = str(default_scan_checkpoint(token)) if configured in (None, 'auto') else str(configured)
     state = (load_scan_checkpoint(path, source_token=token, size=size, sector=sector)
              if getattr(args, 'resume_scan', False) else None)
     writer = ScanCheckpoint(path, source_token=token, size=size, sector=sector)
@@ -1941,7 +1966,7 @@ def run(argv: list[str] | None = None) -> int:
             if args.command=='validate-image-capacity':
                 if getattr(args,'restore_only',False):
                     raise ValueError('Restore-only mode is reserved for external media')
-                media=RegularImageWriter(args.image)
+                media: Any = RegularImageWriter(args.image)
                 device_info={'model':os.path.basename(args.image),'size_bytes':media.size,
                              'bus':'regular image','sector_size':512}
                 try:
@@ -1976,7 +2001,7 @@ def run(argv: list[str] | None = None) -> int:
                     _separate_live_destination(selected,args.report_html)
                 assert_patient_idle_windows(selected,allow_locked_volume=True)
                 assert_stable_identity(selected,select_external_device(args.device))
-                media=open_device_readwrite(selected,auto_lock_volumes=True)
+                media = open_device_readwrite(selected,auto_lock_volumes=True)
                 try:
                     if args.restore_only:
                         result=restore_pending(media,args.journal,
@@ -2001,8 +2026,8 @@ def run(argv: list[str] | None = None) -> int:
             selected = select_external_device(args.device)
             if selected.fingerprint[:12] != args.confirm_identity:
                 raise PermissionError('Selected disk identity changed during volume lookup')
-            result = inspect_windows_repairable_volumes(selected)
-            print(json.dumps(result, indent=2) if args.json else result, flush=True)
+            volumes = inspect_windows_repairable_volumes(selected)
+            print(json.dumps(volumes, indent=2) if args.json else volumes, flush=True)
             return 0
         if args.command == 'repair-windows-filesystem':
             from .windows_volume_repair import windows_filesystem_maintenance
@@ -2015,7 +2040,7 @@ def run(argv: list[str] | None = None) -> int:
                 'volume_bound_readonly', 'repair_command_completed_unverified'} else 2
         if args.command == 'flash-usb':
             from .usb_flash import flash_usb_iso
-            def report(e):
+            def report_event(e):
                 print(json.dumps(e, separators=(',', ':')), flush=True)
             control = StopControl(enabled=True)
             info = flash_usb_iso(args.iso,args.device,
@@ -2023,7 +2048,7 @@ def run(argv: list[str] | None = None) -> int:
                 expect_fingerprint=args.confirm_identity,
                 typed_confirmation=args.confirm_erase,
                 acknowledge_data_loss=args.ack_data_loss,
-                progress=report)
+                progress=report_event)
             print(json.dumps(info, separators=(',', ':')), flush=True)
             return 0
         if args.command == 'inspect-storage':
@@ -2243,7 +2268,7 @@ def run(argv: list[str] | None = None) -> int:
             rate_window = RateWindow(5)
             last_human = [0.0]
 
-            def report(current: int, total: int, info: dict | None = None) -> None:
+            def report_progress(current: int, total: int, info: dict | None = None) -> None:
                 # A STOP never interrupts an in-flight kernel read.  The next
                 # completed request becomes a cooperative cancellation point.
                 info = info or {}
@@ -2327,7 +2352,7 @@ def run(argv: list[str] | None = None) -> int:
                                                 if args.command == 'scan' and args.remember_anomalies else []),
                                  sample_seed=(__import__('secrets').randbits(64)
                                               if args.mode=='triage' and args.randomize_samples else None),
-                                 progress=report, resume_state=prior_scan,
+                                 progress=report_progress, resume_state=prior_scan,
                                  checkpoint=checkpoint_writer.save if checkpoint_writer else None)
             print(file=sys.stderr)
         except StopRequested:
