@@ -2,7 +2,7 @@
 
 **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
 
-> **Release status:** `0.3.3b29` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+> **Release status:** `0.3.3b30` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
 
 **Drive models:** The bundled [offline model catalog](docs/DRIVE_MODEL_CATALOG.md) currently documents four vendor-backed model entries (three Seagate SMR models and one SanDisk SSD family). It guides scanning; it is not a comprehensive database or authorization to rewrite a disk.
 
@@ -10,31 +10,37 @@ The Qt workstation now selects an **automatic, bounded HDD investigation level**
 
 [Get started](#get-started) · [Choose a workflow](#choose-a-workflow) · [Recovery USB](#create-a-recovery-usb) · [Command line](#command-line-examples) · [Troubleshooting](#troubleshooting) · [Changelog](CHANGELOG.md) · [Support](https://github.com/sponsors/CommsTech)
 
-## Why the Repair button chooses a different action on some devices
+## Repair a drive versus Restore data
 
-The Qt **Repair & restore** workspace uses the chosen disk's actual evidence to
-pick the next step. A detected SSD, NVMe, or flash drive is **not** offered
-magnetic HDD sector rewrites; the primary action creates a new recovery
-image on another healthy disk **within Repair & Restore**. After imaging, choose **Repair a recovered
-filesystem copy…** for supported ext2/3/4 *volume* images (requires `e2fsck`
-on a supported host). NTFS, exFAT, and other filesystems are not claimed as
-supported by that particular repair tool. Data rescue and filesystem repair
-are different from repairing failing storage hardware.
+**Repair drive** performs supported *on-device* operations. It no longer sends
+SSD owners to imaging just because magnetic-disk rewriting does not apply.
+Choose **Repair filesystem on selected drive (Windows)** for a supported
+mounted NTFS, exFAT, or FAT volume, or choose **Targeted HDD region repair**
+for a genuinely identified rotational disk. The first method invokes Windows
+CHKDSK `/f` on the **original volume**; it can correct filesystem metadata but
+**cannot repair NAND flash cells, an unreadable sector, worn parts, or lost
+content**. It requires an existing backup, two explicit confirmations, a
+fresh match between the chosen drive and the Windows volume, and an independent
+non-system/external disk check. Locked, busy, unrecognized, or system volumes
+fail closed rather than being forced offline or scheduled silently for reboot.
 
-For a verified rotating HDD, DriveRepair can offer a separate consent-based
-journaled region rewrite after the independent identity, health, mount/lock,
-and journal checks. When SMART is hidden by the USB adapter, the initial action
-collects available Windows media evidence or offers imaging. Merely recognizing
-a model number is not permission to write to a drive. This is still a hardware
-qualification gap on some USB adapters, not a software repair success.
+HDD physical-region maintenance uses DriveRepair's bounded, journaled rewrite
+engine with separate media-type, identity, health, locking and readback checks.
+It may re-write repeatably readable weak HDD regions; an unreadable region is
+**not** reconstructed. The program cannot guarantee the drive's remaining life.
+
+**Restore data** is a **different workspace** for imaging, recovery and file
+salvage. Recover files or use a restored image when the data matters more than
+reuse of a potentially failing drive. These are distinct workflows and should
+not be presented as interchangeable repairs.
 
 ## What DriveRepair does
 
 | Workspace | You can do | What it **does not** mean |
 | --- | --- | --- |
 | **Diagnose** | Read SMART/NVMe health where available, sample or scan drive regions, run an optional **write/restore USB capacity spot test** on a backed-up disposable drive, and export an offline HTML evidence report | A successful read is not proof that the bytes match the original file, or that the disk will remain reliable |
-| **Rescue data** | Copy readable sectors to a **new image on separate healthy storage**, record missing ranges, resume and retry bounded failed reads | A full-size image file is not proof that every byte was successfully recovered |
-| **Targeted HDD repair** | On eligible, positively identified rotational HDDs: inspect weak but repeatably readable regions and perform small, journaled, post-verified rewrites | This cannot regenerate unreadable original bytes, fix mechanical damage, or make SSD/NVMe rewrites into "repairs" |
+| **Restore data** | Copy readable sectors to a **new image on separate healthy storage**, record missing ranges, resume and retry bounded failed reads | A full-size image file is not proof that every byte was successfully recovered |
+| **Repair drive** | On Windows, explicitly approved on-device NTFS/FAT/exFAT filesystem metadata repair; on eligible rotational HDDs, small journaled post-verified region rewrites | This cannot regenerate unreadable original bytes, fix mechanical damage, or make SSD/NVMe rewrites into "repairs" |
 | **Analyze recovered images** | Recover select deleted files, carve recognized file formats, check compatible filesystems, work on a clone | File carving cannot reliably reconstruct every fragmented file or encrypted volume |
 | **Create recovery USB** | Flash a separately built DriveRepair hybrid ISO to a **disposable USB drive** with full-image readback | This **erases the USB**. It does not image/repair a patient disk or establish that BIOS/UEFI boot has been tested |
 
@@ -55,7 +61,7 @@ beta can offer a separate, explicitly acknowledged **unknown-health lab repair**
 small durable journal and verified rewrites on a disposable or already-backed-up drive.
 The choice must still pass disk identity, exclusive lock, write-safety and batch checks;
 no writes start automatically. Critical Windows health warnings still stop the candidate
-path. If identification remains incomplete, select **Rescue data** and save a copy to a
+path. If identification remains incomplete for **HDD media rewrites**, select **Restore data** and save a copy to a
 separate healthy drive instead. A full SMART pass still supplies stronger health evidence.
 
 Use **Hardware diagnostics → Inspect storage** for read-only low-level information. Seek
@@ -287,3 +293,21 @@ The desktop interface is Qt-only (PySide6). Its Specialist Tools dialog exposes 
 The optional Debian recovery ISO build now includes Memtest86+ as a separate firmware boot-menu choice and a **Hardware Diagnostics (CPU / RAM)** desktop launcher for short, consent-based Linux tests using stress-ng. These tests do not repair disks or memory, and the ISO still requires BIOS/UEFI boot qualification before release.
 
 **Repair & Restore** can start a read-only image of an SSD, flash device, or unqualified HDD without leaving the workspace. This saves recoverable data on **another healthy disk** and is not the same as restoring physical media reliability. When SMART is blocked, Linux sysfs can also provide limited, unverified identification hints; a USB adapter may supply misleading values.
+
+
+### Repair versus Restore (desktop)
+
+**Repair drive** performs on-device operations with distinct safety controls:
+
+- **Windows logical filesystem repair (NTFS, exFAT, FAT):** an explicitly authorized `chkdsk X: /f` on a mounted, independently mapped *external* volume. This can correct filesystem metadata errors, **not** worn NAND, unreadable sectors, lost file content, or SSD endurance. It requires a prior backup, the selected drive's identity hint, matching Windows partition-to-disk evidence, and two approvals. It will refuse boot/system disks and unsupported/unknown volumes. A busy volume may refuse the operation rather than force a dismount.
+- **Rotational HDD region maintenance:** journaled, bounded rewrites of repeatably readable HDD regions only when the stronger media, locking, and identity gates pass. No guarantee of improving disk life. Missing SMART does not grant permission to write.
+
+**Restore data** is a separate workspace for imaging, copy-out recovery, and salvage. An SSD is never sent to Restore merely because an HDD-specific repair is inapplicable. Use Restore first for valuable or unstable media; on-device filesystem repair can sacrifice damaged file references.
+
+On Windows, the guarded CLI can inspect the selected volume binding without writing:
+
+```
+python -m driverepair_desktop repair-windows-filesystem --device windows:PhysicalDriveN --letter E --confirm-identity THE_12_CHAR_HINT --json
+```
+
+Actual writes additionally require `--execute --ack-backed-up --ack-filesystem-write`. These flags are not a substitute for a backup or a successful verification afterward. The public read-only beta blocks execution.

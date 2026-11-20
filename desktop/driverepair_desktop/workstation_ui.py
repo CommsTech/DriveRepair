@@ -25,19 +25,19 @@ WORKSPACES = {
         'Read-only diagnosis', 'No planned writes to source',
         'Verify the drive model and serial suffix, then choose a diagnostic check.'),
     'recover': Workspace(
-        'Rescue data',
+        'Restore data',
         'Save readable data onto another healthy disk before attempting invasive work.',
         'Read-only source', 'Writes only to a new destination image',
         'Select your external source drive. A destination image is chosen when you start.'),
     'fix': Workspace(
-        'Repair & restore',
-        'Drive-aware recovery, copy-only filesystem repair, and guarded HDD maintenance.',
-        'Experimental writes', 'May permanently worsen a failing drive',
-        'Start with a recovery copy. Verified HDDs may qualify for journaled maintenance.'),
+        'Repair drive',
+        'On-device logical filesystem repair and eligible HDD region maintenance. Restore is separate.',
+        'Experimental guarded writes', 'Writes can alter or lose data; confirm the specific method',
+        'Choose a supported repair method; approve any on-device changes explicitly.'),
 }
 
 IMAGE_OPERATIONS = frozenset({'rescueimage'})
-EXPERIMENTAL_OPERATIONS = frozenset({'carequick', 'carefull', 'careresume'})
+EXPERIMENTAL_OPERATIONS = frozenset({'carequick', 'carefull', 'careresume', 'winfsrepair'})
 
 # A fast source can emit thousands of progress events per second. Repainting
 # every one of them starves the UI thread and makes the window feel stuck.
@@ -88,12 +88,16 @@ def can_start(kind: str | None, *, device_selected: bool, image_exists: bool,
         return False, 'Connect and select the external source drive to continue.'
     if kind == 'rescue':
         return True, 'Ready to choose a NEW destination image on another healthy disk.'
+    if kind == 'winfsrepair':
+        return True, 'Ready to select a mounted Windows volume on this disk and review the write risks.'
     if kind in EXPERIMENTAL_OPERATIONS:
         return True, 'Ready for required safety review, fingerprint confirmation and journaling.'
     return True, 'Ready to start read-only diagnostics.'
 
 
 def operation_impact(kind: str | None) -> tuple[str, str]:
+    if kind == 'winfsrepair':
+        return ('ON-DEVICE FILESYSTEM WRITE', 'CHKDSK /f can modify filesystem metadata and lose damaged file records. Backup and explicit approval required; no physical media repair.')
     if kind == 'capacity':
         return ('WRITES / RESTORES SOURCE', 'High-risk test. Temporarily writes sampled USB regions and tries to restore originals; full backup required.')
     if kind in IMAGE_OPERATIONS:

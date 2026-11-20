@@ -10,6 +10,7 @@ import json
 import math
 from collections import deque
 import os
+import re
 from pathlib import Path
 
 from .surface_map import SurfaceCoverage
@@ -479,10 +480,15 @@ def launch():
         def __init__(self):
             super().__init__()
             self.kind = 'unknown'
+            self.mode = 'check'
             self.eligible = False
             self.setMinimumHeight(58)
             self.setMaximumHeight(64)
             self.setToolTip('Media policy is advisory. Device identity, SMART and exclusive access are checked by the engine before physical writes.')
+
+        def set_workflow(self, family):
+            self.mode = str(family or 'check')
+            self.update()
 
         def set_policy(self, kind, eligible=False):
             self.kind = str(kind or 'unknown').lower()
@@ -492,8 +498,12 @@ def launch():
         def paintEvent(self, _event):
             painter=QPainter(self)
             painter.setRenderHint(QPainter.Antialiasing)
-            labels=('IDENTIFY MEDIA', 'IMAGE / RESCUE',
-                    'TARGETED HDD' if self.eligible else 'VERIFY / REPORT')
+            labels = (('IDENTIFY MEDIA', 'CHOOSE REPAIR',
+                       'TARGETED HDD' if self.eligible else 'VERIFY RESULTS')
+                      if self.mode == 'fix' else
+                      ('IDENTIFY SOURCE', 'IMAGE / RESCUE', 'VERIFY / REPORT')
+                      if self.mode == 'recover' else
+                      ('IDENTIFY MEDIA', 'SCAN / DIAGNOSE', 'VERIFY / REPORT'))
             colors=('#7892b3','#40cfb5', '#e6b669' if self.eligible else '#7892b3')
             gap=8.0
             width=max(10.0,(self.width()-2*gap)/3)
@@ -604,8 +614,8 @@ def launch():
             self.nav_buttons={}
             for family, label, key in (
                 ('check','Diagnose','scanquick'),
-                ('recover','Rescue data','rescue'),
-                ('fix','Repair & restore','carequick')):
+                ('recover','Restore data','rescue'),
+                ('fix','Repair drive','carequick')):
                 b=QPushButton(label)
                 b.setObjectName('nav')
                 b.setCheckable(True)
@@ -859,9 +869,9 @@ def launch():
             # One next action replaces a row of competing SMART/setup/help controls.
             # This does not bypass the CLI's independent physical-write checks.
             self.repair_next=QPushButton('Why this plan?')
-            self.repair_next.setAccessibleName('Next step for HDD repair eligibility')
-            self.repair_next.setToolTip('Check SMART, Windows-native disk evidence, or rescue; identity is not a write permit.')
-            self.repair_next.clicked.connect(self.explain_repair_eligibility)
+            self.repair_next.setAccessibleName('Review disk repair methods and eligibility')
+            self.repair_next.setToolTip('Check physical HDD eligibility and supported on-device filesystem repair; no write permit is implied.')
+            self.repair_next.clicked.connect(self.resolve_repair_next)
             self.repair_next.hide()
             drive_panel.addWidget(self.repair_next)
             # Recovering bytes and repairing a filesystem COPY are meaningful
@@ -898,7 +908,8 @@ def launch():
             self.job_box.setAccessibleDescription('Read-only diagnosis, rescue, or experimental repair task')
             self.job_box.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
             self._jobs={
-                'fix':[('Targeted HDD region repair','carequick'),
+                'fix':([('Repair filesystem on selected drive (Windows)','winfsrepair')] if sys.platform=='win32' else []) + [
+                       ('Targeted HDD region repair','carequick'),
                        ('Full scan + targeted HDD repair','carefull'),
                        ('Resume journaled repair','careresume')],
                 'recover':[('Rescue selected external drive to NEW image','rescue'),
@@ -928,7 +939,7 @@ def launch():
             workflow.addWidget(self.batch_status)
             help_row=QHBoxLayout()
             workflow.addLayout(help_row)
-            help_row.addWidget(help_icon('Repair: suitable HDDs only in the guarded beta, with SMART evidence, a separate journal and exclusive disk access. Rescue: new image. Diagnose: reads only.'))
+            help_row.addWidget(help_icon('Repair Drive: guarded HDD region maintenance or explicitly approved Windows filesystem metadata repair. Restore: save files or create an image. Diagnose: reads only.'))
             self.auto_resume=QCheckBox('Resume read-only full scan when the same USB drive reconnects')
             self.auto_resume.setChecked(True)
             self.auto_resume.setToolTip('Only a read-only full scan with a saved checkpoint can restart automatically. No in-place writes or RAM-only transactions restart after a disconnect.')
@@ -1065,7 +1076,7 @@ def launch():
             self.next_action.setTextFormat(Qt.PlainText)
             result_card.addWidget(self.next_action)
             report_row=QHBoxLayout()
-            self.rescue_instead=QPushButton('Create recovery copy here…')
+            self.rescue_instead=QPushButton('Open Restore workspace')
             self.rescue_instead.setToolTip('Image this drive to healthy storage while remaining in Repair & Restore. No source writes.')
             self.rescue_instead.clicked.connect(lambda:self.start_job(repair_copy=True))
             self.rescue_instead.setVisible(False)
@@ -1470,11 +1481,26 @@ def launch():
                 if self.job_box.itemData(i) == goal:
                     self.job_box.setCurrentIndex(i)
                     break
+            # SSD/flash cannot use the HDD rewrite workflow; the default
+            # Repair method becomes an explicit on-device filesystem operation.
+            if family == 'fix' and sys.platform == 'win32':
+                d=self.selected() or {}
+                try:
+                    from .repair_readiness import _flash_profile
+                    snap=self._health_by_device.get(d.get('identity_hint'))
+                    if _flash_profile(d, snap) is not None:
+                        index=next((i for i in range(self.job_box.count())
+                            if self.job_box.itemData(i)=='winfsrepair'), -1)
+                        if index >= 0:
+                            self.job_box.setCurrentIndex(index)
+                except (ValueError,TypeError):
+                    pass
             self.job_box.blockSignals(False)
+            self.media_pipeline.set_workflow(family)
             self.smart_check_note.setVisible(family=='fix')
             self.repair_help.hide()  # explanation is available through contextual next action
             self.repair_next.setVisible(family=='fix')
-            self.repair_copy.setVisible(family=='fix')
+            self.repair_copy.setVisible(False)  # Copy-based repair belongs in Restore/Specialist tools
             self.choice_changed()
             if not (self.proc and self.proc.state()!=QProcess.NotRunning):
                 self.set_live_focus(False)
@@ -1484,6 +1510,14 @@ def launch():
             if (self.proc and self.proc.state()!=QProcess.NotRunning
                     and self._last_progress_at is not None
                     and time.monotonic()-self._last_progress_at>8):
+                if self._last_job_kind == 'winfsrepair':
+                    self.metric_labels['rate'].setText('Windows CHKDSK running')
+                    self.status.setText('Filesystem repair in progress · completion not confirmed')
+                    self.help.setText('Windows is checking the selected external volume. '
+                        'A filesystem repair may produce no progress output for several minutes. '
+                        'Do not unplug the drive while CHKDSK is writing.')
+                    self.metric_labels['eta'].setText('Unknown · Windows repair')
+                    return
                 self.metric_labels['rate'].setText('Waiting on drive')
                 elapsed=int(time.monotonic()-self._last_progress_at)
                 if self._last_phase is None and elapsed < 30:
@@ -1723,7 +1757,8 @@ def launch():
                    'capacity':'Authenticity spot check: temporary writes to selected USB regions, readback, and restoration. Requires full backup and durable separate-drive journal. Not a normal health scan.',
                    'scanquick':'Samples at least 10% of the entire drive with distributed random locations; no writes.',
                    'scanfull':'Reads the full address space, saving a resumable local checkpoint.',
-                   'carequick':'Investigates slow regions; may rewrite only consistently readable targets after consent.',
+                   'carequick':'Investigates slow HDD regions; may rewrite consistently readable targets after explicit consent.',
+                   'winfsrepair':'On-device Windows NTFS/FAT/exFAT logical repair (CHKDSK /f). This does not fix damaged media or reconstruct unreadable data; backup and explicit authorization required.',
                    'carefull':'Full scan and bounded repair. Writes require separate explicit approval.',
                    'careresume':'Reopens a previously durable journal on a separate healthy disk and verifies patient identity before resuming interrupted writes.',
                    'rescue':'Copy readable sectors directly from the selected EXTERNAL drive to a NEW image on another healthy disk. The patient is read-only.',
@@ -1734,12 +1769,12 @@ def launch():
             for widget in (self.total_caption,self.overall_label,self.progress):
                 widget.setVisible(guided)
             impact, impact_detail=operation_impact(kind)
-            self.operation_impact.setObjectName('warningTag' if kind in {'carequick','carefull','careresume'} else 'riskTag')
+            self.operation_impact.setObjectName('warningTag' if kind in {'carequick','carefull','careresume','winfsrepair'} else 'riskTag')
             self.operation_impact.setText(impact)
             self.operation_impact.setToolTip(impact_detail)
             self.operation_impact.style().unpolish(self.operation_impact)
             self.operation_impact.style().polish(self.operation_impact)
-            self.start.setText('Start '+('capacity spot test' if kind=='capacity' else
+            self.start.setText('Start '+('filesystem repair review' if kind=='winfsrepair' else 'capacity spot test' if kind=='capacity' else
                                          'read-only rescue' if kind in {'rescue','rescueimage'} else
                                          'diagnostics' if kind in {'health','scanquick','scanfull','resume'} else
                                          'authorized repair'))
@@ -1828,11 +1863,11 @@ def launch():
                 state=readiness_next_action(d,kind,
                     self._health_by_device.get(d.get('identity_hint')),
                     smartctl_available=bool(smartctl_path()))
-                self.repair_next.setText('Why this plan?')
+                self.repair_next.setText('Check repair options')
                 self.repair_next.setToolTip(state['reason'])
                 self.repair_next.setEnabled(not running and
                     not (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning))
-                self.repair_copy.setEnabled(not running)
+                self.repair_copy.setEnabled(False)  # specialist copy repair is not in on-device Repair
                 if self._smart_probe_failures.get(d.get('identity_hint')) and not enabled:
                     advice=('SMART check: '+self._smart_probe_failures[d['identity_hint']]
                             +' | '+advice)
@@ -1848,7 +1883,7 @@ def launch():
                     smartctl_available=bool(smartctl_path()))
                 self.start.setText(route.button)
                 if (not running and not PUBLIC_BETA_IMAGE_ONLY and
-                    route.action in {'rescue','probe'} and
+                    route.action in {'filesystem','probe'} and
                     not (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning)):
                     enabled=True
                     self.start.setEnabled(True)
@@ -1862,8 +1897,7 @@ def launch():
             self.start_shortcut.setEnabled(enabled)
             # When a repair is ineligible, expose the non-destructive next step
             # without a cryptic failed worker run. No source write is performed.
-            self.rescue_instead.setVisible(kind in {'carequick','carefull','careresume'}
-                and bool(self.selected()) and not enabled and not running)
+            self.rescue_instead.setVisible(False)  # Restore is a separate workspace
             self.ready_note.setText(advice)
             self.start.setToolTip(advice)
             self.device_box.setEnabled(not running and bool(self._devices))
@@ -1930,6 +1964,7 @@ def launch():
                 operation={'carefull':'Full scan + targeted HDD maintenance',
                            'carequick':'Targeted HDD maintenance',
                            'careresume':'Resume journaled HDD maintenance',
+                           'winfsrepair':'On-device Windows filesystem metadata repair',
                            'scanquick':'Quick read-only scan',
                            'scanfull':'Full read-only scan',
                            'rescue':'Rescue physical drive to image',
@@ -2736,10 +2771,63 @@ def launch():
                 return
             QMessageBox.information(self,'Drive details (read-only)',
                 drive_inspection_text(identified,report,error=err.strip()[:220])[:4000])
+        def start_windows_filesystem_repair(self):
+            """Windows CHKDSK /f on a selected external volume, not image rescue.
+
+            The CLI independently checks current Get-Disk and Get-Partition
+            binding and requires fresh identity and explicit authorizations.
+            """
+            if sys.platform != 'win32':
+                QMessageBox.information(self, 'Windows volume repair',
+                    'This logical filesystem repair requires Windows. HDD region maintenance is separate.')
+                return
+            if PUBLIC_BETA_IMAGE_ONLY:
+                QMessageBox.warning(self, 'Public beta',
+                    'On-device filesystem changes are unavailable in the read-only public build.')
+                return
+            d=self.selected()
+            if not d:
+                QMessageBox.information(self, 'Select a drive', 'Select the external drive to repair.')
+                return
+            if self.proc and self.proc.state()!=QProcess.NotRunning:
+                return
+            from PySide6.QtWidgets import QInputDialog
+            letter, ok=QInputDialog.getText(self, 'Repair a Windows filesystem',
+                f"Selected physical disk: {d.get('model')} ({d.get('identity_hint')})\n\n"
+                'Enter the Windows volume letter ON THIS DISK (for example, E).\n'
+                'DriveRepair will independently verify the volume-to-disk binding:')
+            if not ok:
+                return
+            letter=letter.strip().upper().rstrip(':')
+            if not re.fullmatch(r'[D-Z]', letter):
+                QMessageBox.warning(self, 'Invalid Windows volume',
+                    'Enter one external volume letter from D through Z. No disk was changed.')
+                return
+            backup=QMessageBox.question(self,'Backup and data-loss risk',
+                f'Windows CHKDSK /f on {letter}: will MODIFY filesystem metadata on the original drive.\n\n'
+                'It may discard orphaned/damaged file records or worsen data loss on unstable media. '
+                'This is not physical NAND repair, magnetic sector remapping, or deleted-file recovery.\n\n'
+                'Have you already made an independent backup of everything important on this volume?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if backup != QMessageBox.Yes:
+                return
+            typed, ok=QInputDialog.getText(self,'Authorize on-device filesystem repair',
+                f'Confirm the disk identity {d["identity_hint"]}, volume {letter}:, and risk of data loss.\n'
+                f'Type exactly REPAIR {letter}: to authorize CHKDSK /f:')
+            if not ok or typed.strip().upper() != f'REPAIR {letter}:':
+                QMessageBox.information(self,'Not authorized','No filesystem repair started.')
+                return
+            # Native worker enforces mapping and source policy; no UI-only permit.
+            self._last_good_device=d
+            self._last_job_kind='winfsrepair'
+            self._job_args=['repair-windows-filesystem','--device',d['id'],
+                '--letter',letter,'--confirm-identity',d['identity_hint'],
+                '--execute','--ack-backed-up','--ack-filesystem-write','--json']
+            self.run_command(self._job_args)
+
         def start_job(self, *, repair_copy=False):
-            # Stay in Repair & Restore when the right operation is a new,
-            # read-only recovery copy. Do not jump to the Rescue workspace or
-            # change the user's operation selection; run the same rescue engine.
+            # Restore imaging is independent from Repair methods. Only explicit
+            # Restore actions may invoke the copy-out rescue engine.
             recovery_here = bool(repair_copy)
             if not recovery_here and self.job_box.currentData() in {'carequick', 'carefull', 'careresume'}:
                 from .repair_routes import choose_repair_route
@@ -2748,14 +2836,18 @@ def launch():
                 route = choose_repair_route(selected,
                     self._health_by_device.get((selected or {}).get('identity_hint')),
                     smartctl_available=bool(smartctl_path()))
-                if route.action == 'rescue':
-                    recovery_here = True
+                if route.action == 'filesystem':
+                    self.start_windows_filesystem_repair()
+                    return
                 if route.action == 'probe':
                     self.probe_selected_media(force=True)
                     return
                 if route.action == 'select':
                     self.device_box.setFocus()
                     return
+            if not recovery_here and self.job_box.currentData() == 'winfsrepair':
+                self.start_windows_filesystem_repair()
+                return
             self._auto_probe_timer.stop()
             if self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning:
                 self._auto_probe_proc.kill()  # bounded read-only SMART probe; do not compete with recovery
@@ -3090,7 +3182,9 @@ def launch():
             self.proc.finished.connect(self.job_done)
             self.stop.setText('Stop')
             self.start.setEnabled(False)
-            self.stop.setEnabled(True)
+            # Windows CHKDSK /f may be modifying volume metadata. Qt must not
+            # kill that subprocess and leave the on-device filesystem half repaired.
+            self.stop.setEnabled(self._last_job_kind != 'winfsrepair')
             self.copy_summary_button.setEnabled(False)
             self.proc.start()
             self.update_action_state()
@@ -3327,7 +3421,14 @@ def launch():
                 self.show_condition(result['condition_assessment'])
             text=str(result.get('status') or ('Completed' if exit_code==0 else 'Incomplete / attention needed'))
             self.status.setText(text.replace('_',' ').title())
-            if user_stop_requested and exit_code!=0:
+            if self._last_job_kind == 'winfsrepair' and exit_code != 0:
+                self.result.setText('Filesystem repair not confirmed')
+                self.explain.setText('The on-device Windows filesystem repair did not finish successfully. '
+                    'Inspect the local command output. Do not treat the disk as repaired or repeat '
+                    'writes until the cause is understood.')
+                self.next_action.setText('If the volume cannot be locked or media reads fail, '
+                    'use an offline environment or a recovery specialist before attempting further writes.')
+            elif user_stop_requested and exit_code!=0:
                 self.result.setText('Stopped by operator — incomplete scan')
                 self.explain.setText('The requested stop has ended the child process. '
                     'Previously observed errors are retained in the log; unscanned ranges remain unknown. '
@@ -3359,6 +3460,13 @@ def launch():
                         f'Read-only diagnosis finished.{coverage_txt} '
                         'This is not Quick Repair and does not rewrite sectors. '
                         'A completed read is not proof of file integrity.')
+                elif self._last_job_kind == 'winfsrepair':
+                    self.result.setText('Filesystem repair command finished · verify files')
+                    self.explain.setText('Windows CHKDSK /f attempted logical metadata repair only. '
+                        'This does not repair physical sectors or establish SSD health. '
+                        'Review the command output and independently verify the filesystem.')
+                    self.next_action.setText('Check the filesystem again and inspect important files. '
+                        'Recurring errors mean the device should be replaced.')
                 elif status_code == 'completed_targeted_refresh':
                     pv=result.get('postverification') or {}
                     completed=int((result.get('repair') or {}).get('rewritten_bytes') or 0)
@@ -3512,6 +3620,13 @@ def launch():
                 event.ignore()
                 return
             if self.proc and self.proc.state()!=QProcess.NotRunning:
+                if self._last_job_kind == 'winfsrepair':
+                    QMessageBox.warning(self, 'Windows filesystem repair is running',
+                        'CHKDSK /f may be modifying filesystem metadata. Stopping the GUI or '
+                        'disconnecting the drive could leave it inconsistent. Wait for the '
+                        'Windows command to finish; a timeout is reported as an unknown outcome.')
+                    event.ignore()
+                    return
                 if self._last_job_kind in ('carefull','carequick','careresume','capacity'):
                     answer=QMessageBox.question(self,'Physical write may be in progress',
                         'The active transaction cannot be forcibly interrupted safely. '
@@ -3528,6 +3643,11 @@ def launch():
             event.accept()
 
         def stop_job(self):
+            if (self._last_job_kind == 'winfsrepair' and self.proc
+                    and self.proc.state()!=QProcess.NotRunning):
+                QMessageBox.warning(self, 'Filesystem repair cannot be interrupted safely',
+                    'Wait for CHKDSK /f to finish. A forced termination may damage the filesystem.')
+                return
             if self._batch_running:
                 self._batch_queue.clear()
                 self.batch_status.setText('Queued jobs cancelled; current read-only imaging continues to its journal boundary.')

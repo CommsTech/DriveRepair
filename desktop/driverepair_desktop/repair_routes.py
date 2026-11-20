@@ -1,4 +1,4 @@
-"""Media-specific primary action for the Qt Repair & Restore workspace.
+"""Media-specific repair action for the Qt Repair Drive workspace.
 
 An active primary action does not imply permission to write to patient media.
 The guard in ``start_job`` and the CLI remain independent.  SSD and removable
@@ -17,7 +17,8 @@ class RepairRoute:
     action: str
     button: str
     explanation: str
-    patient_write_possible: bool = False
+    patient_write_possible: bool = False  # A separate, approved action MAY modify the original device
+    hdd_region_write_candidate: bool = False  # Never inferred from filesystem repair
 
 
 def choose_repair_route(device: dict | None, snapshot: dict | None = None,
@@ -25,31 +26,33 @@ def choose_repair_route(device: dict | None, snapshot: dict | None = None,
     """Select an *operator action*, never grant write permission.
 
     Physical HDD repair remains separately gated by eligibility, journal,
-    identity and locks, while non-HDD drives get an actual recovery entry point.
+    identity and locks. Restore/imaging is a SEPARATE workspace.
     """
     decision = readiness_next_action(device, 'carequick', snapshot,
                                      smartctl_available=smartctl_available)
     if decision['ready']:
         return RepairRoute('review', 'Review guarded HDD repair',
                            'A rotational HDD has been identified. Next: approve risk, '
-                           'select separate-disk journal, recheck identity and exclusive access.', True)
+                           'select separate-disk journal, recheck identity and exclusive access.', True, True)
     if not device:
         return RepairRoute('select', 'Select a drive', 'Connect and select the source drive first.')
     flash = _flash_profile(device, snapshot)
     if flash:
         kind = flash.kind.upper()
-        return RepairRoute('rescue', f'Restore {kind} data to image',
-                           f'{kind} does not support HDD-style sector rewrites. '
-                           'Create a recovery image on separate healthy storage right here, then '
-                           'recover files or repair a supported filesystem on a NEW copy.')
+        return RepairRoute('filesystem', 'Repair filesystem on this drive',
+                           f'{kind} does not support HDD magnetic-sector rewrites. '
+                           'Windows CHKDSK /f can repair supported NTFS, exFAT or FAT '
+                           'filesystem metadata on an identified external volume, with explicit backup/risk consent. '
+                           'This is not a flash-cell repair or guarantee of healthy hardware.', True)
     if decision['action'] == 'probe':
         return RepairRoute('probe', 'Identify disk (read-only)',
                            'Check SMART/SAT and Windows storage properties automatically. '
                            'This reads only drive identity and health metadata.')
     if decision['action'] in {'identity', 'setup', 'rescue'}:
-        return RepairRoute('rescue', 'Set up recovery image',
-                           'The external disk cannot currently satisfy the physical-write '
-                           'identity/health checks. Save readable bytes to a separate image; '
-                           'try another known-compatible SATA/USB bridge for optional HDD maintenance.')
-    return RepairRoute('rescue', 'Set up recovery image',
-                       'Preserve readable bytes on separate storage before other maintenance.')
+        return RepairRoute('filesystem', 'Repair filesystem on this drive',
+                           'HDD sector maintenance is blocked by missing device/health evidence. '
+                           'A separate on-device filesystem repair may be available for a mounted '
+                           'Windows NTFS/FAT/exFAT volume after identity checks, backup acknowledgment, '
+                           'and explicit approval. This does NOT fix damaged physical sectors.', True)
+    return RepairRoute('filesystem', 'Inspect filesystem repair options',
+                       'Select a Windows filesystem volume; raw disk repair remains independently restricted.', True)

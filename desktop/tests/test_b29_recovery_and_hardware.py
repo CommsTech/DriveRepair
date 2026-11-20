@@ -15,25 +15,26 @@ ROOT=Path(__file__).resolve().parents[2]
 
 
 class RepairViewTests(unittest.TestCase):
-    def test_ssd_restore_is_image_and_never_authorizes_hdd_write(self):
+    def test_ssd_repair_routes_to_logical_filesystem_not_hdd_write(self):
         drive={'model':'SanDisk SDSSDH3 500G USB Device','bus':'usb',
                'sector_size':512,'serial_suffix':'***0000','identity_hint':'abc'}
         route=choose_repair_route(drive)
-        self.assertEqual(route.action,'rescue')
-        self.assertIn('image',route.button.lower())
-        self.assertFalse(route.patient_write_possible)
+        self.assertEqual(route.action,'filesystem')
+        self.assertIn('filesystem',route.button.lower())
+        self.assertNotIn('image',route.button.lower())
+        self.assertTrue(route.patient_write_possible)
+        self.assertFalse(route.hdd_region_write_candidate)
         self.assertFalse(ui_repair_readiness(drive,'carequick')[0])
 
-    def test_qt_uses_common_rescue_engine_without_switching_workspaces(self):
+    def test_qt_repair_does_not_auto_redirect_to_image_rescue(self):
         src=(ROOT/'desktop/driverepair_desktop/qtgui.py').read_text(encoding='utf-8')
         start=src[src.index('        def start_job('):src.index('        def reveal_job_evidence(')]
-        self.assertIn("kind='rescue' if recovery_here",start)
-        self.assertIn('recovery_here = True',start)
-        self.assertIn("'rescue-external'",start)
-        # Workspace switch may still exist for other entry points; the Start path
-        # itself must not leave Repair & Restore for image-first recovery.
+        self.assertIn("if route.action == 'filesystem':",start)
+        self.assertIn('self.start_windows_filesystem_repair()',start)
+        self.assertNotIn('recovery_here = True',start)
         self.assertNotIn("self.select_goal('rescue')",start)
-        self.assertIn("lambda:self.start_job(repair_copy=True)",src)
+        self.assertIn("'repair-windows-filesystem'",src)
+        self.assertIn('Restore data',src)
 
 
 class LinuxEvidenceTests(unittest.TestCase):
