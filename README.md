@@ -262,6 +262,12 @@ The primary workstation is **Python / PySide6** with a Qt-only workstation. The 
 
 Automated tests operate on fixtures and synthetic images. They do **not** prove real Windows USB device locking, power-loss recovery, hardware remapping, SSD controller outcomes, or bootability. Report problems with anonymized logs and exact versions; do not publish full disk images, serial numbers or private recovered content.
 
+### Testing and compact source packaging
+
+Run the offline Python regression suite with `PYTHONPATH=desktop python -m pytest -q desktop/tests` (or `cd desktop && python -m unittest discover -s tests`). These tests use simulated data and cannot certify raw-device repair or bootable recovery media. The core Rust source must be checked separately with a compatible Rust toolchain; GUI workflows need a native PySide6/Windows test.
+
+To produce a clean source ZIP without recursively bundling compiled Rust outputs, Python caches, or historical release ZIPs, use `python scripts/create_clean_source_archive.py --output /path/outside/repo/DriveRepair-Source.zip`. This operation does not delete your checkout, and the output is not a signed or hardware-qualified binary release. See [code audit notes](docs/CODE_AUDIT_B28.md) for tested paths and remaining verification gaps.
+
 For release changes see [CHANGELOG.md](CHANGELOG.md). Older technical release discussions are preserved in [the README engineering-history archive](docs/README_ENGINEERING_HISTORY.md), not mixed into this getting-started guide.
 
 **Support development:** [GitHub Sponsors — CommsTech](https://github.com/sponsors/CommsTech). Optional sponsorship does not grant access to recovered data or bypass any safety checks.

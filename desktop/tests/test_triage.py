@@ -3,7 +3,7 @@ import unittest
 from driverepair_desktop.scanner import scan_offsets, scan_reader
 
 
-class TestReader:
+class SyntheticReader:
     def __init__(self, count: int, bad: set[int] | None = None):
         self.size = count
         self.bad = bad or set()
@@ -32,7 +32,7 @@ class TriageTests(unittest.TestCase):
     def test_responds_to_fault_with_neighbor_check_bounded(self):
         candidates = list(scan_offsets(512*1000, 512, 'triage', 50))
         problem = candidates[24][0] // 512
-        reader = TestReader(1000, {problem})
+        reader = SyntheticReader(1000, {problem})
         result = scan_reader(reader, size=512*1000, sector=512, chunk=512,
                              mode='triage', samples=50)
         self.assertEqual(result['status'], 'completed_with_read_errors')
@@ -43,7 +43,7 @@ class TriageTests(unittest.TestCase):
         self.assertLess(result['surface_coverage_pct'], 100)
 
     def test_clean_triage_is_not_a_full_scan(self):
-        reader = TestReader(1000)
+        reader = SyntheticReader(1000)
         report = scan_reader(reader, size=512*1000, sector=512, chunk=512,
                              mode='triage', samples=37)
         self.assertEqual(report['status'], 'completed')

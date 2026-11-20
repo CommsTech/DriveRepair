@@ -71,7 +71,6 @@ class ScanCheckpoint:
         now = time.monotonic()
         if not force and now - self._last < self.minimum_interval:
             return
-        self._last = now
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         if self.path.is_symlink() or (self.path.exists() and not stat.S_ISREG(self.path.stat().st_mode)):
             raise ValueError('Unsafe checkpoint destination')
@@ -101,5 +100,9 @@ class ScanCheckpoint:
                     os.fsync(directory_fd)
                 finally:
                     os.close(directory_fd)
+            # Throttle only after the replacement and durability checks work.
+            # A failed checkpoint must be retried on the next scan opportunity,
+            # not suppressed for minimum_interval seconds.
+            self._last = now
         finally:
             tmp.unlink(missing_ok=True)
