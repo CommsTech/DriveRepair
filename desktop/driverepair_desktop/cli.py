@@ -253,6 +253,9 @@ def parser() -> argparse.ArgumentParser:
                          help='Extra bounded reads for failing individual sectors during retry (0–2). Retry successes require two identical reads.')
         cmd.add_argument("--multi-pass", action="store_true",
                          help="After first-pass rescue, automatically retry missing regions in smaller pieces")
+        cmd.add_argument('--sparse-zeros', action='store_true',
+                         help='Leave successfully read all-zero chunks unallocated in a sparse .img; '
+                              'NOT filesystem free-space detection. Missing sectors remain journaled.')
         cmd.add_argument("--chunk-mib", type=int, choices=[1, 2, 4, 8], default=1)
         cmd.add_argument("--max-read-errors", type=int, default=4096)
         cmd.add_argument("--max-chunks", type=int, default=None,
@@ -794,6 +797,8 @@ def _run_extras(args) -> int:
                           'notes': 'SMART and native storage-property queries unavailable; '
                                    'no media health claim or physical writes authorized.'}
     elif args.command == 'rescue-image' and args.engine == 'rust':
+        if args.sparse_zeros:
+            raise ValueError('Sparse-zero rescue is available only with the journaled Python engine')
         # The native engine is opt-in until independent OS builds and crash
         # recovery tests are complete. Never quietly switch journal formats.
         from .recovery import _safe_path
@@ -1289,7 +1294,7 @@ def _run_extras(args) -> int:
                                            resume=args.resume, retry_missing=args.retry_missing,
                                            progress=check_progress,
                                            max_chunks=getattr(args, 'max_chunks', None),
-                                           retry_sector_attempts=args.retry_sector_attempts)
+                                           retry_sector_attempts=args.retry_sector_attempts, sparse_zeros=args.sparse_zeros)
                     if args.multi_pass and result.get('status') == 'completed_with_missing_data':
                         # Revalidate device immediately before targeted retries.
                         check_progress(result, force=True)
@@ -1301,7 +1306,7 @@ def _run_extras(args) -> int:
                                                resume=True, retry_missing=True,
                                                progress=check_progress,
                                                max_chunks=getattr(args, 'max_chunks', None),
-                                               retry_sector_attempts=args.retry_sector_attempts)
+                                               retry_sector_attempts=args.retry_sector_attempts, sparse_zeros=args.sparse_zeros)
                     check_progress(result, force=True)
                     if rescue_console:
                         rescue_console.finish()

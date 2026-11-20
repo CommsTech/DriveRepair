@@ -643,6 +643,10 @@ def launch():
             self.device_tools_button.setToolTip('Read-only device capabilities, firmware, sampled speed and failed-offset investigation')
             self.device_tools_button.clicked.connect(self.open_device_tools)
             nav.addWidget(self.device_tools_button)
+            self.prereq_button=QPushButton('System readiness')
+            self.prereq_button.setObjectName('nav')
+            self.prereq_button.clicked.connect(self.review_prerequisites)
+            nav.addWidget(self.prereq_button)
             self._media_settings=QSettings('DriveRepair', 'RecoveryWorkstation')
             # The primary route is one USB creator, not three equally prominent tools.
             self.usb_flash_button=QPushButton('Create recovery USB')
@@ -672,6 +676,13 @@ def launch():
             self.flash_proc=None
             self.iso_proc=None
             self._iso_build_temp=None
+            self._iso_progress_dialog=None
+            self._iso_progress_lines=None
+            self._iso_progress_label=None
+            self._iso_progress_bar=None
+            self._iso_build_log_path=None
+            self._iso_progress_last_ui=0.0
+            self._iso_flash_when_ready=False
             nav.addStretch()
             nav.addWidget(self.sponsor_button)
             channel=QLabel('IMAGE-FIRST PUBLIC BETA' if PUBLIC_BETA_IMAGE_ONLY
@@ -937,6 +948,12 @@ def launch():
             self.batch_status.setObjectName('muted')
             self.batch_status.setWordWrap(True)
             workflow.addWidget(self.batch_status)
+            self.space_saving=QCheckBox('Space-saving image (skip verified zero blocks)')
+            self.space_saving.setChecked(True)
+            self.space_saving.setToolTip('Saves storage on sparse-file capable destinations. Only all-zero blocks '
+                'successfully read from the source are omitted. Unreadable sectors remain explicitly missing '
+                'in the rescue journal; this is not filesystem free-space recognition or compression.')
+            workflow.addWidget(self.space_saving)
             help_row=QHBoxLayout()
             workflow.addLayout(help_row)
             help_row.addWidget(help_icon('Repair Drive: guarded HDD region maintenance or explicitly approved Windows filesystem metadata repair. Restore: save files or create an image. Diagnose: reads only.'))
@@ -1173,6 +1190,55 @@ def launch():
                 self.setWindowTitle(self.windowTitle() + ' [DEBUG]')
             self.select_goal('scanquick')
             QTimer.singleShot(100,self.refresh_devices)
+            QTimer.singleShot(1700,self._announce_missing_dependencies)
+
+        def _announce_missing_dependencies(self):
+            # One launch-time notice, not an installer or a blocking prerequisite
+            # for basic scans. Users can always reopen System readiness.
+            if sys.platform != 'win32' or self._media_settings.value('b33_readiness_seen',False,type=bool):
+                return
+            from .dependencies import smartctl_path
+            if smartctl_path():
+                return
+            if self.proc and self.proc.state()!=QProcess.NotRunning:
+                return
+            self._media_settings.setValue('b33_readiness_seen', True)
+            dialog=QMessageBox(self)
+            dialog.setWindowTitle('DriveRepair · optional hardware diagnostics')
+            dialog.setText('Enhanced drive health tooling is not installed.')
+            dialog.setInformativeText('Diagnosis and data rescue remain available. SMART improves '
+                'drive-health interpretation when the USB enclosure passes commands through. '
+                'Windows recovery ISO building separately requires Debian WSL. '
+                'No software is installed without approval.')
+            install=dialog.addButton('Install SMART tools…',QMessageBox.AcceptRole)
+            dialog.addButton('Continue',QMessageBox.RejectRole)
+            dialog.exec()
+            if dialog.clickedButton()==install:
+                self.enable_smart_tools()
+
+        def review_prerequisites(self):
+            import shutil
+            from .dependencies import detect
+            info=detect()
+            present=info['tools']
+            smart=present['smartctl']=='available'
+            wsl=bool(shutil.which('wsl.exe')) if sys.platform=='win32' else False
+            prompt=QMessageBox(self)
+            prompt.setWindowTitle('System readiness · local capability audit')
+            prompt.setText('Installed capabilities and optional diagnostics')
+            prompt.setInformativeText(
+                'Qt interface: available (this window)\n'
+                f"SMART (health and USB SAT): {'Installed' if smart else 'Missing / optional'}\n"
+                f"Debian WSL (ISO build): {'Launcher detected; Debian must also initialize' if wsl else 'Not detected / optional'}\n"
+                f"Filesystem copy repair tools (Linux): {present['e2fsck']}\n"
+                'Read-only rescue works without SMART. USB bridge support cannot be installed by software. '
+                'Installations are always opt-in.')
+            install=prompt.addButton('Install SMART tools…',QMessageBox.ActionRole) if not smart and sys.platform=='win32' else None
+            prompt.addButton('Close',QMessageBox.RejectRole)
+            prompt.exec()
+            if install and prompt.clickedButton()==install:
+                self.enable_smart_tools()
+
         def enable_smart_tools(self):
             """Explicit one-time upstream setup, no downloader in the repair engine."""
             import shutil
@@ -1386,23 +1452,8 @@ def launch():
             except (ValueError,TypeError):
                 self.profile_note.setText('Unverified drive geometry — read-only rescue recommended.')
                 self.media_pipeline.set_policy('unknown',False)
-            # A change of source device must also update the actual operation.
-            # Otherwise a newly selected SSD still displays 'Full scan + HDD
-            # repair' while the Start button silently routes to CHKDSK.
-            if sys.platform=='win32' and operation_family(self.job_box.currentData())=='fix':
-                try:
-                    from .repair_readiness import _flash_profile
-                    flash=_flash_profile(d,snap)
-                except (ValueError,TypeError):
-                    flash=None
-                if flash is not None and self.job_box.currentData()!='winfsrepair':
-                    index=next((i for i in range(self.job_box.count())
-                                if self.job_box.itemData(i)=='winfsrepair'),-1)
-                    if index>=0:
-                        self.job_box.blockSignals(True)
-                        self.job_box.setCurrentIndex(index)
-                        self.job_box.blockSignals(False)
-                        self.choice_changed()
+            # Device changes invalidate permissions and refresh the explanation,
+            # but never replace an operator-selected method behind their back.
             if (not snap and key not in self._auto_probe_attempted
                     and not (self.proc and self.proc.state()!=QProcess.NotRunning)):
                 self._auto_probe_timer.start()
@@ -1471,6 +1522,19 @@ def launch():
                 self.note_log('SMART unavailable; Windows-native media checks attempted: '+self._smart_probe_failures[key])
             if self.selected() and self.selected().get('identity_hint') == key:
                 current=self._health_by_device.get(key)
+                if isinstance(current,dict):
+                    scan_evidence=None
+                    if (self._last_job_kind in {'scanquick','scanfull','resume'} and
+                            self._last_good_device and self._last_good_device.get('identity_hint')==key and
+                            isinstance(self._last_job_result,dict)):
+                        errors=self._last_job_result.get('read_error_chunks')
+                        if type(errors) is int:
+                            scan_evidence={'read_error_chunks':errors}
+                    if scan_evidence is not None:
+                        self.show_postscan_condition(current,scan_evidence['read_error_chunks'])
+                    else:
+                        from .reliability_score import assess
+                        self.show_condition(assess(current))
                 from .repair_readiness import ui_repair_readiness
                 permitted, explanation = ui_repair_readiness(self.selected(), 'carequick',
                                                                snapshot=current)
@@ -1758,25 +1822,9 @@ def launch():
                 self.dest.setText(path)
         def choice_changed(self):
             kind=self.job_box.currentData()
-            # A manual selection must not leave a known SSD/flash device labeled
-            # as if a magnetic HDD surface refresh were an available method.
-            if (sys.platform=='win32' and kind in {'carequick','carefull','careresume'}
-                    and operation_family(kind)=='fix'):
-                selected=self.selected() or {}
-                try:
-                    from .repair_readiness import _flash_profile
-                    flash=_flash_profile(selected,
-                        self._health_by_device.get(selected.get('identity_hint')))
-                except (ValueError,TypeError):
-                    flash=None
-                if flash is not None:
-                    index=next((i for i in range(self.job_box.count())
-                                if self.job_box.itemData(i)=='winfsrepair'),-1)
-                    if index>=0:
-                        self.job_box.blockSignals(True)
-                        self.job_box.setCurrentIndex(index)
-                        self.job_box.blockSignals(False)
-                        kind='winfsrepair'
+            # Preserve the operator's explicit method selection. Unsupported
+            # methods are explained/disabled, never silently changed into
+            # CHKDSK or a recovery-image job.
             is_image=kind=='rescueimage'
             self.dest.setVisible(is_image)
             self.browse.setVisible(is_image)
@@ -1785,6 +1833,7 @@ def launch():
             self.auto_pause.setVisible(kind in {'scanquick','scanfull','resume'})
             self.batch_button.setVisible(kind == 'rescue')
             self.batch_status.setVisible(kind == 'rescue')
+            self.space_saving.setVisible(kind in {'rescue','rescueimage'})
             self.smart_check_button.hide()
             self.repair_next.setVisible(kind in {'carequick','carefull','careresume'})
             self.smart_check_note.setVisible(kind in {'carequick','carefull','careresume'})
@@ -1925,14 +1974,16 @@ def launch():
                 route=choose_repair_route(device,
                     self._health_by_device.get((device or {}).get('identity_hint')),
                     smartctl_available=bool(smartctl_path()))
-                self.start.setText(route.button)
+                self.start.setText('Review HDD maintenance' if route.action == 'repair' else
+                    'Identify physical HDD' if route.action == 'probe' else
+                    'HDD method unavailable')
                 if (not running and not PUBLIC_BETA_IMAGE_ONLY and
-                    route.action in {'filesystem','probe'} and
+                    route.action in {'probe'} and
                     not (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning)):
                     enabled=True
                     self.start.setEnabled(True)
                     advice=route.explanation
-                elif route.action == 'select':
+                elif route.action in {'select','filesystem'}:
                     enabled=False
                     self.start.setEnabled(False)
                 self.start.setToolTip(route.explanation)
@@ -2061,6 +2112,25 @@ def launch():
                 statement+=f" · Before {previous['score']}/100 → after {score}/100"
             self.condition_evidence.setText(statement +
                 '\nCondition scores reflect observed warning signs, NOT remaining life or repair success.')
+
+        def show_postscan_condition(self, snapshot, read_errors):
+            """Use the completed diagnostic observations without inventing media health."""
+            from .reliability_score import assess
+            known=(isinstance(snapshot,dict) and
+                (bool(snapshot.get('ata_selected_raw_attributes')) or
+                 isinstance(snapshot.get('nvme'),dict)))
+            if known:
+                self.show_condition(assess(snapshot,scan={'read_error_chunks':read_errors}))
+            else:
+                self.condition_gauge.setVisible(False)
+                self.spec_button.setVisible(False)
+                self.condition_title.setText(
+                    'Read errors observed · hardware health unknown' if read_errors else
+                    'No failed reads observed · hardware health unknown')
+                self.condition_evidence.setText(
+                    f'{read_errors} failed read requests in the selected diagnostic. '
+                    'This is limited sampling evidence, not confirmed defective sectors, '
+                    'file integrity, or remaining drive life. Detailed SMART health remains unavailable.')
 
         def flash_boot_usb(self):
             """Real USB write wizard. CLI rechecks identity and OS permissions.
@@ -2360,6 +2430,90 @@ def launch():
                 'build the ISO, then verify BIOS and UEFI boot and patient read-only behavior. '
                 'The builder does not automatically write USB media.')
 
+        def _iso_progress_begin(self, child, folder):
+            """Show an indeterminate, live build view instead of hiding work in Expert log.
+
+            The output log is saved on the host destination, even if live-build
+            exits before making an ISO. No progress percentage is fabricated.
+            """
+            self._iso_build_log_path=Path(folder)/'DriveRepair-iso-build.log'
+            dlg=QDialog(self)
+            dlg.setWindowTitle('DriveRepair · building recovery USB image')
+            dlg.resize(720,470)
+            layout=QVBoxLayout(dlg)
+            heading=QLabel('Building DriveRepair recovery environment')
+            heading.setObjectName('heading')
+            layout.addWidget(heading)
+            self._iso_progress_label=QLabel('Starting Linux recovery image builder…')
+            self._iso_progress_label.setWordWrap(True)
+            layout.addWidget(self._iso_progress_label)
+            self._iso_progress_bar=QProgressBar()
+            self._iso_progress_bar.setRange(0,0)
+            layout.addWidget(self._iso_progress_bar)
+            self._iso_progress_lines=QPlainTextEdit()
+            self._iso_progress_lines.setReadOnly(True)
+            self._iso_progress_lines.document().setMaximumBlockCount(350)
+            layout.addWidget(self._iso_progress_lines,1)
+            note=QLabel('A USB drive has NOT been written. Build output is retained in the selected folder. '
+                'Bootability still requires BIOS/UEFI tests.')
+            note.setWordWrap(True)
+            layout.addWidget(note)
+            dismiss=QPushButton('Hide progress (build continues)')
+            dismiss.clicked.connect(dlg.hide)
+            layout.addWidget(dismiss)
+            self._iso_progress_dialog=dlg
+            child.readyReadStandardOutput.connect(lambda c=child:self._iso_progress_read(c,'stdout'))
+            child.readyReadStandardError.connect(lambda c=child:self._iso_progress_read(c,'stderr'))
+            child.errorOccurred.connect(lambda error,c=child:self._iso_process_error(c))
+            dlg.show()
+
+        def _iso_progress_read(self, child, stream):
+            data=bytes(child.readAllStandardOutput() if stream=='stdout'
+                       else child.readAllStandardError()).decode('utf-8','replace')
+            if not data:
+                return
+            if self._iso_build_log_path:
+                try:
+                    with open(self._iso_build_log_path,'a',encoding='utf-8') as fh:
+                        fh.write(data)
+                except OSError as exc:
+                    self.note_log('Unable to persist complete ISO build log: '+str(exc))
+            lines=data.splitlines()
+            if self._iso_progress_lines:
+                self._iso_progress_lines.appendPlainText(data.rstrip()[-7000:])
+            for line in reversed(lines):
+                line=line.strip()
+                if ('Permission denied' in line or 'ERROR:' in line or 'failed' in line.lower()):
+                    self._iso_progress_label.setText('Build error: '+line[:230])
+                    break
+                if 'lb config' in line or 'Creating config tree' in line:
+                    self._iso_progress_label.setText('Configuring BIOS/UEFI boot layout…')
+                    break
+                if 'debootstrap' in line.lower() or 'Extracting' in line:
+                    self._iso_progress_label.setText('Installing the Linux base filesystem…')
+                    break
+                if 'Retrieving' in line or 'Get:' in line:
+                    self._iso_progress_label.setText('Downloading verified Debian packages…')
+                    break
+                if 'ISO VALIDATION' in line or 'Built:' in line:
+                    self._iso_progress_label.setText('Checking generated recovery ISO…')
+                    break
+            if lines:
+                now=time.monotonic()
+                last=lines[-1]
+                if ('ERROR:' in data or 'Permission denied' in data or
+                        'failed' in data.lower() or now-self._iso_progress_last_ui>2):
+                    self._iso_progress_last_ui=now
+                    self.note_log('ISO: '+last[-650:])
+
+        def _iso_process_error(self, child):
+            if child is self.iso_proc:
+                self.note_log('ISO builder failed to launch: '+child.errorString())
+                if self._iso_progress_label:
+                    self._iso_progress_label.setText('Could not launch builder: '+child.errorString())
+                if child.state()==QProcess.NotRunning:
+                    self.iso_finished(127)
+
         def build_iso_windows(self):
             """Build Debian live recovery ISO on Windows in preinstalled WSL2."""
             from .windows_iso_build import require_debian_wsl, prepare_wsl_build, WSLPrerequisiteError
@@ -2439,10 +2593,7 @@ def launch():
             self.iso_proc=child
             child.setProgram(args[0])
             child.setArguments(args[1:])
-            child.readyReadStandardOutput.connect(lambda:self.note_log(
-                bytes(child.readAllStandardOutput()).decode('utf-8','replace')[-1800:]))
-            child.readyReadStandardError.connect(lambda:self.note_log(
-                bytes(child.readAllStandardError()).decode('utf-8','replace')[-1800:]))
+            self._iso_progress_begin(child,folder)
             child.finished.connect(lambda code,status:self.iso_finished(code))
             self.details_button.setChecked(True)
             self.note_log('Debian WSL live-build started. Only new output files are written; '
@@ -2503,10 +2654,7 @@ def launch():
             self.iso_proc=QProcess(self)
             self.iso_proc.setProgram('bash')
             self.iso_proc.setArguments([str(script),str(Path(folder).resolve())])
-            self.iso_proc.readyReadStandardOutput.connect(lambda:self.note_log(
-                bytes(self.iso_proc.readAllStandardOutput()).decode('utf-8','replace')[-1200:]))
-            self.iso_proc.readyReadStandardError.connect(lambda:self.note_log(
-                bytes(self.iso_proc.readAllStandardError()).decode('utf-8','replace')[-1200:]))
+            self._iso_progress_begin(self.iso_proc,folder)
             self.iso_proc.finished.connect(lambda code,status:self.iso_finished(code))
             self.details_button.setChecked(True)
             self.note_log('UNVERIFIED ISO build started. Wait for native tool completion and SHA-256 receipt.')
@@ -2514,15 +2662,37 @@ def launch():
             self.iso_proc.start()
 
         def iso_finished(self,code):
+            if self.iso_proc is None:
+                return
+            child=self.iso_proc
+            self._iso_progress_read(child,'stdout')
+            self._iso_progress_read(child,'stderr')
             if code == 0:
                 from .recovery_media_catalog import find_local_recovery_iso
                 image=find_local_recovery_iso(search_roots=[getattr(self,'_iso_output_folder',Path.cwd())])
                 if image:
                     self._media_settings.setValue('last_iso',image['path'])
                     self.note_log('New local live image available to Create recovery USB: '+Path(image['path']).name)
+            if code == 0 and not image:
+                code=8
+                self.note_log('ISO builder returned success but no structurally valid recovery image exists.')
             self.note_log('ISO builder exited with status '+str(code)+
                 '. Both BIOS and UEFI boot tests are required before distribution.')
+            if self._iso_progress_bar:
+                self._iso_progress_bar.setRange(0,1)
+                self._iso_progress_bar.setValue(1 if code==0 else 0)
+            if self._iso_progress_label:
+                self._iso_progress_label.setText(
+                    'Image built and structurally checked — firmware boot still unverified. '
+                    'Use Create recovery USB to choose a disposable target.' if code==0 else
+                    'Build failed — no bootable image was produced. Review the saved build log. '
+                    'Permission denied in debootstrap often indicates missing WSL2 Linux '
+                    'device-node privileges; check the WSL distro and build host.')
+            if self._iso_progress_dialog:
+                self._iso_progress_dialog.show()
+                self._iso_progress_dialog.raise_()
             self.iso_proc=None
+            self.update_action_state()
             if self._iso_build_temp is not None:
                 self._iso_build_temp.cleanup()
                 self._iso_build_temp=None
@@ -2657,6 +2827,8 @@ def launch():
                 args=['rescue-system','--device',job['device_id'],'--output',job['output'],
                     '--ack-risk','--ack-offline-system','--expect-fingerprint',job['fingerprint'],
                     '--multi-pass','--progress-jsonl','--no-live-dashboard','--json']
+            if self.space_saving.isChecked():
+                args.append('--sparse-zeros')
             self.run_command(args)
 
         def refresh_devices(self):
@@ -2948,7 +3120,11 @@ def launch():
                     self._health_by_device.get((selected or {}).get('identity_hint')),
                     smartctl_available=bool(smartctl_path()))
                 if route.action == 'filesystem':
-                    self.start_windows_filesystem_repair()
+                    QMessageBox.information(self,'HDD technique not applicable',
+                        'This device is not a verified rotational HDD. Magnetic-sector rewrite '
+                        'is not an SSD or USB-flash repair method. Select the separate '
+                        'Windows filesystem-repair operation if a supported volume has '
+                        'logical errors; no operation was switched automatically.')
                     return
                 if route.action == 'probe':
                     self.probe_selected_media(force=True)
@@ -3058,6 +3234,8 @@ def launch():
                             '--ack-offline-system','--expect-fingerprint',d['identity_hint']]
                     else:
                         args=['rescue-external','--device',d['id'],'--output',out,'--ack-risk']
+                if self.space_saving.isChecked():
+                    args.append('--sparse-zeros')
                 args+=['--multi-pass','--progress-jsonl','--no-live-dashboard','--json']
             else:
                 if not d:
@@ -3530,6 +3708,16 @@ def launch():
                 self.show_condition(condition_report['after'], previous=condition_report.get('before'))
             elif isinstance(result.get('condition_assessment'),dict):
                 self.show_condition(result['condition_assessment'])
+            # A diagnostic must assess observable read evidence even when SMART
+            # was blocked by the USB bridge. This is a limited read-error
+            # condition indicator, not a claimed hardware health certificate.
+            if self._last_job_kind in {'scanquick','scanfull','resume'}:
+                errors=result.get('read_error_chunks')
+                if errors is None and isinstance(result.get('scan'),dict):
+                    errors=result['scan'].get('read_error_chunks')
+                if type(errors) is int:
+                    snapshot=self._health_by_device.get(key) or {}
+                    self.show_postscan_condition(snapshot,errors)
             text=str(result.get('status') or ('Completed' if exit_code==0 else 'Incomplete / attention needed'))
             self.status.setText(text.replace('_',' ').title())
             if self._last_job_kind == 'winfsrepair' and exit_code != 0:
@@ -3717,6 +3905,17 @@ def launch():
             self.evidence_tabs.setCurrentIndex(0)
             self._main_scroll.verticalScrollBar().setValue(0)
             self.update_action_state()
+            if (self._last_job_kind in {'scanquick','scanfull','resume'}
+                    and self._last_good_device and not self._batch_running):
+                completed_key=self._last_good_device.get('identity_hint')
+                def postscan_health():
+                    active=self.selected() or {}
+                    if (active.get('identity_hint')==completed_key
+                            and not (self.proc and self.proc.state()!=QProcess.NotRunning)):
+                        self.note_log('Post-scan read-only hardware-health assessment requested. '
+                            'UNKNOWN remains unknown if SMART and native properties are unavailable.')
+                        self.probe_selected_media(force=True)
+                QTimer.singleShot(250,postscan_health)
         def closeEvent(self, event):
             if self.flash_proc and self.flash_proc.state()!=QProcess.NotRunning:
                 QMessageBox.warning(self,'USB flash underway',
