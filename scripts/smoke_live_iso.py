@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import stat
@@ -49,11 +50,21 @@ def _ovmf_files() -> tuple[Path, Path] | None:
 
 
 def _hash(path: Path) -> str:
+    st = path.lstat()
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+        raise OSError(f'ISO path must be an ordinary file, not a special file: {path}')
     with path.open('rb') as handle:
         checksum = hashlib.sha256()
         for chunk in iter(lambda: handle.read(1024 * 1024), b''):
             checksum.update(chunk)
         return checksum.hexdigest()
+
+
+def _run_metadata() -> dict:
+    """Capture CI identity when present; omit host home paths."""
+    keys = ('GITHUB_RUN_ID', 'GITHUB_SHA', 'GITHUB_WORKFLOW', 'GITHUB_REF',
+            'RUNNER_NAME', 'RUNNER_OS', 'RUNNER_ARCH')
+    return {key.lower(): os.environ[key] for key in keys if os.environ.get(key)}
 
 
 def boot_once(firmware: str, iso: Path, output: Path, timeout: int) -> dict:
@@ -136,8 +147,10 @@ def main() -> int:
     output.mkdir(parents=True, exist_ok=True)
     modes = ('bios', 'uefi') if args.firmware == 'both' else (args.firmware,)
     result = {'iso': iso.name, 'iso_sha256': _hash(iso),
+              'run_metadata': _run_metadata(),
               'tests': {mode: boot_once(mode, iso, output, args.timeout_seconds) for mode in modes}}
     (output / 'vm_boot_evidence.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
+    (output / 'run_metadata.json').write_text(json.dumps(result['run_metadata'], indent=2) + '\n', encoding='utf-8')
     print(json.dumps(result, indent=2))
     return 0 if all(entry['status'] == 'PASS' for entry in result['tests'].values()) else 1
 

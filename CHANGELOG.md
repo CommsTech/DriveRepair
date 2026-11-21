@@ -8,6 +8,7 @@
 - Added opt-in Windows USB dock SMART QA results using `/dev/pdN`, without storing full serial numbers or granting repair authorization.
 - Eliminated numerical scoring of uncalibrated vendor ATA 187 raw counters; an isolated warning cannot imply either 82/100 or 100/100 drive reliability.
 - Added independent artifact-bound promotion evidence validation, short agent navigation and reviewer guidance, and native Qt synthetic SSD/HDD route regression tests.
+- **Code-review follow-up:** qualification Qt missing-window is a hard fail (not a green skip); Windows job installs `desktop[qt]` and rejects skipped essential tests; VM evidence uploads on success/failure; release hygiene supports Python 3.10; readiness hashing rejects non-regular files; QA SMART unverified fails the sweep; ATA 5/197/198/199 positives require model thresholds; Ruff/Bandit cover `scripts/`.
 - **No real HP boot or Windows dock writes were performed.** The project is not hardware-qualified for public physical repair.
 
 

@@ -1,16 +1,39 @@
 #!/usr/bin/env python3
-"""Fail CI on stale active version references; leave historical change logs alone."""
+"""Fail CI on stale active version references; leave historical change logs alone.
+
+Compatible with the desktop package floor (Python >=3.10): version parsing does
+not require tomllib (3.11+). Prefer stdlib tomllib when present.
+"""
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 import re
-import tomllib
+import sys
+
+
+def _load_project_version(pyproject: Path) -> str:
+    text = pyproject.read_text(encoding='utf-8')
+    try:
+        import tomllib  # Python 3.11+
+    except ModuleNotFoundError:  # pragma: no cover - exercised on 3.10 hosts
+        try:
+            import tomli as tomllib  # type: ignore
+        except ModuleNotFoundError:
+            match = re.search(r'(?m)^version\s*=\s*"([^"]+)"\s*$', text)
+            if not match:
+                raise ValueError(f'{pyproject}: missing project version') from None
+            return match.group(1)
+    data = tomllib.loads(text)
+    version = data.get('project', {}).get('version')
+    if not isinstance(version, str) or not version:
+        raise ValueError(f'{pyproject}: missing project.version')
+    return version
 
 
 def check_repository(root: Path) -> dict:
     root = Path(root)
-    version = tomllib.loads((root / 'desktop' / 'pyproject.toml').read_text(encoding='utf-8'))['project']['version']
+    version = _load_project_version(root / 'desktop' / 'pyproject.toml')
     errors = []
     package_init = root / 'desktop' / 'driverepair_desktop' / '__init__.py'
     if package_init.is_file():
@@ -32,6 +55,9 @@ def check_repository(root: Path) -> dict:
 
 
 def main() -> int:
+    if sys.version_info < (3, 10):
+        print('FAIL: Python 3.10+ is required for release hygiene checks', file=sys.stderr)
+        return 2
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1])
     args = parser.parse_args()
