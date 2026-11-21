@@ -21,6 +21,21 @@ class RepairRoute:
     hdd_region_write_candidate: bool = False  # Never inferred from filesystem repair
 
 
+def supported_repair_methods(medium: str, *, platform: str) -> tuple[str, ...]:
+    """Supported workflows, not a declaration that damaged cells can be healed.
+
+    A controller's physical flash recovery and HDD magnetic sector maintenance
+    are not interchangeable. The live CLI remains the sole authority for writes.
+    """
+    methods = ['scan', 'rescue']
+    if platform == 'win32':
+        # Windows has an independent, partition-bound CHKDSK /f workflow.
+        methods.append('filesystem')
+    if medium in {'hdd', 'cmr', 'smr', 'hdd_unknown_recording'}:
+        methods.append('hdd_region')  # eligibility gates may still reject it
+    return tuple(methods)
+
+
 def choose_repair_route(device: dict | None, snapshot: dict | None = None,
                         *, smartctl_available: bool = False) -> RepairRoute:
     """Select an *operator action*, never grant write permission.

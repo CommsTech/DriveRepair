@@ -1,4 +1,4 @@
-**0.3.3b36** engineering snapshot (2026-11-21): NOT hardware-qualified for public physical repair or bootable media.
+**0.3.3b37** engineering snapshot (2026-11-21): NOT hardware-qualified for public physical repair or bootable media.
 
 Version follows `desktop/pyproject.toml`. `docs/RELEASE_STATUS.md` records current release gates; historical b13/b18 artifacts and engineering notes remain in `docs/` and `CHANGELOG.md`.
 

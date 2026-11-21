@@ -1,4 +1,4 @@
-# DriveRepair release status — v0.3.3b36 (2026-11-21)
+# DriveRepair release status — v0.3.3b37 (2026-11-21)
 
 **Status: development / guarded testing, not a hardware-qualified public physical-repair release.** The source is an engineering tree; public image-only and guarded physical-repair distributions must be built separately. The latest Python tests do not demonstrate real physical HDD repair, Windows USB flashing, correct native Qt layout, or BIOS/UEFI bootability.
 

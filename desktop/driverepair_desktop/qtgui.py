@@ -924,10 +924,10 @@ def launch():
             self.job_box.setAccessibleDescription('Read-only diagnosis, rescue, or experimental repair task')
             self.job_box.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
             self._jobs={
-                'fix':([('Repair filesystem on selected drive (Windows)','winfsrepair')] if sys.platform=='win32' else []) + [
-                       ('Targeted HDD region repair','carequick'),
-                       ('Full scan + targeted HDD repair','carefull'),
-                       ('Resume journaled repair','careresume')],
+                'fix':([('Repair NTFS / exFAT / FAT volume (HDD, SSD, NVMe, USB)','winfsrepair')] if sys.platform=='win32' else []) + [
+                       ('HDD magnetic-region maintenance (rotational only)','carequick'),
+                       ('HDD full scan + guarded region maintenance','carefull'),
+                       ('Resume HDD journaled maintenance','careresume')],
                 'recover':[('Rescue selected external drive to NEW image','rescue'),
                            ('Recover from existing disk image','rescueimage')],
                 'check':[('Check disk health (read-only)','health'),
@@ -1075,9 +1075,9 @@ def launch():
             condition_summary.addStretch()
             condition_row.addLayout(condition_summary,1)
             result_card.addLayout(condition_row)
-            self.spec_button=QPushButton('Compare with documented service-hour rating…')
+            self.spec_button=QPushButton('View sourced manufacturer specifications')
             self.spec_button.setVisible(False)  # power-on evidence needed first
-            self.spec_button.setToolTip('Only supply a published model-specific operating-hour rating. Fleet MTBF is not a failure prediction.')
+            self.spec_button.setToolTip('Use the included manufacturer model catalog. No invented service-hour limit or MTBF life prediction.')
             self.spec_button.clicked.connect(self.enter_manufacturer_specs)
             result_card.addWidget(self.spec_button)
             self.result=QLabel('No job running')
@@ -1383,9 +1383,10 @@ def launch():
             info.setText('Guarded HDD maintenance may be reviewed' if allowed
                          else 'Drive-aware repair recommendation')
             info.setInformativeText(route.explanation+'\n\n'+reason+'\n\n'
-                'An SSD/flash device cannot be made more reliable by an HDD rewrite. '
-                'If the filesystem is damaged, preserve a recovery image and repair a '
-                'supported filesystem on a separate COPY. USB bridges may hide SMART; '
+                'All media types can have logical filesystem problems. On Windows, '
+                'DriveRepair can review NTFS/FAT/exFAT repair with explicit backup consent. '
+                'A controller or NAND failure cannot be healed by a magnetic rewrite. '
+                'Preserve a recovery image before risky modifications. USB bridges may hide SMART; '
                 'the engine never treats an unverified model or healthy-looking '
                 'Windows status as permission to rewrite a patient.')
             info.addButton('Understood',QMessageBox.AcceptRole)
@@ -1407,6 +1408,18 @@ def launch():
             decision=readiness_next_action(d, 'carequick',
                 self._health_by_device.get((d or {}).get('identity_hint')),
                 smartctl_available=bool(smartctl_path()))
+            from .repair_routes import choose_repair_route
+            route=choose_repair_route(d,
+                self._health_by_device.get((d or {}).get('identity_hint')))
+            if route.action == 'filesystem' and sys.platform=='win32' and not PUBLIC_BETA_IMAGE_ONLY:
+                # User explicitly requested the alternative; do not silently
+                # convert a selected HDD magnetic operation into CHKDSK.
+                self.select_goal('winfsrepair')
+                self.note_log('Operator selected logical filesystem repair review. '
+                              'No write started; selected volume and consent still required.')
+                self.ready_note.setText('Select Start filesystem repair review. '
+                    'A separate volume picker and backup/erase-risk confirmation are required.')
+                return
             if decision['action']=='probe':
                 self.probe_selected_media(force=True)
             elif decision['action']=='setup':
@@ -1448,7 +1461,14 @@ def launch():
                     title += ' · Windows native evidence inconclusive'
                 if profile.workload == 'surveillance':
                     title+=' · NVR / surveillance workload (NOT a recording type)'
-                self.profile_note.setText('Detected: ' + title + '\nSuggested: ' + profile.recovery_method)
+                from .repair_routes import supported_repair_methods
+                methods=supported_repair_methods(profile.kind,platform=sys.platform)
+                labels={'scan':'read-only surface test', 'rescue':'save an image',
+                        'filesystem':'repair NTFS/FAT/exFAT with approval',
+                        'hdd_region':'guarded HDD region maintenance (if verified)'}
+                self.profile_note.setText('Detected: ' + title +
+                    '\nSuggested: ' + profile.recovery_method +
+                    '\nSupported workflows: ' + ', '.join(labels[m] for m in methods))
                 self.media_pipeline.set_policy(profile.kind,decision.can_attempt_hdd_refresh)
                 if self.job_box.currentData() in {'carequick','carefull','careresume'}:
                     from .automatic_maintenance import choose_maintenance
@@ -2124,14 +2144,16 @@ def launch():
                     advice='High-risk write/restore test. Use only a backed-up, disposable USB; an unreliable controller can overwrite unrelated data.'
             self.start.setEnabled(enabled)
             if kind in {'carequick','carefull','careresume'}:
-                from .repair_readiness import readiness_next_action
+                from .repair_routes import choose_repair_route
                 from .dependencies import smartctl_path
                 d=self.selected() or {}
-                state=readiness_next_action(d,kind,
+                route=choose_repair_route(d,
                     self._health_by_device.get(d.get('identity_hint')),
                     smartctl_available=bool(smartctl_path()))
-                self.repair_next.setText('Check repair options')
-                self.repair_next.setToolTip(state['reason'])
+                self.repair_next.setText('Choose supported filesystem repair' if
+                    route.action=='filesystem' and sys.platform=='win32' else
+                    'Check repair options')
+                self.repair_next.setToolTip(route.explanation)
                 self.repair_next.setEnabled(not running and
                     not (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning))
                 self.repair_copy.setEnabled(False)  # specialist copy repair is not in on-device Repair
@@ -2149,9 +2171,10 @@ def launch():
                     self._health_by_device.get((device or {}).get('identity_hint')),
                     smartctl_available=bool(smartctl_path()))
                 self.start.setText('Review guarded HDD maintenance' if route.action == 'review' else
-                    'Identify physical HDD' if route.action == 'probe' else
+                    'Identify physical HDD (read-only)' if route.action == 'probe' else
                     'Select a drive' if route.action == 'select' else
-                    'HDD repair blocked - see reason')
+                    'Choose filesystem repair above' if route.action == 'filesystem' and sys.platform=='win32' else
+                    'HDD-only method unavailable for this media')
                 if (not running and not PUBLIC_BETA_IMAGE_ONLY and
                     route.action in {'probe'} and
                     not (self._auto_probe_proc and self._auto_probe_proc.state()!=QProcess.NotRunning)):
@@ -2249,23 +2272,39 @@ def launch():
             QTimer.singleShot(2500,lambda:self.copy_summary_button.setText('Copy operator summary'))
 
         def enter_manufacturer_specs(self):
-            d=self._last_good_device or self.selected()
+            """Show source-backed specifications; do not request invented limits."""
+            d=self.selected() or self._last_good_device
             if not d:
                 QMessageBox.warning(self,'Select a drive','Select a specific drive first.')
                 return
-            hours,ok=QInputDialog.getInt(self,'Documented model rating',
-                'Manufacturer-published service-hour limit for this exact model (NOT MTBF).\n'
-                'Only enter a value from the model datasheet.',
-                0,0,10000000,1000)
-            if not ok or hours==0:
+            from .drive_model_catalog import published_model_guidance
+            guide=published_model_guidance(str(d.get('model') or ''))
+            if not guide:
+                QMessageBox.information(self,'Manufacturer specifications unavailable',
+                    'No exact or validated family specification is in the offline catalog. '
+                    'DriveRepair cannot assign a service-hour lifespan from MTBF, AFR, age or model guesses. '
+                    'Use the vendor datasheet for the exact model.')
                 return
-            self._manufacturer_rated_hours[d.get('identity_hint')]=hours
-            if self._last_health_snapshot:
-                from .reliability_score import assess
-                self.show_condition(assess(self._last_health_snapshot,
-                    manufacturer_specs={'rated_power_on_hours':hours}))
-            self.note_log('Operator entered a purported model datasheet rating. '
-                'DriveRepair cannot independently verify it or predict drive lifespan.')
+            lines=[f"{guide['manufacturer']} · {guide['model']}"]
+            hours=guide.get('rated_power_on_hours')
+            if hours is not None:
+                lines.append(f'Manufacturer-rated power-on hours: {hours:,} (catalogued)')
+            else:
+                lines.append('Manufacturer maximum service hours: NOT PUBLISHED in this catalog')
+            workload=guide.get('workload_tb_per_year_max_exclusive')
+            if workload is not None:
+                lines.append(f'Rated average workload: less than {workload} TB/year (not a life limit)')
+            tbw=guide.get('endurance_tbw')
+            if tbw is not None:
+                lines.append(f'Published endurance: {tbw} TBW (not a time limit)')
+            lines += ['', 'Published vendor source:', guide['source_url'], '',
+                      'Power-on hours, MTBF, AFR and workload do not predict when an individual drive will fail.']
+            msg=QMessageBox(self)
+            msg.setWindowTitle('Manufacturer model specifications')
+            msg.setText('Manufacturer specifications (read-only)')
+            msg.setInformativeText('\n'.join(lines))
+            msg.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
+            msg.exec()
 
         def show_condition(self, report, *, previous=None):
             if not isinstance(report,dict):
@@ -2273,7 +2312,9 @@ def launch():
             self.condition_gauge.set_assessment(report)
             score=report.get('score')
             self.condition_gauge.setVisible(type(score) in (int,float))
-            self.spec_button.setVisible(type(report.get('power_on_hours')) is int)
+            from .drive_model_catalog import published_model_guidance
+            current=self.selected() or self._last_good_device or {}
+            self.spec_button.setVisible(bool(published_model_guidance(str(current.get('model') or ''))))
             confidence=report.get('confidence') or 'unknown'
             self.condition_title.setText('Condition index: ' +
                 ('Unknown' if score is None else f"{score}/100 · {report.get('band','UNKNOWN')}") +
@@ -2357,11 +2398,12 @@ def launch():
                 self._media_settings.setValue('last_iso',image['path'])
             try:
 
-                targets=[d for d in list_external_devices() if d.bus.lower()=='usb'
-                         and d.serial.strip() and d.size_bytes>=image['bytes']]
+                from .usb_flash import eligible_flash_targets
+                targets=eligible_flash_targets(list_external_devices(),image['bytes'])
                 if not targets:
-                    raise RuntimeError('No verified USB whole disks with serial and enough space found. '
-                        'Reconnect USB and refresh inventory. Internal disks are never offered.')
+                    raise RuntimeError('No suitable whole USB disks large enough for the ISO were found. '
+                        'Try reconnecting the stick and refreshing the Windows disk inventory. '
+                        'Internal/system disks are never offered.')
             except (OSError,ValueError,RuntimeError) as exc:
                 QMessageBox.warning(self,'Cannot prepare USB flash',str(exc))
                 return
@@ -2391,7 +2433,8 @@ def launch():
             lay.addWidget(title)
             caption=QLabel('This ERASES THE ENTIRE SELECTED USB DRIVE — all partitions and files. '
                 'Bootability is NOT guaranteed until BIOS/UEFI tests succeed. '
-                'Never choose a recovery patient or a USB disk holding the ISO.')
+                'Never choose a recovery patient or a USB disk holding the ISO. '
+                'A serial-less USB stick requires extra Windows verification before any write.')
             caption.setWordWrap(True)
             lay.addWidget(caption)
             image_label=QLabel('LIVE CONTENTS CHECKED · BOOT UNVERIFIED  ·  '+Path(image['path']).name+'  ·  '+display_size(image['bytes']))
@@ -2438,7 +2481,7 @@ def launch():
                 for disk in targets:
                     if disk.size_bytes >= image['bytes']:
                         target_box.addItem(f'{disk.model}  ·  {display_size(disk.size_bytes)}  ·  '
-                            f'{disk.id}  ·  serial …{disk.serial[-4:]}',disk.id)
+                            f'{disk.id}  ·  '+('serial …'+disk.serial[-4:] if disk.serial else 'NO SERIAL · verify exact disk'),disk.id)
                 typed.clear()
                 update_confirm()
             other.clicked.connect(change_image)
@@ -2447,7 +2490,7 @@ def launch():
             target_box.addItem('Choose a USB drive (nothing selected)',None)
             for dev in targets:
                 target_box.addItem(f'{dev.model}  ·  {display_size(dev.size_bytes)}  ·  '
-                    f'{dev.id}  ·  serial …{dev.serial[-4:]}',dev.id)
+                    f'{dev.id}  ·  '+('serial …'+dev.serial[-4:] if dev.serial else 'NO SERIAL · verify exact disk'),dev.id)
             lay.addWidget(target_box)
             lay.addWidget(QLabel('2 · Type the exact ERASE confirmation shown below'))
             expected=QLabel('Select a USB target to view confirmation')

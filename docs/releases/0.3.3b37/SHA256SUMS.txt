@@ -1,0 +1,2 @@
+ede06de5b64073814ebe01d2cd7e6856135719b9e08a5be845b525a8ec829415  DriveRepair-0.3.3b37-media-aware-source.zip
+15429954be1b5ceb568d598c6a85530d5dd9cc068722df86e32f020e4be8cf2c  DriveRepair-0.3.3b36-to-b37-media-repair.patch

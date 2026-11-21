@@ -11,8 +11,10 @@
       "recording": "smr",
       "rpm": 5400,
       "capacity_gb": 1000,
-      "source_url": "https://www.seagate.com/www-content/datasheets/pdfs/barracuda-2-5-DS1907-3-2005US-en_US.pdf",
-      "source_type": "manufacturer_datasheet"
+      "source_url": "https://www.seagate.com/files/www-content/product-content/seagate-laptop-fam/barracuda_25/en-us/docs/100807728h.pdf",
+      "source_type": "manufacturer_datasheet",
+      "workload_tb_per_year_max_exclusive": 55,
+      "workload_source_url": "https://www.seagate.com/files/www-content/product-content/seagate-laptop-fam/barracuda_25/en-us/docs/100807728h.pdf"
     },
     {
       "manufacturer": "Seagate",

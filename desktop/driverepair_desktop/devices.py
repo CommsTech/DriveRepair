@@ -14,7 +14,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Callable
 
 
 @dataclass(frozen=True)
@@ -593,6 +593,23 @@ def select_external_device(identifier: str,
     return matches[0]
 
 
+def same_readonly_patient(first: Device, second: Device) -> bool:
+    """Compare fresh evidence for read-only diagnostics, NEVER for write approval.
+
+    Some USB bridges intermittently omit a serial in the WMI/Get-Disk paths.
+    We still reject a conflicting nonempty serial, different disk index,
+    geometry, transport or model. Missing evidence cannot authorize writes.
+    """
+    if (first.id != second.id or first.path != second.path or
+            first.size_bytes != second.size_bytes or
+            first.sector_size != second.sector_size or
+            first.bus.casefold() != second.bus.casefold() or
+            first.model.strip().casefold() != second.model.strip().casefold()):
+        return False
+    return not (first.serial.strip() and second.serial.strip() and
+                first.serial.strip().casefold() != second.serial.strip().casefold())
+
+
 def verify_windows_patient_still_present(device: Device, *, size_slop_bytes: int = 16 * 1024 * 1024) -> Device:
     """WMI-free mid-job recheck via native PhysicalDrive IOCTL (Admin typically required).
 
@@ -650,3 +667,11 @@ def assert_windows_external_write_gate(device: Device,
     right = gated.serial.strip()
     if left and right and left.casefold() != right.casefold():
         raise RuntimeError('Get-Disk serial disagrees with inventory; refusing raw write')
+    if not left:
+        # Serial-less USB boot media require independent corroboration in the
+        # authoritative online/non-system Get-Disk inventory. Matching just an
+        # index is insufficient if the stick was unplugged and replaced.
+        if (gated.model.strip().casefold() != device.model.strip().casefold() or
+                gated.sector_size != device.sector_size or
+                abs(gated.size_bytes - device.size_bytes) > 16 * 1024 * 1024):
+            raise RuntimeError('Serial-less USB model/geometry changed; refusing raw write')

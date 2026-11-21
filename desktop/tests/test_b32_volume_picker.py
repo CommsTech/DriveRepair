@@ -71,7 +71,7 @@ class RepairVolumePickerTests(unittest.TestCase):
 
     def test_qt_repair_keeps_manual_method_and_does_not_redirect(self):
         code=(Path(__file__).resolve().parents[1]/'driverepair_desktop'/'qtgui.py').read_text(encoding='utf-8')
-        self.assertIn("('Repair filesystem on selected drive (Windows)','winfsrepair')", code)
+        self.assertIn("('Repair NTFS / exFAT / FAT volume (HDD, SSD, NVMe, USB)','winfsrepair')", code)
         self.assertNotIn('if flash is not None:', code)
         self.assertIn('Preserve the operator', code)
         self.assertIn('def repair_volumes_ready(self, child, exit_code)',code)
