@@ -15,14 +15,31 @@ jobs:
       - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
         with:
           python-version: '3.11'
-      - name: Install Qt and pytest
-        run: python -m pip install pytest==8.4.2 "PySide6>=6.6,<7"
+      - name: Install package, Qt and pytest
+        run: |
+          python -m pip install -U pip
+          python -m pip install pytest==8.4.2 "PySide6>=6.6,<7"
+          python -m pip install -e "./desktop[qt]"
+      - name: Preflight import path
+        run: |
+          python -c "import driverepair_desktop, PySide6; from driverepair_desktop import qtgui; print('preflight', driverepair_desktop.__version__)"
       - name: Run real native Qt widgets against synthetic devices
         env:
           DRIVEREPAIR_QT_TEST_NO_DEVICES: '1'
           DRIVEREPAIR_QT_SMOKE: '1'
+          DRIVEREPAIR_QT_QUALIFICATION: '1'
           QT_QPA_PLATFORM: 'offscreen'
-        run: python -m pytest -v desktop/tests/test_native_qt_workflows.py desktop/tests/test_qt_ux_pass.py
+        run: |
+          python -m pytest -v --tb=short --junitxml=${{ runner.temp }}/qt-junit.xml desktop/tests/test_native_qt_workflows.py desktop/tests/test_qt_ux_pass.py
+          python scripts/check_pytest_no_essential_skips.py ${{ runner.temp }}/qt-junit.xml --min-passed 5
+      - name: Upload Qt JUnit evidence
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: windows-native-qt-junit-${{ github.run_id }}
+          path: ${{ runner.temp }}/qt-junit.xml
+          if-no-files-found: warn
+          retention-days: 30
 
   bios-uefi-iso:
     name: Actual ISO build + BIOS and UEFI VM boots (NO PHYSICAL DISK)
@@ -39,4 +56,15 @@ jobs:
       - name: Boot independently under SeaBIOS and OVMF
         run: |
           ISO="$RUNNER_TEMP/driverepair-iso/DriveRepair-Live-amd64-UNVERIFIED.iso"
-          python3 scripts/smoke_live_iso.py --iso "$ISO" --output "$RUNNER_TEMP/driverepair-vm-evidence" --timeout-seconds 360
+          OUT="$RUNNER_TEMP/driverepair-vm-evidence"
+          mkdir -p "$OUT"
+          python3 scripts/smoke_live_iso.py --iso "$ISO" --output "$OUT" --timeout-seconds 360
+      - name: Upload VM boot evidence
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: bios-uefi-vm-evidence-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/driverepair-vm-evidence/
+          if-no-files-found: warn
+          retention-days: 30

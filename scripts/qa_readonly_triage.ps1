@@ -71,12 +71,14 @@ try {
     }
 
     $summary = @()
+    $failedComponents = 0
     foreach ($device in $Devices) {
         $name = ($device -split ':')[-1]
         $target = Join-Path $OutputDir "$name.scan.json"
         Write-Host "Scanning $device -> $target"
         & $interpreter -m driverepair_desktop scan --device $device --mode triage `
             --samples $Samples --ack-risk --json --no-live-dashboard *> $target
+        $scanExit = $LASTEXITCODE
         $status = 'unknown'
         try {
             $parsed = Get-Content $target -Raw | ConvertFrom-Json
@@ -84,31 +86,52 @@ try {
         } catch {
             $status = 'unparsed-output'
         }
+        if ($scanExit -ne 0 -or $status -in @('unknown', 'unparsed-output', 'error', 'failed')) {
+            $failedComponents++
+        }
         # Separate read-only SMART bridge command-compatibility evidence.
         # Does not authorize a maintenance write; reports omit raw serials.
         $smartResult = Join-Path $OutputDir "$name.smart.json"
         $smartStatus = 'UNAVAILABLE'
+        $smartExit = $null
         if ($device -match '^windows:PhysicalDrive[0-9]{1,3}$') {
             $probeTool = Join-Path $repoRoot 'scripts/qa_smart_probe.py'
             if (Test-Path $probeTool) {
                 & $interpreter $probeTool --device $device --smartctl $SmartctlExe --output $smartResult
+                $smartExit = $LASTEXITCODE
                 if (Test-Path $smartResult) {
                     try {
                         $smartStatus = (Get-Content $smartResult -Raw | ConvertFrom-Json).status
                     } catch { $smartStatus = 'UNREADABLE' }
+                } else {
+                    $smartStatus = 'MISSING_OUTPUT'
+                }
+                # SMART probe is a required QA component when the PhysicalDrive
+                # form is used: UNVERIFIED / nonzero exit must fail the sweep.
+                if ($smartExit -ne 0 -or $smartStatus -ne 'PROBED_READ_ONLY') {
+                    $failedComponents++
                 }
             }
         }
         $summary += [pscustomobject]@{ Device = $device; Status = $status; File = $target;
-                                     SmartProbeStatus = $smartStatus; SmartProbeFile = $smartResult }
+                                     ScanExitCode = $scanExit;
+                                     SmartProbeStatus = $smartStatus; SmartProbeExitCode = $smartExit;
+                                     SmartProbeFile = $smartResult }
     }
 
     $summary | Format-Table -AutoSize | Out-String | Write-Host
     $summary | ConvertTo-Json | Out-File (Join-Path $OutputDir '_summary.json') -Encoding utf8
+    if ($failedComponents -gt 0) {
+        "partial_or_failed components=$failedComponents $(Get-Date -Format o)" |
+            Out-File (Join-Path $OutputDir '_complete.txt') -Encoding utf8
+        Write-Host "QA sweep incomplete: $failedComponents failed component(s)"
+        exit 1
+    }
     "completed $(Get-Date -Format o)" | Out-File (Join-Path $OutputDir '_complete.txt') -Encoding utf8
 } catch {
     "failed: $_" | Out-File (Join-Path $OutputDir '_complete.txt') -Encoding utf8
     Write-Host "ERROR: $_"
+    exit 1
 } finally {
     Pop-Location
     try { Stop-Transcript | Out-Null } catch { }

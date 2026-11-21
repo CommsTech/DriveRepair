@@ -40,23 +40,23 @@ cargo test --features "std,alloc" --lib -- --skip test_ata_port_io_read_register
     exit 1
 }
 
-echo "Checking DriveRepair release metadata (Python 3.11+)..."
-# Prefer an interpreter that can import tomllib (3.11+). Git Bash often
-# exposes a stub or older python3 first on Windows; verify before using.
+echo "Checking DriveRepair release metadata (Python 3.10+)..."
+# Prefer an interpreter that can actually execute the hygiene script. Git Bash
+# often exposes a stub or older python3 first on Windows; verify before using.
 run_release_hygiene() {
-    if command -v python3 >/dev/null 2>&1 && python3 -c 'import tomllib' >/dev/null 2>&1; then
+    if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
         python3 scripts/check_release_hygiene.py
         return $?
     fi
-    if command -v python >/dev/null 2>&1 && python -c 'import tomllib' >/dev/null 2>&1; then
+    if command -v python >/dev/null 2>&1 && python -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
         python scripts/check_release_hygiene.py
         return $?
     fi
-    if command -v py >/dev/null 2>&1 && py -3 -c 'import tomllib' >/dev/null 2>&1; then
+    if command -v py >/dev/null 2>&1 && py -3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
         py -3 scripts/check_release_hygiene.py
         return $?
     fi
-    echo "Error: Python 3.11+ with tomllib is required for release metadata checks."
+    echo "Error: Python 3.10+ is required for release metadata checks (matches desktop requires-python)."
     return 1
 }
 run_release_hygiene || exit 1

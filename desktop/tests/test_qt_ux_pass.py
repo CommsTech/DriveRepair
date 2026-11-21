@@ -32,7 +32,8 @@ class WorkstationUxTests(unittest.TestCase):
         launch()
         windows = [w for w in cls.qapp.topLevelWidgets() if w.isWindow()]
         if not windows:
-            raise unittest.SkipTest('Workstation window unavailable in this environment')
+            # Class already skipped when PySide6 is absent; missing UI is a fail.
+            raise AssertionError('Workstation window unavailable with PySide6 installed')
         cls.win = max(windows, key=lambda w: w.width() * w.height())
         cls.win.resize(1440, 900)
         cls.qapp.processEvents()

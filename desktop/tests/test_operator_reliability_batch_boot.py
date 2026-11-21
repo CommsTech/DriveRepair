@@ -21,6 +21,8 @@ class ConditionTests(unittest.TestCase):
         self.assertIsNone(assess({'status': 'smart_passed_limited'})['score'])
 
     def test_raw_ata_media_warnings_decrease_condition_index(self):
+        # Penalties require explicit model thresholds; uncalibrated positives stay unscored.
+        specs={'ata_raw_thresholds': {5: 0, 197: 0, 198: 0}}
         baseline={'status':'smart_passed_limited', 'smart_status_passed': True,
                   'ata_selected_raw_attributes':[
                      {'id':5,'raw_value':0}, {'id':9,'raw_value':10000},
@@ -28,11 +30,12 @@ class ConditionTests(unittest.TestCase):
         worsening={**baseline, 'ata_selected_raw_attributes': [
             {'id':5,'raw_value':4}, {'id':9,'raw_value':10001},
             {'id':197,'raw_value':2}, {'id':198,'raw_value':1}]}
-        good=assess(baseline)
-        bad=assess(worsening)
+        good=assess(baseline, manufacturer_specs=specs)
+        bad=assess(worsening, manufacturer_specs=specs)
         self.assertEqual(good['power_on_hours'],10000)
         self.assertLess(bad['score'],good['score'])
-        self.assertLess(compare_assessments(baseline,worsening)['delta'],0)
+        self.assertIsNone(assess(worsening)['score'])  # uncalibrated positives → no numeric badge
+        self.assertLess(compare_assessments(baseline, worsening, manufacturer_specs=specs)['delta'], 0)
 
     def test_nvme_critical_warn_and_exhausted_spare(self):
         snap={'status':'failure_reported','nvme':{'critical_warning':1,

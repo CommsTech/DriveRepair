@@ -32,7 +32,7 @@ def assess(snapshot: dict | None, *, scan: dict | None = None,
                 'power_on_hours': None, 'notes': 'Use smartctl with USB bridge support for detailed evidence.'}
     observed = []
     reasons = []
-    uncalibrated_187_warning = False
+    uncalibrated_ata_warning = False
     value = 100
     if snapshot.get('status') == 'failure_reported' or snapshot.get('smart_status_passed') is False:
         value -= 65
@@ -40,28 +40,29 @@ def assess(snapshot: dict | None, *, scan: dict | None = None,
         observed.append('controller_failure')
     elif snapshot.get('smart_status_passed') is True:
         observed.append('controller_pass')
-    # ATA 187 raw values are vendor-encoded, sometimes composite bitfields.
-    # Do NOT translate an arbitrary positive number into an 18-point penalty.
+    # ATA raw attributes are vendor-encoded. Positive counts are warning
+    # indicators only unless the operator supplies model-aware thresholds.
     specs = manufacturer_specs or {}
     raw_limits = specs.get('ata_raw_thresholds') if isinstance(specs.get('ata_raw_thresholds'), dict) else {}
     for attr, label, impact in ((5, 'Reallocated sectors', 12), (187, 'Reported uncorrectable errors', 18),
                                 (197, 'Pending sectors', 24), (198, 'Offline uncorrectable', 24),
                                 (199, 'Interface CRC errors / connection', 8)):
         number = _number(ata.get(attr))
-        if number is not None:
-            # Mark vendor attribute 187 as unscored unless an explicitly
-            # supplied model-aware threshold is available.
-            threshold = raw_limits.get(attr, raw_limits.get(str(attr))) if attr == 187 else 0
-            verified = attr != 187 or _number(threshold) is not None
-            if verified:
-                observed.append(f'ata_{attr}')
-            if number > 0:
-                if attr == 187 and not verified:
-                    uncalibrated_187_warning = True
-                    reasons.append(f'{label}: {number} (raw, vendor-defined; unscored)')
-                elif number > threshold:
-                    value -= impact
-                    reasons.append(f'{label}: {number} (raw, vendor-defined)')
+        if number is None:
+            continue
+        threshold = _number(raw_limits.get(attr, raw_limits.get(str(attr))))
+        calibrated = threshold is not None
+        # A verified zero (or calibrated reading) is usable evidence; an
+        # uncalibrated positive raw value is a warning, not a scored index.
+        if calibrated or number == 0:
+            observed.append(f'ata_{attr}')
+        if number > 0:
+            if not calibrated:
+                uncalibrated_ata_warning = True
+                reasons.append(f'{label}: {number} (raw, vendor-defined; unscored without model threshold)')
+            elif number > threshold:
+                value -= impact
+                reasons.append(f'{label}: {number} (raw vs supplied threshold {threshold})')
     if nvme:
         critical = _number(nvme.get('critical_warning'))
         if critical is not None:
@@ -112,9 +113,7 @@ def assess(snapshot: dict | None, *, scan: dict | None = None,
     # verdict, wear counter or explicit surface read evidence.
     meaningful = {'controller_pass', 'controller_failure', 'surface_probe',
                   'nvme_critical_warning', 'nvme_media_errors', 'nvme_spare'}
-    meaningful.update(f'ata_{x}' for x in (5, 197, 198, 199))
-    if _number(raw_limits.get(187, raw_limits.get('187'))) is not None:
-        meaningful.add('ata_187')
+    meaningful.update(f'ata_{x}' for x in (5, 187, 197, 198, 199))
     if set(observed).issubset({'controller_pass','power_on_hours'}):
         return {'score': None, 'band': 'UNKNOWN', 'confidence': 'limited',
                 'reasons': (reasons or ['SMART pass alone does not establish media reliability']),
@@ -124,15 +123,15 @@ def assess(snapshot: dict | None, *, scan: dict | None = None,
                 'reasons': (reasons or ['No comparable health or read evidence available']),
                 'power_on_hours': hours,
                 'notes': 'Manufacturer MTBF/AFR is fleet-level, not an individual remaining-life forecast.'}
-    # A vendor-encoded uncorrectable-error counter of unknown meaning must
-    # not turn into a fake 82/100 (or deceptively reassuring 100/100) badge.
-    # Independently corroborated, worsening signals may still be scored.
-    if uncalibrated_187_warning and value == 100:
+    # Vendor-encoded positive counters without model thresholds must not become
+    # a fake numeric badge. Independently calibrated thresholds may still score.
+    if uncalibrated_ata_warning and value == 100:
         return {'score': None, 'band': 'UNKNOWN', 'confidence': 'limited',
                 'reasons': reasons, 'power_on_hours': hours,
                 'evidence_fields': sorted(set(observed)),
-                'notes': ('SMART attribute 187 is vendor-encoded and has no supplied calibrated threshold. '
-                          'Inspect manufacturer guidance and independent read tests; no lifespan or write authorization inferred.')}
+                'notes': ('One or more ATA raw attributes are vendor-encoded without a supplied '
+                          'calibrated threshold. Inspect manufacturer guidance and independent '
+                          'read tests; no lifespan or write authorization inferred.')}
     value = max(0, min(100, value))
     confidence = ('high' if len(observed) >= 5 and 'surface_probe' in observed else
                   'moderate' if len(observed) >= 3 else 'limited')
@@ -146,8 +145,8 @@ def assess(snapshot: dict | None, *, scan: dict | None = None,
                       'A repair does not reset wear, SMART history, or media age.')}
 
 
-def compare_assessments(before: dict | None, after: dict | None) -> dict:
-    a, b = assess(before), assess(after)
+def compare_assessments(before: dict | None, after: dict | None, **kwargs) -> dict:
+    a, b = assess(before, **kwargs), assess(after, **kwargs)
     delta = (b['score'] - a['score'] if a['score'] is not None and b['score'] is not None else None)
     return {'before': a, 'after': b, 'delta': delta,
             'interpretation': ('Change in observed condition indicators, not improvement in future drive lifespan. '

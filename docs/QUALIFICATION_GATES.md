@@ -14,6 +14,12 @@ QEMU/OVMF. The workflow is optional, rather than making existing Ubuntu CI
 silently fail on a missing Windows runner. If a runner is absent or a job never
 ran, its result is **NOT_PROVEN**, not PASS.
 
+The Windows job installs `./desktop[qt]`, preflights imports, runs native Qt
+tests, then fails if essential cases were skipped or under-run. Missing the
+workstation window with PySide6 installed is a hard failure, never a green
+skip. The ISO/VM job uploads `vm_boot_evidence.json` and serial/QEMU logs as
+Actions artifacts on success **and** failure.
+
 The ISO job builds an ordinary ISO and calls:
 
 ```sh

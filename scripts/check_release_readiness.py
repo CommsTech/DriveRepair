@@ -11,16 +11,28 @@ import argparse
 import hashlib
 import json
 import re
+import stat
 from pathlib import Path
 
 REQUIRED = ('bios_vm', 'uefi_vm', 'native_windows_qt', 'usb_dock_hw', 'hp_laptop_hw')
 
 
 def file_sha256(path: Path) -> str:
+    """Hash an ordinary finite file only — never FIFOs, devices, or symlinks."""
+    path = Path(path)
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode):
+        raise OSError(f'artifact must not be a symbolic link: {path}')
+    if not stat.S_ISREG(info.st_mode):
+        raise OSError(f'artifact must be an ordinary file, not a special file: {path}')
     digest = hashlib.sha256()
     with path.open('rb') as handle:
         for part in iter(lambda: handle.read(1024 * 1024), b''):
             digest.update(part)
+    # Reject replacement mid-hash with a non-regular node (FIFO/device/symlink).
+    after = path.lstat()
+    if stat.S_ISLNK(after.st_mode) or not stat.S_ISREG(after.st_mode):
+        raise OSError(f'artifact changed to a non-regular file while hashing: {path}')
     return digest.hexdigest()
 
 

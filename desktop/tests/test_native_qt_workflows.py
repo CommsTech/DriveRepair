@@ -32,7 +32,9 @@ class NativeQtRepairRouteTests(unittest.TestCase):
         windows = [w for w in cls.app.topLevelWidgets() if w.isWindow() and
                    hasattr(w, 'device_box') and hasattr(w, 'job_box')]
         if not windows:
-            raise unittest.SkipTest('DriveRepair Qt main window unavailable')
+            # With PySide6 installed (this class already skipped when absent), a
+            # missing workstation is a hard failure — never a green skip.
+            raise AssertionError('DriveRepair Qt main window unavailable with PySide6 installed')
         cls.win = windows[0]
 
     @classmethod
@@ -62,6 +64,7 @@ class NativeQtRepairRouteTests(unittest.TestCase):
         return device
 
     def test_ssd_blocks_hdd_method_without_switching_to_chkdsk(self):
+        from driverepair_desktop.repair_routes import choose_repair_route
         self.synthetic('SanDisk SSD 500GB', 'fake-ssd', {'reported_medium': 'ssd'})
         self.win.select_goal('carequick')
         self.win.update_action_state()
@@ -70,8 +73,13 @@ class NativeQtRepairRouteTests(unittest.TestCase):
         self.assertIn('HDD repair blocked', self.win.start.text())
         self.assertFalse(self.win.start_shortcut.isEnabled())
         self.assertIsNone(self.win.proc)
+        route = choose_repair_route(self.win.selected(),
+                                    self.win._health_by_device.get('fake-ssd'))
+        self.assertEqual(route.action, 'filesystem')
+        self.assertFalse(route.hdd_region_write_candidate)
 
     def test_hdd_ui_review_does_not_begin_a_write(self):
+        from driverepair_desktop.repair_routes import choose_repair_route
         self.synthetic('ST1000LM048', 'fake-hdd', {
             'status':'smart_passed_limited', 'smart_status_passed': True,
             'reported_medium':'hdd', 'rotation_rate_rpm':5400,
@@ -80,6 +88,12 @@ class NativeQtRepairRouteTests(unittest.TestCase):
         self.win.update_action_state()
         self.assertEqual(self.win.job_box.currentData(), 'carequick')
         self.assertIn('HDD', self.win.start.text())
+        self.assertIsNone(self.win.proc)
+        route = choose_repair_route(self.win.selected(),
+                                    self.win._health_by_device.get('fake-hdd'))
+        self.assertEqual(route.action, 'review')
+        self.assertTrue(route.hdd_region_write_candidate)
+        # Review CTA must not spawn a modifying worker by itself.
         self.assertIsNone(self.win.proc)
 
     def test_chkdsk_is_never_selected_implicitly(self):
