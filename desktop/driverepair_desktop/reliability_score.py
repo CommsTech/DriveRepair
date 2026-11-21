@@ -32,6 +32,7 @@ def assess(snapshot: dict | None, *, scan: dict | None = None,
                 'power_on_hours': None, 'notes': 'Use smartctl with USB bridge support for detailed evidence.'}
     observed = []
     reasons = []
+    uncalibrated_187_warning = False
     value = 100
     if snapshot.get('status') == 'failure_reported' or snapshot.get('smart_status_passed') is False:
         value -= 65
@@ -39,15 +40,28 @@ def assess(snapshot: dict | None, *, scan: dict | None = None,
         observed.append('controller_failure')
     elif snapshot.get('smart_status_passed') is True:
         observed.append('controller_pass')
+    # ATA 187 raw values are vendor-encoded, sometimes composite bitfields.
+    # Do NOT translate an arbitrary positive number into an 18-point penalty.
+    specs = manufacturer_specs or {}
+    raw_limits = specs.get('ata_raw_thresholds') if isinstance(specs.get('ata_raw_thresholds'), dict) else {}
     for attr, label, impact in ((5, 'Reallocated sectors', 12), (187, 'Reported uncorrectable errors', 18),
                                 (197, 'Pending sectors', 24), (198, 'Offline uncorrectable', 24),
                                 (199, 'Interface CRC errors / connection', 8)):
         number = _number(ata.get(attr))
         if number is not None:
-            observed.append(f'ata_{attr}')
+            # Mark vendor attribute 187 as unscored unless an explicitly
+            # supplied model-aware threshold is available.
+            threshold = raw_limits.get(attr, raw_limits.get(str(attr))) if attr == 187 else 0
+            verified = attr != 187 or _number(threshold) is not None
+            if verified:
+                observed.append(f'ata_{attr}')
             if number > 0:
-                value -= impact
-                reasons.append(f'{label}: {number} (raw, vendor-defined)')
+                if attr == 187 and not verified:
+                    uncalibrated_187_warning = True
+                    reasons.append(f'{label}: {number} (raw, vendor-defined; unscored)')
+                elif number > threshold:
+                    value -= impact
+                    reasons.append(f'{label}: {number} (raw, vendor-defined)')
     if nvme:
         critical = _number(nvme.get('critical_warning'))
         if critical is not None:
@@ -86,7 +100,6 @@ def assess(snapshot: dict | None, *, scan: dict | None = None,
             if failures:
                 value -= min(30, 8 + 2 * failures)
                 reasons.append(f'{failures} failed read requests (source unknown)')
-    specs = manufacturer_specs or {}
     rated_hours = _number(specs.get('rated_power_on_hours'))
     if rated_hours and hours is not None:
         observed.append('documented_rated_hours')
@@ -99,16 +112,27 @@ def assess(snapshot: dict | None, *, scan: dict | None = None,
     # verdict, wear counter or explicit surface read evidence.
     meaningful = {'controller_pass', 'controller_failure', 'surface_probe',
                   'nvme_critical_warning', 'nvme_media_errors', 'nvme_spare'}
-    meaningful.update(f'ata_{x}' for x in (5, 187, 197, 198, 199))
+    meaningful.update(f'ata_{x}' for x in (5, 197, 198, 199))
+    if _number(raw_limits.get(187, raw_limits.get('187'))) is not None:
+        meaningful.add('ata_187')
     if set(observed).issubset({'controller_pass','power_on_hours'}):
         return {'score': None, 'band': 'UNKNOWN', 'confidence': 'limited',
-                'reasons': ['SMART pass alone does not establish media reliability'],
+                'reasons': (reasons or ['SMART pass alone does not establish media reliability']),
                 'power_on_hours': hours, 'notes': 'Acquire additional SMART attributes or NVMe wear counters.'}
     if not set(observed) & meaningful:
         return {'score': None, 'band': 'UNKNOWN', 'confidence': 'low',
-                'reasons': ['No comparable health or read evidence available'],
+                'reasons': (reasons or ['No comparable health or read evidence available']),
                 'power_on_hours': hours,
                 'notes': 'Manufacturer MTBF/AFR is fleet-level, not an individual remaining-life forecast.'}
+    # A vendor-encoded uncorrectable-error counter of unknown meaning must
+    # not turn into a fake 82/100 (or deceptively reassuring 100/100) badge.
+    # Independently corroborated, worsening signals may still be scored.
+    if uncalibrated_187_warning and value == 100:
+        return {'score': None, 'band': 'UNKNOWN', 'confidence': 'limited',
+                'reasons': reasons, 'power_on_hours': hours,
+                'evidence_fields': sorted(set(observed)),
+                'notes': ('SMART attribute 187 is vendor-encoded and has no supplied calibrated threshold. '
+                          'Inspect manufacturer guidance and independent read tests; no lifespan or write authorization inferred.')}
     value = max(0, min(100, value))
     confidence = ('high' if len(observed) >= 5 and 'surface_probe' in observed else
                   'moderate' if len(observed) >= 3 else 'limited')

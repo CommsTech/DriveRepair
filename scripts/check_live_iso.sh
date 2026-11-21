@@ -13,7 +13,11 @@ except (OSError,ValueError) as exc:
     print('NOT A USABLE RECOVERY IMAGE:',str(exc),file=sys.stderr)
     sys.exit(2)
 PY
-if command -v xorriso >/dev/null 2>&1; then
+if ! command -v xorriso >/dev/null 2>&1; then
+  echo 'ERROR: xorriso is required to inspect the built boot menu' >&2
+  exit 3
+fi
+{
   xorriso -indev "$ISO" -report_el_torito plain 2>&1
   # Inspect the ACTUAL ISO boot menu, not just the source template. Never
   # certify a boot product whose menu was discarded by the build system.
@@ -31,6 +35,7 @@ if command -v xorriso >/dev/null 2>&1; then
   if grep -Eq '@(KERNEL_LIVE|INITRD_LIVE|LB_BOOTAPPEND_LIVE)@' "$MENU_DIR/grub.cfg"; then
     echo 'ERROR: live-build did not resolve DriveRepair GRUB kernel placeholders' >&2; exit 3
   fi
-fi
-echo 'Structure passed. REQUIRED: boot in a disposable BIOS VM and UEFI VM, then test on a sacrificial USB.'
+}
+echo 'ISO contents + extracted GRUB menu passed. UEFI boot-menu appearance still requires VM/hardware testing.'
+echo 'REQUIRED: boot in a disposable BIOS VM and UEFI VM, then test on a sacrificial USB.'
 echo 'Without these boots, the ISO remains UNVERIFIED.'

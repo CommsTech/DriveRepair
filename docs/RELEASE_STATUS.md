@@ -1,4 +1,4 @@
-# DriveRepair release status — v0.3.3b18 (2026-11-19)
+# DriveRepair release status — v0.3.3b36 (2026-11-21)
 
 **Status: development / guarded testing, not a hardware-qualified public physical-repair release.** The source is an engineering tree; public image-only and guarded physical-repair distributions must be built separately. The latest Python tests do not demonstrate real physical HDD repair, Windows USB flashing, correct native Qt layout, or BIOS/UEFI bootability.
 
@@ -14,6 +14,13 @@
 - Existing guarded preflight and model classification: `docs/USB_REPAIR_PREFLIGHT_B17.md`.
 - Windows raw-I/O constraints and stop behavior: `docs/WINDOWS_VOLUME_ACCESS_AND_STOP_0.3.3b13.md`.
 - Historical release status snapshot: `docs/RELEASE_STATUS_B13_HISTORY.md`.
+
+## Promotion evidence and current gates
+
+The source snapshot is **NOT_PROVEN** for real firmware boot or Windows physical repair.
+`python scripts/check_release_hygiene.py` checks active docs/commands, and
+`python scripts/check_release_readiness.py --help` describes the independent
+artifact-specific promotion gate. See `docs/QUALIFICATION_GATES.md`.
 
 ## Remaining release gates
 

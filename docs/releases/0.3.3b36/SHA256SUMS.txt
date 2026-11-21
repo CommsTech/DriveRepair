@@ -1,0 +1,2 @@
+44f15901f35b260367b0da97a51a6cb2962459ce8bbb3ee94cff2b465c0223de  DriveRepair-0.3.3b36-agent-validation-source.zip
+02855cec7773b5f3beaa3673872a05978f5d1365804305d070ce94d1a792208f  DriveRepair-0.3.3b35-to-b36-agent-validation.patch

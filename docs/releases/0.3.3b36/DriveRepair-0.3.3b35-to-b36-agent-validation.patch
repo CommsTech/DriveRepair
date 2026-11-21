@@ -1,0 +1,1453 @@
+diff --git a/.gitea/workflows/ci.yml b/.gitea/workflows/ci.yml
+index 5a60bf3..8318e76 100644
+--- a/.gitea/workflows/ci.yml
++++ b/.gitea/workflows/ci.yml
+@@ -14,6 +14,24 @@ on:
+ # gate. Optional multi-OS coverage can return once Node-capable runners exist.
+ 
+ jobs:
++  release-hygiene:
++    name: Current release metadata and clean source checks
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
++      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
++        with:
++          python-version: '3.11'
++      - name: Ensure active docs and examples match package version
++        run: python scripts/check_release_hygiene.py
++      - name: Package clean source (reject duplicate/history ZIPs)
++        run: python scripts/create_clean_source_archive.py --output "$RUNNER_TEMP/driverepair-source.zip"
++      - name: Check source ZIP membership and regression gates
++        run: |
++          python -m pip install pytest==8.4.2
++          cd desktop
++          python -m pytest -q tests/test_clean_source_archive.py tests/test_agent_release_gates_20261121.py
++
+   fmt:
+     name: Check Formatting
+     runs-on: ubuntu-latest
+diff --git a/.gitea/workflows/qualification.yml b/.gitea/workflows/qualification.yml
+new file mode 100644
+index 0000000..317472d
+--- /dev/null
++++ b/.gitea/workflows/qualification.yml
+@@ -0,0 +1,42 @@
++name: DriveRepair explicit qualification (NOT automatic release)
++on:
++  workflow_dispatch:
++
++# Deliberately optional until this Forge has a configured Windows runner and a
++# privileged Ubuntu VM runner. Absence of either is NOT_PROVEN, never PASS.
++# Neither job uses a physical disk; HP and dock write tests remain manual.
++jobs:
++  windows-native-qt:
++    name: Native Windows Qt synthetic UI (NO PHYSICAL DISK)
++    runs-on: windows-latest
++    timeout-minutes: 25
++    steps:
++      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
++      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
++        with:
++          python-version: '3.11'
++      - name: Install Qt and pytest
++        run: python -m pip install pytest==8.4.2 "PySide6>=6.6,<7"
++      - name: Run real native Qt widgets against synthetic devices
++        env:
++          DRIVEREPAIR_QT_TEST_NO_DEVICES: '1'
++          DRIVEREPAIR_QT_SMOKE: '1'
++          QT_QPA_PLATFORM: 'offscreen'
++        run: python -m pytest -v desktop/tests/test_native_qt_workflows.py desktop/tests/test_qt_ux_pass.py
++
++  bios-uefi-iso:
++    name: Actual ISO build + BIOS and UEFI VM boots (NO PHYSICAL DISK)
++    runs-on: ubuntu-latest
++    timeout-minutes: 100
++    steps:
++      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
++      - name: Install isolated ISO and VM prerequisites
++        run: |
++          sudo apt-get update -qq
++          sudo apt-get install -y live-build debootstrap xorriso qemu-system-x86 ovmf
++      - name: Build real hybrid ISO as root (no disk flash)
++        run: sudo bash scripts/build_live_iso.sh "$RUNNER_TEMP/driverepair-iso"
++      - name: Boot independently under SeaBIOS and OVMF
++        run: |
++          ISO="$RUNNER_TEMP/driverepair-iso/DriveRepair-Live-amd64-UNVERIFIED.iso"
++          python3 scripts/smoke_live_iso.py --iso "$ISO" --output "$RUNNER_TEMP/driverepair-vm-evidence" --timeout-seconds 360
+diff --git a/.githooks/pre-push b/.githooks/pre-push
+index b12e37d..2b23288 100644
+--- a/.githooks/pre-push
++++ b/.githooks/pre-push
+@@ -40,6 +40,17 @@ cargo test --features "std,alloc" --lib -- --skip test_ata_port_io_read_register
+     exit 1
+ }
+ 
++echo "Checking DriveRepair release metadata (Python 3.11+)..."
++if command -v python3 >/dev/null 2>&1; then
++    PYTHON=python3
++elif command -v python >/dev/null 2>&1; then
++    PYTHON=python
++else
++    echo "Error: Python 3.11+ is required for release metadata checks."
++    exit 1
++fi
++"$PYTHON" scripts/check_release_hygiene.py || exit 1
++
+ echo "All pre-push checks passed!"
+ exit 0
+ 
+diff --git a/AGENTS.md b/AGENTS.md
+new file mode 100644
+index 0000000..8c40f10
+--- /dev/null
++++ b/AGENTS.md
+@@ -0,0 +1,21 @@
++# DriveRepair agent orientation (short by design)
++
++Start here; don't preload the full documentation tree into agent context.
++
++- **Project/runtime:** `architecture.md`, `desktop/README.md`, `README.md`.
++- **Current status (not a release certificate):** `status.md`, `docs/RELEASE_STATUS.md`.
++- **Hardware write safety:** `SECURITY.md`, `docs/USB_REPAIR_PREFLIGHT_B17.md`, `desktop/driverepair_desktop/repair_readiness.py`, `desktop/driverepair_desktop/repair_routes.py`. UI approval never grants an engine write permit.
++- **Windows USB devices / physical-drive access:** `docs/WINDOWS_VOLUME_ACCESS_AND_STOP_0.3.3b13.md`, `desktop/driverepair_desktop/health.py`, `scripts/qa_readonly_triage.ps1`.
++- **Debian recovery ISO:** `scripts/build_live_iso.sh`, `scripts/check_live_iso.sh`, `scripts/smoke_live_iso.py`, `docs/QUALIFICATION_GATES.md`; bundled copies under `desktop/driverepair_desktop/boot_resources/` MUST agree.
++- **Cold storage / SHA-256:** `desktop/driverepair_desktop/cold_storage.py`, `desktop/tests/`.
++- **Reviewer judgment, not implementation instructions:** `CODING_STANDARDS.md`.
++
++Checks, from repository root:
++
++```sh
++python scripts/check_release_hygiene.py
++cd desktop && python -m pytest -q tests
++# Rust if toolchain exists: cargo fmt --check && cargo test --features 'std,alloc' --lib
++```
++
++Before handing off: run available tests, state explicitly which platform tests were skipped, do not interpret successful synthetic tests as physical-drive or ISO boot qualification, use `python scripts/create_clean_source_archive.py --output /path/outside/repo.zip`, and supply a normal Git patch against the exact source revision. Never run destructive device tests on irreplaceable media.
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index e91bcb9..0dd8ce6 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,16 @@
+ # Changelog
+ 
++## 0.3.3b36 — 2026-11-21: Evidence-first agent QA and release gates (engineering source)
++
++- Added Gitea release-hygiene CI and clean-source packaging checks; active docs and executable version metadata now agree. No missing platform job can count as success.
++- Added explicit native Windows Qt and real QEMU BIOS/UEFI qualification workflow, separate from Ubuntu CI. The QEMU test has no attached disk, checks guest GUI launch over serial, and writes per-firmware evidence and ISO SHA-256. Hardware boot remains NOT_PROVEN until run.
++- Propagated DriveRepair GRUB menu configuration to both live-build BIOS and UEFI recipe directories, and synchronized portable boot-kit assets. Structural ISO checks require xorriso; firmware and physical boot still require real tests.
++- Added opt-in Windows USB dock SMART QA results using `/dev/pdN`, without storing full serial numbers or granting repair authorization.
++- Eliminated numerical scoring of uncalibrated vendor ATA 187 raw counters; an isolated warning cannot imply either 82/100 or 100/100 drive reliability.
++- Added independent artifact-bound promotion evidence validation, short agent navigation and reviewer guidance, and native Qt synthetic SSD/HDD route regression tests.
++- **No real HP boot or Windows dock writes were performed.** The project is not hardware-qualified for public physical repair.
++
++
+ ## 0.3.3b35 — 2026-11-20: Live session/Windows repair routing and archive verification UX (experimental)
+ 
+ - Added DriveRepair-branded GRUB menu for normal graphical live boot, `nomodeset` compatibility graphics, and text-only troubleshooting, using live-build's resolved kernel/initrd paths. No OS installer entry. This is a RECIPE ONLY until a rebuilt ISO passes physical BIOS/UEFI and HP tests.
+diff --git a/CODING_STANDARDS.md b/CODING_STANDARDS.md
+new file mode 100644
+index 0000000..71429aa
+--- /dev/null
++++ b/CODING_STANDARDS.md
+@@ -0,0 +1,28 @@
++# DriveRepair reviewer standards (judgment-based)
++
++The reviewer reads this file **after implementation** and inspects the diff;
++implementation agents should start from the short `AGENTS.md` instead.
++Mechanical version, packaging, lint, syntax, and test checks belong in CI.
++
++1. **Truthful outcomes:** A successful command, sample read, SMART response,
++   byte comparison, and verified file recovery are distinct outcomes. UI text,
++   progress, confidence, metrics, and release notes must name the evidence they
++   actually possess. A high score is not a survival percentage.
++2. **Platform consistency:** Compare a new operator path across Qt, CLI,
++   engine, and boot/live workstation. A hidden fallback must never substitute
++   filesystem repair for an explicitly selected HDD method or vice versa.
++3. **Safety and reversibility:** On-device writes require identity, eligible
++   physical medium, authorization, exclusive access, separate durable journal,
++   cancellation behavior, and independent postwrite evidence. UI gating is
++   never sufficient. SSD/NVMe/flash never enter generic magnetic rewrite.
++4. **Hardware-specific uncertainty:** Model names and uncalibrated vendor
++   SMART raw values may drive caution, not quantified reliability claims or
++   write authorization. Bridge limitations must be distinguished from parser
++   failures, permissions errors, and actual disk defects.
++5. **Agent handoff evidence:** If a test needs Windows, actual BIOS/UEFI VMs,
++   sacrificial hardware, or a real HP laptop, mark NOT_PROVEN until it runs.
++   Verify source revision/ISO hash and preserve evidence; review any new risk
++   to family photos and user drives before a public claim.
++
++Historical references live in docs/; active release pointers are
++`status.md` and `docs/RELEASE_STATUS.md` (checked by CI).
+diff --git a/README.md b/README.md
+index 11971f3..a4b02de 100644
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,7 @@
+ 
+ **Diagnose storage problems, rescue readable data, and evaluate whether a drive is safe to reuse.** DriveRepair is a local-first desktop workstation and command-line toolkit for Windows, Linux and selected macOS workflows. It combines read-only diagnosis, image-based recovery, filesystem/file extraction, and *experimental, tightly controlled* HDD maintenance.
+ 
+-> **Release status:** `0.3.3b35` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
++> **Release status:** `0.3.3b36` is a testing build, **not** a hardware-certified repair product. A read-only scan, a repaired filesystem, and an actual physical HDD rewrite are different outcomes. No software can restore bytes that the hardware can no longer return, or guarantee a failing drive's future lifespan.
+ 
+ **Drive models:** The bundled [offline model catalog](docs/DRIVE_MODEL_CATALOG.md) currently documents four vendor-backed model entries (three Seagate SMR models and one SanDisk SSD family). It guides scanning; it is not a comprehensive database or authorization to rewrite a disk.
+ 
+@@ -232,22 +232,22 @@ On Windows PowerShell, run these same commands using `py` if Python is installed
+ 
+ ```bash
+ python scripts/build_desktop.py --public-beta --no-wheel
+-python dist/DriveRepair-0.3.3b31-public-beta.pyz gui
++python dist/DriveRepair-0.3.3b36-public-beta.pyz gui
+ ```
+ 
+ Install optional `PySide6` in that Python environment if you want the new Qt workstation. The **public-beta** package blocks physical in-place writes. The separate **repair-beta** package may attempt the guided, HDD-only write workflow on sacrificial hardware with all safeguards enabled:
+ 
+ ```bash
+ python scripts/build_desktop.py --repair-beta --no-wheel
+-python dist/DriveRepair-0.3.3b31-repair-beta.pyz qt-gui
++python dist/DriveRepair-0.3.3b36-repair-beta.pyz qt-gui
+ ```
+ 
+ For a CLI image-only example, use a source **regular file** and an unused output path:
+ 
+ ```bash
+-python dist/DriveRepair-0.3.3b31-public-beta.pyz scan-image --image source.img --mode triage --json
+-python dist/DriveRepair-0.3.3b31-public-beta.pyz rescue-image --image source.img --output recovered.img --json
+-python dist/DriveRepair-0.3.3b31-public-beta.pyz rescue-status --output recovered.img --json
++python dist/DriveRepair-0.3.3b36-public-beta.pyz scan-image --image source.img --mode triage --json
++python dist/DriveRepair-0.3.3b36-public-beta.pyz rescue-image --image source.img --output recovered.img --json
++python dist/DriveRepair-0.3.3b36-public-beta.pyz rescue-status --output recovered.img --json
+ ```
+ 
+ A repair-beta build is **not** a recommendation to write to a failing or valuable patient. See [hardware testing requirements](docs/USB_REPAIR_PREFLIGHT_B17.md) and [release gates](docs/RELEASE_STATUS.md).
+diff --git a/desktop/driverepair_desktop/__init__.py b/desktop/driverepair_desktop/__init__.py
+index 5d00d8b..c279952 100644
+--- a/desktop/driverepair_desktop/__init__.py
++++ b/desktop/driverepair_desktop/__init__.py
+@@ -3,4 +3,4 @@
+ The desktop scanner is independent of the experimental boot firmware code.
+ """
+ 
+-__version__ = "0.3.3b35"
++__version__ = "0.3.3b36"
+diff --git a/desktop/driverepair_desktop/boot_resources/build_live_iso.sh b/desktop/driverepair_desktop/boot_resources/build_live_iso.sh
+index 4b5d039..47db2bf 100644
+--- a/desktop/driverepair_desktop/boot_resources/build_live_iso.sh
++++ b/desktop/driverepair_desktop/boot_resources/build_live_iso.sh
+@@ -42,7 +42,8 @@ mkdir -p config/package-lists \
+   config/includes.chroot/etc/lightdm/lightdm.conf.d \
+   config/includes.chroot/usr/share/driverepair \
+   config/bootloaders/grub-pc \
+-  config/includes.chroot/etc/systemd/system
++  config/bootloaders/grub-efi \
++  config/includes.chroot/etc/systemd/system/graphical.target.wants
+ cat > config/package-lists/driverepair.list.chroot <<'EOF'
+ python3
+ python3-pyside6.qtcore
+@@ -108,6 +109,42 @@ EOF
+ # Use the SAME GRUB configuration for PC BIOS and EFI; dynamic kernel paths
+ # are substituted by live-build at binary stage. Never ship a Debian-only menu.
+ cp -- "$REPO/scripts/driverepair-grub.cfg" config/bootloaders/grub-pc/grub.cfg
++cp -- "$REPO/scripts/driverepair-grub.cfg" config/bootloaders/grub-efi/grub.cfg
++# A QEMU-only serial marker makes an actual graphical boot observable to CI.
++# On real machines this service exits without opening any serial port.
++cat > config/includes.chroot/usr/local/bin/driverepair-vm-boot-check <<'EOF'
++#!/bin/sh
++if ! grep -Eiq '(qemu|kvm)' /sys/class/dmi/id/sys_vendor 2>/dev/null || [ ! -c /dev/ttyS0 ]; then
++  exit 0
++fi
++for attempt in $(seq 1 45); do
++  if systemctl is-active --quiet lightdm.service &&
++     pgrep -u driverepair -f 'python3? -m driverepair_desktop.*gui' >/dev/null 2>&1; then
++    printf 'DRIVEREPAIR_LIVE_READY:GUI_STARTED\n' > /dev/ttyS0
++    exit 0
++  fi
++  sleep 2
++done
++printf 'DRIVEREPAIR_LIVE_FAIL:GUI_NOT_RUNNING\n' > /dev/ttyS0
++exit 1
++EOF
++chmod 0755 config/includes.chroot/usr/local/bin/driverepair-vm-boot-check
++cat > config/includes.chroot/etc/systemd/system/driverepair-vm-boot-check.service <<'EOF'
++[Unit]
++Description=DriveRepair VM-only graphical boot readiness signal
++After=display-manager.service
++Wants=display-manager.service
++
++[Service]
++Type=oneshot
++ExecStart=/usr/local/bin/driverepair-vm-boot-check
++TimeoutStartSec=110
++
++[Install]
++WantedBy=graphical.target
++EOF
++ln -s ../driverepair-vm-boot-check.service \
++  config/includes.chroot/etc/systemd/system/graphical.target.wants/driverepair-vm-boot-check.service
+ cat > config/includes.chroot/etc/lightdm/lightdm.conf.d/50-driverepair-live.conf <<'EOF'
+ [Seat:*]
+ autologin-user=driverepair
+diff --git a/desktop/driverepair_desktop/boot_resources/check_live_iso.sh b/desktop/driverepair_desktop/boot_resources/check_live_iso.sh
+index f23b2d6..bbb55a8 100644
+--- a/desktop/driverepair_desktop/boot_resources/check_live_iso.sh
++++ b/desktop/driverepair_desktop/boot_resources/check_live_iso.sh
+@@ -13,7 +13,11 @@ except (OSError,ValueError) as exc:
+     print('NOT A USABLE RECOVERY IMAGE:',str(exc),file=sys.stderr)
+     sys.exit(2)
+ PY
+-if command -v xorriso >/dev/null 2>&1; then
++if ! command -v xorriso >/dev/null 2>&1; then
++  echo 'ERROR: xorriso is required to inspect the built boot menu' >&2
++  exit 3
++fi
++{
+   xorriso -indev "$ISO" -report_el_torito plain 2>&1
+   # Inspect the ACTUAL ISO boot menu, not just the source template. Never
+   # certify a boot product whose menu was discarded by the build system.
+@@ -31,6 +35,7 @@ if command -v xorriso >/dev/null 2>&1; then
+   if grep -Eq '@(KERNEL_LIVE|INITRD_LIVE|LB_BOOTAPPEND_LIVE)@' "$MENU_DIR/grub.cfg"; then
+     echo 'ERROR: live-build did not resolve DriveRepair GRUB kernel placeholders' >&2; exit 3
+   fi
+-fi
+-echo 'Structure passed. REQUIRED: boot in a disposable BIOS VM and UEFI VM, then test on a sacrificial USB.'
++}
++echo 'ISO contents + extracted GRUB menu passed. UEFI boot-menu appearance still requires VM/hardware testing.'
++echo 'REQUIRED: boot in a disposable BIOS VM and UEFI VM, then test on a sacrificial USB.'
+ echo 'Without these boots, the ISO remains UNVERIFIED.'
+diff --git a/desktop/driverepair_desktop/qtgui.py b/desktop/driverepair_desktop/qtgui.py
+index 5571001..58c1e7c 100644
+--- a/desktop/driverepair_desktop/qtgui.py
++++ b/desktop/driverepair_desktop/qtgui.py
+@@ -1194,8 +1194,11 @@ def launch():
+                 debug_trace(f'Debug tracking ON — {debug_log_path}\n')
+                 self.setWindowTitle(self.windowTitle() + ' [DEBUG]')
+             self.select_goal('scanquick')
+-            QTimer.singleShot(100,self.refresh_devices)
+-            QTimer.singleShot(1700,self._announce_missing_dependencies)
++            # Native Qt CI uses an empty synthetic inventory and must NEVER
++            # enumerate actual disks or prompt to install dependencies.
++            if os.environ.get('DRIVEREPAIR_QT_TEST_NO_DEVICES') != '1':
++                QTimer.singleShot(100,self.refresh_devices)
++                QTimer.singleShot(1700,self._announce_missing_dependencies)
+ 
+         def _announce_missing_dependencies(self):
+             # One launch-time notice, not an installer or a blocking prerequisite
+diff --git a/desktop/driverepair_desktop/reliability_score.py b/desktop/driverepair_desktop/reliability_score.py
+index 62aa649..01f5fff 100644
+--- a/desktop/driverepair_desktop/reliability_score.py
++++ b/desktop/driverepair_desktop/reliability_score.py
+@@ -32,6 +32,7 @@ def assess(snapshot: dict | None, *, scan: dict | None = None,
+                 'power_on_hours': None, 'notes': 'Use smartctl with USB bridge support for detailed evidence.'}
+     observed = []
+     reasons = []
++    uncalibrated_187_warning = False
+     value = 100
+     if snapshot.get('status') == 'failure_reported' or snapshot.get('smart_status_passed') is False:
+         value -= 65
+@@ -39,15 +40,28 @@ def assess(snapshot: dict | None, *, scan: dict | None = None,
+         observed.append('controller_failure')
+     elif snapshot.get('smart_status_passed') is True:
+         observed.append('controller_pass')
++    # ATA 187 raw values are vendor-encoded, sometimes composite bitfields.
++    # Do NOT translate an arbitrary positive number into an 18-point penalty.
++    specs = manufacturer_specs or {}
++    raw_limits = specs.get('ata_raw_thresholds') if isinstance(specs.get('ata_raw_thresholds'), dict) else {}
+     for attr, label, impact in ((5, 'Reallocated sectors', 12), (187, 'Reported uncorrectable errors', 18),
+                                 (197, 'Pending sectors', 24), (198, 'Offline uncorrectable', 24),
+                                 (199, 'Interface CRC errors / connection', 8)):
+         number = _number(ata.get(attr))
+         if number is not None:
+-            observed.append(f'ata_{attr}')
++            # Mark vendor attribute 187 as unscored unless an explicitly
++            # supplied model-aware threshold is available.
++            threshold = raw_limits.get(attr, raw_limits.get(str(attr))) if attr == 187 else 0
++            verified = attr != 187 or _number(threshold) is not None
++            if verified:
++                observed.append(f'ata_{attr}')
+             if number > 0:
+-                value -= impact
+-                reasons.append(f'{label}: {number} (raw, vendor-defined)')
++                if attr == 187 and not verified:
++                    uncalibrated_187_warning = True
++                    reasons.append(f'{label}: {number} (raw, vendor-defined; unscored)')
++                elif number > threshold:
++                    value -= impact
++                    reasons.append(f'{label}: {number} (raw, vendor-defined)')
+     if nvme:
+         critical = _number(nvme.get('critical_warning'))
+         if critical is not None:
+@@ -86,7 +100,6 @@ def assess(snapshot: dict | None, *, scan: dict | None = None,
+             if failures:
+                 value -= min(30, 8 + 2 * failures)
+                 reasons.append(f'{failures} failed read requests (source unknown)')
+-    specs = manufacturer_specs or {}
+     rated_hours = _number(specs.get('rated_power_on_hours'))
+     if rated_hours and hours is not None:
+         observed.append('documented_rated_hours')
+@@ -99,16 +112,27 @@ def assess(snapshot: dict | None, *, scan: dict | None = None,
+     # verdict, wear counter or explicit surface read evidence.
+     meaningful = {'controller_pass', 'controller_failure', 'surface_probe',
+                   'nvme_critical_warning', 'nvme_media_errors', 'nvme_spare'}
+-    meaningful.update(f'ata_{x}' for x in (5, 187, 197, 198, 199))
++    meaningful.update(f'ata_{x}' for x in (5, 197, 198, 199))
++    if _number(raw_limits.get(187, raw_limits.get('187'))) is not None:
++        meaningful.add('ata_187')
+     if set(observed).issubset({'controller_pass','power_on_hours'}):
+         return {'score': None, 'band': 'UNKNOWN', 'confidence': 'limited',
+-                'reasons': ['SMART pass alone does not establish media reliability'],
++                'reasons': (reasons or ['SMART pass alone does not establish media reliability']),
+                 'power_on_hours': hours, 'notes': 'Acquire additional SMART attributes or NVMe wear counters.'}
+     if not set(observed) & meaningful:
+         return {'score': None, 'band': 'UNKNOWN', 'confidence': 'low',
+-                'reasons': ['No comparable health or read evidence available'],
++                'reasons': (reasons or ['No comparable health or read evidence available']),
+                 'power_on_hours': hours,
+                 'notes': 'Manufacturer MTBF/AFR is fleet-level, not an individual remaining-life forecast.'}
++    # A vendor-encoded uncorrectable-error counter of unknown meaning must
++    # not turn into a fake 82/100 (or deceptively reassuring 100/100) badge.
++    # Independently corroborated, worsening signals may still be scored.
++    if uncalibrated_187_warning and value == 100:
++        return {'score': None, 'band': 'UNKNOWN', 'confidence': 'limited',
++                'reasons': reasons, 'power_on_hours': hours,
++                'evidence_fields': sorted(set(observed)),
++                'notes': ('SMART attribute 187 is vendor-encoded and has no supplied calibrated threshold. '
++                          'Inspect manufacturer guidance and independent read tests; no lifespan or write authorization inferred.')}
+     value = max(0, min(100, value))
+     confidence = ('high' if len(observed) >= 5 and 'surface_probe' in observed else
+                   'moderate' if len(observed) >= 3 else 'limited')
+diff --git a/desktop/pyproject.toml b/desktop/pyproject.toml
+index 1ba79b1..197fc51 100644
+--- a/desktop/pyproject.toml
++++ b/desktop/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "driverepair-desktop"
+-version = "0.3.3b35"
++version = "0.3.3b36"
+ description = "Cross-platform drive diagnostics, image rescue, FAT32 undelete and clone-only filesystem repair"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/desktop/tests/test_agent_release_gates_20261121.py b/desktop/tests/test_agent_release_gates_20261121.py
+new file mode 100644
+index 0000000..3631189
+--- /dev/null
++++ b/desktop/tests/test_agent_release_gates_20261121.py
+@@ -0,0 +1,175 @@
++"""No hardware is accessed; pin the release and evidence mechanisms."""
++import importlib.util
++import json
++from pathlib import Path
++import tempfile
++import unittest
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def tool(name):
++    spec = importlib.util.spec_from_file_location(name, ROOT / 'scripts' / (name + '.py'))
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
++
++
++class ReleaseHygieneTests(unittest.TestCase):
++    def test_repo_current_version_passes(self):
++        result = tool('check_release_hygiene').check_repository(ROOT)
++        self.assertEqual(result['errors'], [])
++
++    def test_mismatched_status_fails(self):
++        with tempfile.TemporaryDirectory() as temp:
++            p = Path(temp)
++            (p/'desktop').mkdir()
++            (p/'docs').mkdir()
++            (p/'desktop/pyproject.toml').write_text('[project]\nversion = "0.3.3b35"\n')
++            (p/'status.md').write_text('**0.3.3b34** outdated')
++            (p/'docs/RELEASE_STATUS.md').write_text('# DriveRepair release status — v0.3.3b35\n')
++            (p/'README.md').write_text('Run `dist/DriveRepair-0.3.3b35-public-beta.pyz`')
++            result = tool('check_release_hygiene').check_repository(p)
++            self.assertTrue(any('status.md' in err for err in result['errors']))
++
++    def test_readme_examples_cannot_use_stale_version(self):
++        with tempfile.TemporaryDirectory() as temp:
++            p = Path(temp)
++            (p/'desktop').mkdir()
++            (p/'docs').mkdir()
++            (p/'desktop/pyproject.toml').write_text('[project]\nversion = "0.3.3b35"\n')
++            (p/'status.md').write_text('**0.3.3b35** testing')
++            (p/'docs/RELEASE_STATUS.md').write_text('# DriveRepair release status — v0.3.3b35\n')
++            (p/'README.md').write_text('Run `dist/DriveRepair-0.3.3b31-public-beta.pyz`')
++            result = tool('check_release_hygiene').check_repository(p)
++            self.assertTrue(any('README.md' in err for err in result['errors']))
++
++
++class PromotionEvidenceTests(unittest.TestCase):
++    def test_missing_independent_evidence_never_passes(self):
++        gate = tool('check_release_readiness')
++        with tempfile.TemporaryDirectory() as temp:
++            artifact = Path(temp)/'image.iso'
++            artifact.write_bytes(b'not a real iso')
++            evidence = Path(temp)/'evidence.json'
++            evidence.write_text(json.dumps({'version':'0.3.3b35','source_commit':'f00dbabe'*5,
++                    'artifact_sha256':'bad', 'checks':{'bios_vm':'PASS'}}))
++            result = gate.evaluate(evidence, artifact, '0.3.3b35', 'f00dbabe'*5)
++            self.assertFalse(result['ready'])
++            self.assertIn('artifact_sha256 mismatch', result['failures'])
++            self.assertTrue(any('uefi_vm' in x for x in result['failures']))
++
++    def test_commit_identifier_must_be_full_sha(self):
++        gate = tool('check_release_readiness')
++        with tempfile.TemporaryDirectory() as temp:
++            artifact = Path(temp)/'image.iso'
++            artifact.write_bytes(b'test')
++            evidence = Path(temp)/'evidence.json'
++            evidence.write_text(json.dumps({'version':'0.3.3b35','source_commit':'short',
++                'artifact_sha256':gate.file_sha256(artifact),
++                'checks':{key:{'status':'PASS','evidence':'manual record'} for key in gate.REQUIRED}}))
++            result = gate.evaluate(evidence, artifact, '0.3.3b35', 'short')
++            self.assertFalse(result['ready'])
++
++    def test_all_evidence_bound_to_same_artifact_passes_logic_only(self):
++        import hashlib
++        gate = tool('check_release_readiness')
++        with tempfile.TemporaryDirectory() as temp:
++            artifact = Path(temp)/'image.iso'
++            artifact.write_bytes(b'example bytes not a bootable iso')
++            evidence = Path(temp)/'evidence.json'
++            data = {'version':'0.3.3b35','source_commit':'f00dbabe'*5,
++                    'artifact_sha256':hashlib.sha256(artifact.read_bytes()).hexdigest(),
++                    'checks':{key:{'status':'PASS','evidence':'documented testing record'}
++                              for key in gate.REQUIRED}}
++            evidence.write_text(json.dumps(data))
++            result = gate.evaluate(evidence, artifact, '0.3.3b35', 'f00dbabe'*5)
++            self.assertTrue(result['ready'])
++            self.assertEqual(result['failures'], [])
++
++
++class BootSmokeTests(unittest.TestCase):
++    def test_bios_vm_uses_only_readonly_iso(self):
++        smoke = tool('smoke_live_iso')
++        args = smoke.make_qemu_command('bios','/tmp/DriveRepair.iso','/tmp/serial.log')
++        self.assertIn('-cdrom',args)
++        self.assertNotIn('-hda',args)
++        self.assertNotIn('-hdb',args)
++        self.assertNotIn('-drive',args)
++        self.assertNotIn('-enable-kvm',args)
++
++    def test_uefi_vm_uses_readonly_firmware_and_disposable_vars(self):
++        smoke = tool('smoke_live_iso')
++        args = smoke.make_qemu_command('uefi','/tmp/DriveRepair.iso','/tmp/serial.log',
++                  ovmf_code='/boot/OVMF_CODE.fd', ovmf_vars='/tmp/OVMF_VARS.fd')
++        self.assertIn('if=pflash,format=raw,unit=0,readonly=on,file=/boot/OVMF_CODE.fd',args)
++        self.assertIn('if=pflash,format=raw,unit=1,file=/tmp/OVMF_VARS.fd',args)
++        self.assertIn('-cdrom',args)
++
++    def test_bundled_live_recipes_match_checkout(self):
++        for name in ('build_live_iso.sh', 'check_live_iso.sh'):
++            self.assertEqual((ROOT/'scripts'/name).read_bytes(),
++                             (ROOT/'desktop/driverepair_desktop/boot_resources'/name).read_bytes())
++
++    def test_both_menus_and_live_marker_configured(self):
++        text=(ROOT/'scripts/build_live_iso.sh').read_text()
++        self.assertIn('config/bootloaders/grub-efi/grub.cfg',text)
++        self.assertIn('driverepair-vm-boot-check.service',text)
++        self.assertIn('config/includes.chroot/etc/systemd/system',text)
++
++
++class SmartProbeTests(unittest.TestCase):
++    def test_valid_windows_alias_only(self):
++        q = tool('qa_smart_probe')
++        self.assertEqual(q.windows_alias('windows:PhysicalDrive2'),'/dev/pd2')
++        with self.assertRaises(ValueError):
++            q.windows_alias('windows:PhysicalDrive2 && erase')
++
++    def test_empty_json_is_not_a_successful_smart_probe(self):
++        q = tool('qa_smart_probe')
++        class Result:
++            returncode = 0
++            stdout = b'{"smartctl":{"exit_status":0}}'
++            stderr = b''
++        report = q.probe('windows:PhysicalDrive2', run=lambda *a, **kw: Result())
++        self.assertEqual(report['status'], 'UNVERIFIED')
++
++    def test_error_output_does_not_leak_serials(self):
++        q = tool('qa_smart_probe')
++        # Probe report contains only derived fields, never raw stdout.
++        class Result:
++            returncode=2
++            stdout=b'{"serial_number":"CONFIDENTIAL","smartctl":{"exit_status":2},"device":{"protocol":"SCSI"}}'
++            stderr=b'raw identifying data HERE'
++        calls=[]
++        def fake_run(args, **kw):
++            calls.append(args)
++            return Result()
++        report = q.probe('windows:PhysicalDrive2', executable='smartctl', run=fake_run)
++        self.assertEqual(report['status'],'UNVERIFIED')
++        self.assertNotIn('CONFIDENTIAL',json.dumps(report))
++        self.assertNotIn('raw identifying data HERE',json.dumps(report))
++        self.assertEqual(calls[0][-1],'/dev/pd2')
++
++
++class ConfidenceTests(unittest.TestCase):
++    def test_uncalibrated_187_with_zero_other_ata_attributes_is_not_100(self):
++        from driverepair_desktop.reliability_score import assess
++        snap={'smart_status_passed': True, 'ata_selected_raw_attributes': [
++            {'id':5, 'raw_value':0}, {'id':187,'raw_value':65535},
++            {'id':197, 'raw_value':0}, {'id':198, 'raw_value':0}]}
++        result=assess(snap)
++        self.assertIsNone(result['score'])
++        self.assertIn('unscored', ' '.join(result['reasons']))
++
++    def test_uninterpreted_vendor_raw_187_cannot_claim_precise_82_score(self):
++        from driverepair_desktop.reliability_score import assess
++        snap={'smart_status_passed': True, 'ata_selected_raw_attributes': [
++            {'id':187, 'raw_value':65535}]}
++        result=assess(snap)
++        self.assertIsNone(result['score'])
++        self.assertIn('vendor', ' '.join(result['reasons']).lower())
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/desktop/tests/test_clean_source_archive.py b/desktop/tests/test_clean_source_archive.py
+index abad66c..96717e7 100644
+--- a/desktop/tests/test_clean_source_archive.py
++++ b/desktop/tests/test_clean_source_archive.py
+@@ -44,3 +44,15 @@ def test_refuse_to_package_inside_the_repo():
+     tool = _loader()
+     with pytest.raises(ValueError, match='outside the repository'):
+         tool.build_archive(REPO, REPO / 'would_recurse.zip')
++
++
++def test_git_worktree_pointer_is_never_shipped():
++    """A worktree has a *file* named .git; it must not expose the gitdir path."""
++    tool = _loader()
++    with tempfile.TemporaryDirectory() as folder:
++        root = Path(folder)
++        (root / '.git').write_text('gitdir: /sensitive/checkout/paths\n')
++        (root / 'README.md').write_text('synthetic')
++        shipped = [str(relative) for _, relative in tool.source_members(root)]
++        assert 'README.md' in shipped
++        assert '.git' not in shipped
+diff --git a/desktop/tests/test_native_qt_workflows.py b/desktop/tests/test_native_qt_workflows.py
+new file mode 100644
+index 0000000..b53c1ab
+--- /dev/null
++++ b/desktop/tests/test_native_qt_workflows.py
+@@ -0,0 +1,92 @@
++"""Real PySide6 widgets, synthetic device records; NEVER open a physical disk.
++
++Run on a Windows desktop or an offscreen Qt test host. The application is told
++not to run its startup device discovery, and all synthetic IDs are impossible
++Windows physical-drive paths.
++"""
++from __future__ import annotations
++
++import os
++import unittest
++
++try:
++    import PySide6  # noqa: F401
++    HAVE_QT = True
++except ImportError:
++    HAVE_QT = False
++
++
++@unittest.skipUnless(HAVE_QT, 'PySide6 not installed on this host')
++class NativeQtRepairRouteTests(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        os.environ['DRIVEREPAIR_QT_TEST_NO_DEVICES'] = '1'
++        os.environ['DRIVEREPAIR_QT_SMOKE'] = '1'
++        os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
++        from PySide6.QtCore import QTimer
++        from PySide6.QtWidgets import QApplication
++        from driverepair_desktop.qtgui import launch
++        cls.app = QApplication.instance() or QApplication([])
++        QTimer.singleShot(450, cls.app.quit)
++        launch()
++        windows = [w for w in cls.app.topLevelWidgets() if w.isWindow() and
++                   hasattr(w, 'device_box') and hasattr(w, 'job_box')]
++        if not windows:
++            raise unittest.SkipTest('DriveRepair Qt main window unavailable')
++        cls.win = windows[0]
++
++    @classmethod
++    def tearDownClass(cls):
++        if hasattr(cls, 'win'):
++            cls.win.close()
++            cls.app.processEvents()
++
++    def setUp(self):
++        self.win.device_box.clear()
++        self.win._devices = []
++        self.win._health_by_device.clear()
++        self.win._auto_probe_attempted.clear()
++        self.win._auto_probe_timer.stop()
++
++    def synthetic(self, model, key, snap):
++        device = {'id': f'SYNTHETIC-NOT-A-DRIVE-{key}', 'model': model,
++                  'bus': 'usb', 'sector_size': 512, 'size_bytes': 1000000000,
++                  'serial_suffix': '0001', 'identity_hint': key}
++        self.win._devices = [device]
++        self.win._health_by_device[key] = snap
++        self.win._auto_probe_attempted.add(key)
++        self.win.device_box.addItem(model, device)
++        self.win._auto_probe_timer.stop()
++        return device
++
++    def test_ssd_blocks_hdd_method_without_switching_to_chkdsk(self):
++        self.synthetic('SanDisk SSD 500GB', 'fake-ssd', {'reported_medium': 'ssd'})
++        self.win.select_goal('carequick')
++        self.win.update_action_state()
++        self.assertEqual(self.win.job_box.currentData(), 'carequick')
++        self.assertFalse(self.win.start.isEnabled())
++        self.assertIn('HDD repair blocked', self.win.start.text())
++        self.assertFalse(self.win.start_shortcut.isEnabled())
++        self.assertIsNone(self.win.proc)
++
++    def test_hdd_ui_review_does_not_begin_a_write(self):
++        self.synthetic('ST1000LM048', 'fake-hdd', {
++            'status':'smart_passed_limited', 'smart_status_passed': True,
++            'reported_medium':'hdd', 'rotation_rate_rpm':5400,
++            'device_protocol':'ATA'})
++        self.win.select_goal('carequick')
++        self.win.update_action_state()
++        self.assertEqual(self.win.job_box.currentData(), 'carequick')
++        self.assertIn('HDD', self.win.start.text())
++        self.assertIsNone(self.win.proc)
++
++    def test_chkdsk_is_never_selected_implicitly(self):
++        self.synthetic('SanDisk SSD 500GB', 'fake-ssd', {'reported_medium':'ssd'})
++        self.win.select_goal('carequick')
++        self.win.update_action_state()
++        self.assertNotEqual(self.win.job_box.currentData(), 'winfsrepair')
++        self.assertIsNone(self.win.proc)
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/docs/QUALIFICATION_GATES.md b/docs/QUALIFICATION_GATES.md
+new file mode 100644
+index 0000000..7414a54
+--- /dev/null
++++ b/docs/QUALIFICATION_GATES.md
+@@ -0,0 +1,94 @@
++# DriveRepair qualification and agent handoff — b36
++
++## What automatic CI can prove
++
++**Required Ubuntu `.gitea/workflows/ci.yml`:** Python tests, source packaging,
++Rust checks, lint/security checks and release-hygiene metadata. Synthetic
++storage tests use ordinary files, not physical media. A green Ubuntu pipeline
++is **not** a public-binary qualification.
++
++**Opt-in `.gitea/workflows/qualification.yml`:** Runs with manual
++`workflow_dispatch`. Requires a Windows-capable Actions runner for native
++PySide6 widget tests and a privileged Ubuntu runner for Debian live-build plus
++QEMU/OVMF. The workflow is optional, rather than making existing Ubuntu CI
++silently fail on a missing Windows runner. If a runner is absent or a job never
++ran, its result is **NOT_PROVEN**, not PASS.
++
++The ISO job builds an ordinary ISO and calls:
++
++```sh
++python scripts/smoke_live_iso.py \
++  --iso /path/DriveRepair-Live-amd64-UNVERIFIED.iso \
++  --output /path/to/qa-evidence --timeout-seconds 360
++```
++
++The VM boots with only a read-only optical ISO drive and a disposable UEFI
++variable image; no hard disk or network devices are attached. The guest sends
++`DRIVEREPAIR_LIVE_READY:GUI_STARTED` over QEMU serial only after LightDM and
++the DriveRepair GUI process exist. The command records per-firmware PASS/FAIL
++and the ISO SHA-256 in `vm_boot_evidence.json`. **This confirms neither UEFI
++Secure Boot nor that the HP laptop can boot or actually use the interface.**
++A captured marker is not a substitute for manually inspecting the boot menu
++and clicking the application.
++
++The ISO recipe is duplicated in:
++`desktop/driverepair_desktop/boot_resources/build_live_iso.sh` and
++`scripts/build_live_iso.sh`, because the portable app exports its own kit.
++Keep these copies byte-identical. Both BIOS and EFI bootloader source menus
++must reference the same DriveRepair titles; still verify the finished EFI
++image by booting it.
++
++## Hardware gates that automation must not fake
++
++Follow `docs/QA_2026-11-20_HP_BOOT_WINDOWS_DOCK.md` on **disposable media**.
++Test normal and compatibility boot on the HP laptop, autologin, correct GUI
++start, and correct boot menu; test SSD-specific HDD denial. On Windows,
++run the native Qt tests and the read-only USB SMART compatibility diagnostic:
++
++```powershell
++# External disks only; elevated PowerShell for ordinary read-only scan.
++powershell -NoProfile -ExecutionPolicy Bypass -File scripts\qa_readonly_triage.ps1 `
++  -Devices windows:PhysicalDrive2 -OutputDir C:\temp\driverepair-qa
++```
++
++`*.smart.json` reports only selected diagnostic fields, the `/dev/pdN` alias
++and errors; full SMART serials and raw stdout/stderr are deliberately omitted.
++An unknown or unreadable report **cannot** authorize on-device writes.
++A dedicated manual test using a backed-up, disposable rotational HDD is
++needed to verify USB-dock locking, journal and readback behavior. Disconnects,
++wrong identity, missing rights and cancellation should fail closed.
++
++## Evidence file format for promotion
++
++`python scripts/check_release_readiness.py --help` documents arguments.
++Supply a JSON object, for the **exact distributable artifact** under review:
++
++```json
++{
++  "version": "0.3.3b36",
++  "source_commit": "full-git-commit-id-for-that-build",
++  "artifact_sha256": "64-char-hex-sha256-of-exact-iso-or-release-file",
++  "checks": {
++    "bios_vm": {"status": "PASS", "evidence": "VM job URL and console/log checksum"},
++    "uefi_vm": {"status": "PASS", "evidence": "UEFI VM job URL and console/log checksum"},
++    "native_windows_qt": {"status": "PASS", "evidence": "Windows job URL and test output"},
++    "usb_dock_hw": {"status": "PASS", "evidence": "reviewed sacrificial HDD QA log"},
++    "hp_laptop_hw": {"status": "PASS", "evidence": "HP laptop boots & UI test record"}
++  }
++}
++```
++
++The gate fails if a required field is missing, does not match, or is not PASS.
++This is an **evidence consistency check**, not cryptographic attestation; an
++independent reviewer must confirm authenticity, safety, and hardware identity.
++Do not mark missing tests PASS just to satisfy a script. Use NOT_PROVEN / FAIL
++until real evidence exists. Do not publicize as hardware-qualified otherwise.
++
++## Source handoff
++
++1. Run `python scripts/check_release_hygiene.py` and the normal test suite.
++2. Build a clean ZIP OUTSIDE the checkout:
++   `python scripts/create_clean_source_archive.py --output /tmp/driverepair-clean-source.zip`.
++3. Generate a patch from the exact baseline commit: `git diff --binary BASE..HEAD > improvements.patch`.
++4. Apply the patch in Gitea against the matching source revision, not a
++   differently labeled b35 archive; review SHA-256 and CI before merging.
+diff --git a/docs/RELEASE_STATUS.md b/docs/RELEASE_STATUS.md
+index 927aa5b..17b97f1 100644
+--- a/docs/RELEASE_STATUS.md
++++ b/docs/RELEASE_STATUS.md
+@@ -1,4 +1,4 @@
+-# DriveRepair release status — v0.3.3b18 (2026-11-19)
++# DriveRepair release status — v0.3.3b36 (2026-11-21)
+ 
+ **Status: development / guarded testing, not a hardware-qualified public physical-repair release.** The source is an engineering tree; public image-only and guarded physical-repair distributions must be built separately. The latest Python tests do not demonstrate real physical HDD repair, Windows USB flashing, correct native Qt layout, or BIOS/UEFI bootability.
+ 
+@@ -15,6 +15,13 @@
+ - Windows raw-I/O constraints and stop behavior: `docs/WINDOWS_VOLUME_ACCESS_AND_STOP_0.3.3b13.md`.
+ - Historical release status snapshot: `docs/RELEASE_STATUS_B13_HISTORY.md`.
+ 
++## Promotion evidence and current gates
++
++The source snapshot is **NOT_PROVEN** for real firmware boot or Windows physical repair.
++`python scripts/check_release_hygiene.py` checks active docs/commands, and
++`python scripts/check_release_readiness.py --help` describes the independent
++artifact-specific promotion gate. See `docs/QUALIFICATION_GATES.md`.
++
+ ## Remaining release gates
+ 
+ - Native Windows 10/11 PySide6 clickthrough and usability testing.
+diff --git a/docs/superpowers/plans/2026-11-21-agent-validation-gates.md b/docs/superpowers/plans/2026-11-21-agent-validation-gates.md
+new file mode 100644
+index 0000000..e2be761
+--- /dev/null
++++ b/docs/superpowers/plans/2026-11-21-agent-validation-gates.md
+@@ -0,0 +1,58 @@
++# DriveRepair agent validation gates implementation plan
++
++> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans or superpowers:subagent-driven-development to implement this plan task-by-task.
++
++**Goal:** Make real-hardware verification, firmware boot tests, Windows GUI behavior, source provenance, and agent handoffs visibly separate from synthetic successes.
++
++**Architecture:** Reuse existing Python unittest/pytest and Gitea pipelines. Add opt-in Windows and Linux QEMU qualification workflows without breaking the currently supported Ubuntu CI runner. Keep patient-disk operations disabled in all automated tests; an explicit evidence gate prevents promoting an unverified release.
++
++**Tech Stack:** Python 3.11, shell, PowerShell, PySide6, Gitea Actions, QEMU/OVMF (only on qualified runners).
++
++**Spec:** 2026-11-21 DriveRepair retrospective, plus `docs/QA_2026-11-20_HP_BOOT_WINDOWS_DOCK.md` and `docs/release-readiness/TEST_EVIDENCE.md`.
++
++## Global constraints
++
++- Never use a physical block-device target in automated CI tests.
++- No missing runner/tool result can be reported as PASS.
++- Keep SSD/NVMe/HDD write authorization independent of UI navigation and diagnostic scores.
++- Preserve current Ubuntu CI jobs; native Windows runner qualification is explicit/opt-in until a runner exists.
++- ISO build and structural validation do not equal a successful boot.
++
++## Review focus
++
++- UEFI menu differs from BIOS: both menus must be installed and independently booted.
++- Failed QEMU boot / missing OVMF: gate reports FAIL or NOT_PROVEN, never PASS.
++- SSD selected in repair UI: HDD method remains blocked, no fallback CHKDSK starts.
++- Unidentified Windows USB bridge: read-only diagnostic evidence remains distinct from write permit.
++- Unqualified release metadata: promotion requires matching SHA, source revision and independent evidence.
++
++### Task 1: Release hygiene and packaging
++
++- [ ] Write failing tests for version mismatch and stale README examples.
++- [ ] Add `scripts/check_release_hygiene.py`, correct active status/docs, extend pre-push and CI checks.
++- [ ] Add archive manifest/source cleanliness check reusing `create_clean_source_archive.py`.
++
++### Task 2: ISO BIOS/UEFI boot verification
++
++- [ ] Write failing tests for paired bootloader source and QEMU command safety.
++- [ ] Configure both GRUB BIOS/EFI menu sources; add a VM-only live readiness marker.
++- [ ] Add real QEMU/OVMF BIOS+UEFI runner and opt-in qualification workflow.
++
++### Task 3: Windows UI and hardware evidence
++
++- [ ] Add Qt (real widget) SSD/HDD route tests for Windows and non-Windows hosts.
++- [ ] Add opt-in native Windows CI workflow (requires Windows runner).
++- [ ] Add read-only, sanitized smartctl USB bridge probe for QA and tests.
++
++### Task 4: Score calibration, release promotion, agent navigation
++
++- [ ] Write tests forbidding unknown vendor ATA raw counter 187 from imposing unsupported numerical penalties.
++- [ ] Correct score and explanations while preserving independent hard media gates.
++- [ ] Add promotion evidence gate with named mandatory categories and SHA/commit binding; test rejection paths.
++- [ ] Add short `AGENTS.md`, `CODING_STANDARDS.md`, and documented runner/how-to instructions.
++
++### Task 5: Verification and delivery
++
++- [ ] Run full Python suite and available shell/static tests; report missing platform checks accurately.
++- [ ] Create clean reproducible source ZIP and `git diff --binary` patch from the supplied archive.
++- [ ] Validate patch with `git apply --check`, archive manifest, SHA256, and independent source extraction tests.
+diff --git a/scripts/build_live_iso.sh b/scripts/build_live_iso.sh
+index 4b5d039..47db2bf 100644
+--- a/scripts/build_live_iso.sh
++++ b/scripts/build_live_iso.sh
+@@ -42,7 +42,8 @@ mkdir -p config/package-lists \
+   config/includes.chroot/etc/lightdm/lightdm.conf.d \
+   config/includes.chroot/usr/share/driverepair \
+   config/bootloaders/grub-pc \
+-  config/includes.chroot/etc/systemd/system
++  config/bootloaders/grub-efi \
++  config/includes.chroot/etc/systemd/system/graphical.target.wants
+ cat > config/package-lists/driverepair.list.chroot <<'EOF'
+ python3
+ python3-pyside6.qtcore
+@@ -108,6 +109,42 @@ EOF
+ # Use the SAME GRUB configuration for PC BIOS and EFI; dynamic kernel paths
+ # are substituted by live-build at binary stage. Never ship a Debian-only menu.
+ cp -- "$REPO/scripts/driverepair-grub.cfg" config/bootloaders/grub-pc/grub.cfg
++cp -- "$REPO/scripts/driverepair-grub.cfg" config/bootloaders/grub-efi/grub.cfg
++# A QEMU-only serial marker makes an actual graphical boot observable to CI.
++# On real machines this service exits without opening any serial port.
++cat > config/includes.chroot/usr/local/bin/driverepair-vm-boot-check <<'EOF'
++#!/bin/sh
++if ! grep -Eiq '(qemu|kvm)' /sys/class/dmi/id/sys_vendor 2>/dev/null || [ ! -c /dev/ttyS0 ]; then
++  exit 0
++fi
++for attempt in $(seq 1 45); do
++  if systemctl is-active --quiet lightdm.service &&
++     pgrep -u driverepair -f 'python3? -m driverepair_desktop.*gui' >/dev/null 2>&1; then
++    printf 'DRIVEREPAIR_LIVE_READY:GUI_STARTED\n' > /dev/ttyS0
++    exit 0
++  fi
++  sleep 2
++done
++printf 'DRIVEREPAIR_LIVE_FAIL:GUI_NOT_RUNNING\n' > /dev/ttyS0
++exit 1
++EOF
++chmod 0755 config/includes.chroot/usr/local/bin/driverepair-vm-boot-check
++cat > config/includes.chroot/etc/systemd/system/driverepair-vm-boot-check.service <<'EOF'
++[Unit]
++Description=DriveRepair VM-only graphical boot readiness signal
++After=display-manager.service
++Wants=display-manager.service
++
++[Service]
++Type=oneshot
++ExecStart=/usr/local/bin/driverepair-vm-boot-check
++TimeoutStartSec=110
++
++[Install]
++WantedBy=graphical.target
++EOF
++ln -s ../driverepair-vm-boot-check.service \
++  config/includes.chroot/etc/systemd/system/graphical.target.wants/driverepair-vm-boot-check.service
+ cat > config/includes.chroot/etc/lightdm/lightdm.conf.d/50-driverepair-live.conf <<'EOF'
+ [Seat:*]
+ autologin-user=driverepair
+diff --git a/scripts/check_live_iso.sh b/scripts/check_live_iso.sh
+index f23b2d6..bbb55a8 100644
+--- a/scripts/check_live_iso.sh
++++ b/scripts/check_live_iso.sh
+@@ -13,7 +13,11 @@ except (OSError,ValueError) as exc:
+     print('NOT A USABLE RECOVERY IMAGE:',str(exc),file=sys.stderr)
+     sys.exit(2)
+ PY
+-if command -v xorriso >/dev/null 2>&1; then
++if ! command -v xorriso >/dev/null 2>&1; then
++  echo 'ERROR: xorriso is required to inspect the built boot menu' >&2
++  exit 3
++fi
++{
+   xorriso -indev "$ISO" -report_el_torito plain 2>&1
+   # Inspect the ACTUAL ISO boot menu, not just the source template. Never
+   # certify a boot product whose menu was discarded by the build system.
+@@ -31,6 +35,7 @@ if command -v xorriso >/dev/null 2>&1; then
+   if grep -Eq '@(KERNEL_LIVE|INITRD_LIVE|LB_BOOTAPPEND_LIVE)@' "$MENU_DIR/grub.cfg"; then
+     echo 'ERROR: live-build did not resolve DriveRepair GRUB kernel placeholders' >&2; exit 3
+   fi
+-fi
+-echo 'Structure passed. REQUIRED: boot in a disposable BIOS VM and UEFI VM, then test on a sacrificial USB.'
++}
++echo 'ISO contents + extracted GRUB menu passed. UEFI boot-menu appearance still requires VM/hardware testing.'
++echo 'REQUIRED: boot in a disposable BIOS VM and UEFI VM, then test on a sacrificial USB.'
+ echo 'Without these boots, the ISO remains UNVERIFIED.'
+diff --git a/scripts/check_release_hygiene.py b/scripts/check_release_hygiene.py
+new file mode 100644
+index 0000000..6b4f517
+--- /dev/null
++++ b/scripts/check_release_hygiene.py
+@@ -0,0 +1,48 @@
++#!/usr/bin/env python3
++"""Fail CI on stale active version references; leave historical change logs alone."""
++from __future__ import annotations
++
++import argparse
++from pathlib import Path
++import re
++import tomllib
++
++
++def check_repository(root: Path) -> dict:
++    root = Path(root)
++    version = tomllib.loads((root / 'desktop' / 'pyproject.toml').read_text(encoding='utf-8'))['project']['version']
++    errors = []
++    package_init = root / 'desktop' / 'driverepair_desktop' / '__init__.py'
++    if package_init.is_file():
++        module_text = package_init.read_text(encoding='utf-8')
++        if f'__version__ = "{version}"' not in module_text:
++            errors.append(f'desktop/driverepair_desktop/__init__.py: expected {version}')
++    status = (root / 'status.md').read_text(encoding='utf-8')
++    if not status.startswith(f'**{version}**'):
++        errors.append(f'status.md: current status must begin with **{version}**')
++    release = (root / 'docs' / 'RELEASE_STATUS.md').read_text(encoding='utf-8')
++    if not any(line.startswith(f'# DriveRepair release status — v{version}') for line in release.splitlines()[:3]):
++        errors.append(f'docs/RELEASE_STATUS.md: active release header must be v{version}')
++    readme = (root / 'README.md').read_text(encoding='utf-8')
++    for match in re.finditer(r'dist/DriveRepair-(\d+\.\d+\.\d+b\d+)-[^\s`"\']+\.pyz', readme):
++        if match.group(1) != version:
++            line = readme.count('\n', 0, match.start()) + 1
++            errors.append(f'README.md:{line}: active CLI example is {match.group(1)}, expected {version}')
++    return {'version': version, 'errors': errors}
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1])
++    args = parser.parse_args()
++    result = check_repository(args.root)
++    if result['errors']:
++        for error in result['errors']:
++            print('FAIL:', error)
++        return 1
++    print(f"PASS: DriveRepair {result['version']} active docs and examples agree")
++    return 0
++
++
++if __name__ == '__main__':
++    raise SystemExit(main())
+diff --git a/scripts/check_release_readiness.py b/scripts/check_release_readiness.py
+new file mode 100644
+index 0000000..de22d32
+--- /dev/null
++++ b/scripts/check_release_readiness.py
+@@ -0,0 +1,74 @@
++#!/usr/bin/env python3
++"""Fail-closed release-promotion evidence gate; does not certify hardware itself.
++
++Only consider records from an independently reviewed testing process. JSON
++can be forged: this script validates consistency, not the authenticity or
++correctness of the person who entered evidence.
++"""
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import re
++from pathlib import Path
++
++REQUIRED = ('bios_vm', 'uefi_vm', 'native_windows_qt', 'usb_dock_hw', 'hp_laptop_hw')
++
++
++def file_sha256(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open('rb') as handle:
++        for part in iter(lambda: handle.read(1024 * 1024), b''):
++            digest.update(part)
++    return digest.hexdigest()
++
++
++def evaluate(evidence: Path, artifact: Path, version: str, commit: str) -> dict:
++    failures = []
++    try:
++        record = json.loads(Path(evidence).read_text(encoding='utf-8'))
++        if not isinstance(record, dict):
++            raise ValueError('evidence must be a JSON object')
++    except (OSError, ValueError) as exc:
++        return {'ready': False, 'failures': [f'evidence unreadable: {exc}']}
++    if record.get('version') != version:
++        failures.append('version mismatch')
++    if not re.fullmatch(r'[0-9a-fA-F]{40}', commit):
++        failures.append('source_commit must be a full 40-digit Git SHA-1')
++    if record.get('source_commit') != commit:
++        failures.append('source_commit mismatch')
++    try:
++        actual_hash = file_sha256(Path(artifact))
++    except OSError as exc:
++        failures.append(f'artifact missing/unreadable: {exc}')
++    else:
++        if record.get('artifact_sha256') != actual_hash:
++            failures.append('artifact_sha256 mismatch')
++    checks = record.get('checks')
++    if not isinstance(checks, dict):
++        checks = {}
++    for key in REQUIRED:
++        entry = checks.get(key)
++        if not isinstance(entry, dict) or entry.get('status') != 'PASS' or not str(entry.get('evidence') or '').strip():
++            failures.append(f'{key}: missing independent PASS and evidence')
++    return {'ready': not failures, 'failures': failures}
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--evidence', required=True, type=Path)
++    parser.add_argument('--artifact', required=True, type=Path)
++    parser.add_argument('--version', required=True)
++    parser.add_argument('--source-commit', required=True)
++    args = parser.parse_args()
++    result = evaluate(args.evidence, args.artifact, args.version, args.source_commit)
++    for failure in result['failures']:
++        print('NOT QUALIFIED:', failure)
++    if result['ready']:
++        print('EVIDENCE COMPLETE (independent human review still required)')
++    return 0 if result['ready'] else 1
++
++
++if __name__ == '__main__':
++    raise SystemExit(main())
+diff --git a/scripts/create_clean_source_archive.py b/scripts/create_clean_source_archive.py
+index 323ce12..f74e92c 100644
+--- a/scripts/create_clean_source_archive.py
++++ b/scripts/create_clean_source_archive.py
+@@ -26,7 +26,7 @@ EXCLUDED_EXTENSIONS = frozenset({
+     '.zip', '.pyz', '.whl', '.iso', '.img', '.exe', '.dll', '.so', '.dylib',
+     '.rlib', '.rmeta', '.o', '.a', '.pdb', '.pyc', '.pyo', '.efi', '.log',
+ })
+-EXCLUDED_FILENAMES = frozenset({'.coverage', 'coverage.xml', 'Thumbs.db', '.DS_Store'})
++EXCLUDED_FILENAMES = frozenset({'.git', '.coverage', 'coverage.xml', 'Thumbs.db', '.DS_Store'})
+ 
+ 
+ def source_members(root: Path):
+diff --git a/scripts/qa_readonly_triage.ps1 b/scripts/qa_readonly_triage.ps1
+index 6267dcc..f4bcd1f 100644
+--- a/scripts/qa_readonly_triage.ps1
++++ b/scripts/qa_readonly_triage.ps1
+@@ -14,7 +14,8 @@ param(
+     [string[]]$Devices = @(),
+     [int]$Samples = 24,
+     [string]$OutputDir = "$env:USERPROFILE\dr_results",
+-    [string]$PythonExe = ''
++    [string]$PythonExe = '',
++    [string]$SmartctlExe = 'smartctl'
+ )
+ 
+ $ErrorActionPreference = 'Continue'
+@@ -83,7 +84,23 @@ try {
+         } catch {
+             $status = 'unparsed-output'
+         }
+-        $summary += [pscustomobject]@{ Device = $device; Status = $status; File = $target }
++        # Separate read-only SMART bridge command-compatibility evidence.
++        # Does not authorize a maintenance write; reports omit raw serials.
++        $smartResult = Join-Path $OutputDir "$name.smart.json"
++        $smartStatus = 'UNAVAILABLE'
++        if ($device -match '^windows:PhysicalDrive[0-9]{1,3}$') {
++            $probeTool = Join-Path $repoRoot 'scripts/qa_smart_probe.py'
++            if (Test-Path $probeTool) {
++                & $interpreter $probeTool --device $device --smartctl $SmartctlExe --output $smartResult
++                if (Test-Path $smartResult) {
++                    try {
++                        $smartStatus = (Get-Content $smartResult -Raw | ConvertFrom-Json).status
++                    } catch { $smartStatus = 'UNREADABLE' }
++                }
++            }
++        }
++        $summary += [pscustomobject]@{ Device = $device; Status = $status; File = $target;
++                                     SmartProbeStatus = $smartStatus; SmartProbeFile = $smartResult }
+     }
+ 
+     $summary | Format-Table -AutoSize | Out-String | Write-Host
+diff --git a/scripts/qa_smart_probe.py b/scripts/qa_smart_probe.py
+new file mode 100644
+index 0000000..0df518a
+--- /dev/null
++++ b/scripts/qa_smart_probe.py
+@@ -0,0 +1,96 @@
++#!/usr/bin/env python3
++"""Read-only, sanitized Windows USB bridge diagnostic for hardware QA.
++
++This is NOT a physical repair eligibility certificate or write authorization.
++Only standard smartctl identity/health queries are sent; full serial numbers,
++raw stdout/stderr, device WWNs and path-identifying JSON are not saved.
++"""
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import re
++import subprocess
++
++
++def windows_alias(device: str) -> str:
++    match = re.fullmatch(r'windows:PhysicalDrive([0-9]{1,3})', device, re.IGNORECASE)
++    if not match:
++        raise ValueError('Expected windows:PhysicalDriveN (N in 0..999); not a path or volume')
++    return '/dev/pd' + str(int(match.group(1)))
++
++
++def _attempt(executable: str, alias: str, mode: str | None, run) -> dict:
++    args = [executable, '-j', '-i', '-H']
++    if mode:
++        args += ['-d', mode]
++    args.append(alias)
++    try:
++        completed = run(args, timeout=20, capture_output=True, check=False)
++    except subprocess.TimeoutExpired:
++        return {'mode': mode or 'auto', 'status': 'TIMEOUT', 'exit_code': None}
++    except OSError:
++        return {'mode': mode or 'auto', 'status': 'TOOL_FAILED', 'exit_code': None}
++    try:
++        raw = completed.stdout
++        if isinstance(raw, bytes):
++            raw = raw[:1024*1024].decode('utf-8', errors='replace')
++        payload = json.loads(str(raw)[:1024*1024])
++    except (TypeError, ValueError):
++        payload = {}
++    if not isinstance(payload, dict):
++        payload = {}
++    smart = payload.get('smartctl') if isinstance(payload.get('smartctl'), dict) else {}
++    health = payload.get('smart_status') if isinstance(payload.get('smart_status'), dict) else {}
++    device = payload.get('device') if isinstance(payload.get('device'), dict) else {}
++    exit_bits = smart.get('exit_status')
++    if type(exit_bits) is not int:
++        exit_bits = completed.returncode
++    output = {'mode': mode or 'auto', 'status': 'UNVERIFIED',
++              'exit_code': int(completed.returncode),
++              'exit_bits': int(exit_bits) if type(exit_bits) is int else None,
++              'protocol': str(device.get('protocol') or 'unknown')[:32],
++              'smart_passed': health.get('passed') if type(health.get('passed')) is bool else None,
++              'rotation_rate_rpm': payload.get('rotation_rate') if type(payload.get('rotation_rate')) is int else None}
++    identified = bool(output['protocol'] != 'unknown' and
++                      (output['smart_passed'] is not None or output['rotation_rate_rpm'] is not None))
++    if exit_bits is not None and (exit_bits & 3) == 0 and identified:
++        output['status'] = 'PROBED_READ_ONLY'
++    return output
++
++
++def probe(device: str, *, executable: str = 'smartctl', run=subprocess.run) -> dict:
++    alias = windows_alias(device)
++    first = _attempt(executable, alias, None, run)
++    attempts = [first]
++    if first['status'] not in {'PROBED_READ_ONLY', 'TIMEOUT'}:
++        attempts.append(_attempt(executable, alias, 'sat', run))
++    return {'status': 'PROBED_READ_ONLY' if any(x['status']=='PROBED_READ_ONLY' for x in attempts) else 'UNVERIFIED',
++            'device_alias': alias, 'read_only': True, 'authorizes_writes': False,
++            'attempts': attempts, 'notice': ('Unknown/USB-bridged SMART is not a physical write permit. '
++                'Use a stable verified rotational HDD, separate journal, and exclusive lock for manual testing.')}
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--device', required=True, help='windows:PhysicalDriveN (not a Windows volume)')
++    parser.add_argument('--smartctl', default='smartctl')
++    parser.add_argument('--output', required=True, type=Path)
++    args = parser.parse_args()
++    try:
++        result = probe(args.device, executable=args.smartctl)
++    except ValueError as exc:
++        parser.error(str(exc))
++    if args.output.exists():
++        parser.error('Output exists; choose a new file to avoid overwriting QA evidence')
++    args.output.parent.mkdir(parents=True, exist_ok=True)
++    with args.output.open('x', encoding='utf-8') as handle:
++        json.dump(result, handle, indent=2)
++        handle.write('\n')
++    print(f"SMART QA {result['device_alias']}: {result['status']} (no writes, no serials saved)")
++    return 0 if result['status'] == 'PROBED_READ_ONLY' else 1
++
++
++if __name__ == '__main__':
++    raise SystemExit(main())
+diff --git a/scripts/smoke_live_iso.py b/scripts/smoke_live_iso.py
+new file mode 100644
+index 0000000..fd69438
+--- /dev/null
++++ b/scripts/smoke_live_iso.py
+@@ -0,0 +1,147 @@
++#!/usr/bin/env python3
++"""Boot a DriveRepair live ISO in isolated BIOS/UEFI QEMU VMs, no hard disks.
++
++PASS means the live guest reached XFCE and started the DriveRepair GUI process,
++then emitted a QEMU-only marker over its serial port. It does NOT qualify USB
++hardware, Secure Boot, or physical laptop compatibility. No patient storage is
++attached to these machines. Never accept a device/block special file as an ISO.
++"""
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import os
++from pathlib import Path
++import shutil
++import stat
++import subprocess
++import tempfile
++import time
++
++READY = 'DRIVEREPAIR_LIVE_READY:GUI_STARTED'
++
++
++def make_qemu_command(firmware: str, iso: str, serial: str, *,
++                      ovmf_code: str | None = None, ovmf_vars: str | None = None) -> list[str]:
++    if firmware not in {'bios', 'uefi'}:
++        raise ValueError('firmware must be bios or uefi')
++    args = ['qemu-system-x86_64', '-nodefaults', '-machine', 'pc',
++            '-m', '2048', '-smp', '2', '-vga', 'std', '-display', 'none',
++            '-nic', 'none', '-no-reboot', '-boot', 'order=d',
++            '-serial', 'file:' + str(serial), '-cdrom', str(iso)]
++    if firmware == 'uefi':
++        if not ovmf_code or not ovmf_vars:
++            raise ValueError('UEFI requires OVMF code and separate temporary variables')
++        args.extend(['-drive', 'if=pflash,format=raw,unit=0,readonly=on,file=' + str(ovmf_code),
++                     '-drive', 'if=pflash,format=raw,unit=1,file=' + str(ovmf_vars)])
++    return args
++
++
++def _ovmf_files() -> tuple[Path, Path] | None:
++    candidates = [('OVMF_CODE_4M.fd', 'OVMF_VARS_4M.fd'),
++                  ('OVMF_CODE.fd', 'OVMF_VARS.fd')]
++    for folder in ('/usr/share/OVMF', '/usr/share/ovmf/x64'):
++        for code, variables in candidates:
++            paths = Path(folder) / code, Path(folder) / variables
++            if all(path.is_file() for path in paths):
++                return paths
++    return None
++
++
++def _hash(path: Path) -> str:
++    with path.open('rb') as handle:
++        checksum = hashlib.sha256()
++        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
++            checksum.update(chunk)
++        return checksum.hexdigest()
++
++
++def boot_once(firmware: str, iso: Path, output: Path, timeout: int) -> dict:
++    serial = output / f'{firmware}.serial.log'
++    if not shutil.which('qemu-system-x86_64'):
++        return {'status': 'NOT_PROVEN', 'reason': 'qemu-system-x86_64 unavailable'}
++    with tempfile.TemporaryDirectory(prefix='driverepair-ovmf-') as temporary:
++        kwargs = {}
++        if firmware == 'uefi':
++            files = _ovmf_files()
++            if files is None:
++                return {'status': 'NOT_PROVEN', 'reason': 'OVMF firmware files unavailable'}
++            code, original_vars = files
++            vars_copy = Path(temporary) / 'OVMF_VARS.fd'
++            shutil.copyfile(original_vars, vars_copy)
++            kwargs = {'ovmf_code': str(code), 'ovmf_vars': str(vars_copy)}
++        cmd = make_qemu_command(firmware, str(iso), str(serial), **kwargs)
++        start = time.monotonic()
++        error_file = output / f'{firmware}.qemu.err'
++        stderr_handle = error_file.open('wb')
++        try:
++            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
++                                    stdout=subprocess.DEVNULL, stderr=stderr_handle)
++        except OSError as exc:
++            stderr_handle.close()
++            return {'status': 'NOT_PROVEN', 'reason': f'QEMU start failed: {exc}'}
++        result = {'status': 'FAIL', 'reason': 'no guest GUI-ready marker received'}
++        try:
++            while time.monotonic() - start < timeout:
++                if serial.is_file():
++                    # Read a bounded tail only; never ingest unbounded guest logs.
++                    with serial.open('rb') as handle:
++                        handle.seek(max(0, serial.stat().st_size - 65536))
++                        snapshot = handle.read().decode('utf-8', errors='replace')
++                    if READY in snapshot:
++                        result = {'status': 'PASS', 'reason': 'guest GUI process confirmed over serial'}
++                        break
++                    if 'DRIVEREPAIR_LIVE_FAIL:' in snapshot:
++                        result = {'status': 'FAIL', 'reason': 'guest reported boot or GUI startup failure'}
++                        break
++                if proc.poll() is not None:
++                    result = {'status': 'FAIL', 'reason': f'QEMU exited early (code {proc.returncode})'}
++                    break
++                time.sleep(1)
++            else:
++                result = {'status': 'FAIL', 'reason': f'boot timeout ({timeout}s)'}
++        finally:
++            if proc.poll() is None:
++                proc.terminate()
++                try:
++                    proc.wait(timeout=5)
++                except subprocess.TimeoutExpired:
++                    proc.kill()
++                    proc.wait(timeout=5)
++            stderr_handle.close()
++            if result['status'] != 'PASS' and error_file.is_file():
++                with error_file.open('rb') as handle:
++                    handle.seek(max(0, error_file.stat().st_size - 4096))
++                    error_output = handle.read().decode('utf-8', errors='replace').strip()
++                if error_output:
++                    result['qemu_stderr_excerpt'] = error_output[-1500:]
++        result['serial_log'] = str(serial)
++        result['elapsed_seconds'] = round(time.monotonic() - start, 1)
++        return result
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--iso', type=Path, required=True)
++    parser.add_argument('--output', type=Path, required=True)
++    parser.add_argument('--timeout-seconds', type=int, default=240)
++    parser.add_argument('--firmware', choices=['bios', 'uefi', 'both'], default='both')
++    args = parser.parse_args()
++    iso = args.iso.resolve()
++    if not iso.is_file() or not stat.S_ISREG(iso.stat().st_mode) or not iso.name.lower().endswith('.iso'):
++        parser.error('--iso must be an existing ordinary ISO file (not a raw/block device)')
++    if args.timeout_seconds < 30:
++        parser.error('boot time limit must be at least 30 seconds')
++    output = args.output.resolve()
++    output.mkdir(parents=True, exist_ok=True)
++    modes = ('bios', 'uefi') if args.firmware == 'both' else (args.firmware,)
++    result = {'iso': iso.name, 'iso_sha256': _hash(iso),
++              'tests': {mode: boot_once(mode, iso, output, args.timeout_seconds) for mode in modes}}
++    (output / 'vm_boot_evidence.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
++    print(json.dumps(result, indent=2))
++    return 0 if all(entry['status'] == 'PASS' for entry in result['tests'].values()) else 1
++
++
++if __name__ == '__main__':
++    raise SystemExit(main())
+diff --git a/status.md b/status.md
+index ceca08d..ed2eb18 100644
+--- a/status.md
++++ b/status.md
+@@ -1,3 +1,5 @@
+-**0.3.3b13 + post-b13 beta hardening (unreleased source).** Image-first public candidate `.pyz` is in `docs/releases/0.3.3b13/`. Engineering wheel/pyz remain experimental — not public hardware-repair qualified.
++**0.3.3b36** engineering snapshot (2026-11-21): NOT hardware-qualified for public physical repair or bootable media.
+ 
+-Artifacts: `DriveRepair-0.3.3b13-public-beta.pyz`, patch, source zip, handoff. See `docs/BETA_HARDENING_HANDOFF.md` and `docs/RELEASE_STATUS.md`.
++Version follows `desktop/pyproject.toml`. `docs/RELEASE_STATUS.md` records current release gates; historical b13/b18 artifacts and engineering notes remain in `docs/` and `CHANGELOG.md`.
++
++Before promotion: verified BIOS+UEFI boot, HP laptop boot and workstation launch, Windows native Qt UI, independently verified sacrificial USB-dock hardware operations, and artifact-bound evidence. A synthetic test pass is not hardware qualification.
