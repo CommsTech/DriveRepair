@@ -1,7 +1,7 @@
 # Test-validity and dead-code audit design
 
 Type: research
-Status: open
+Status: claimed
 Blocked by: —
 
 ## Question

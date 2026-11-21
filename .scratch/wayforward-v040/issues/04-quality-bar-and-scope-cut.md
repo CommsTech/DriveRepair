@@ -1,9 +1,16 @@
 # Quality bar & scope cut
 
 Type: grilling
-Status: open
-Blocked by: 01
+Status: resolved
+Blocked by: —
 
 ## Question
 
-Confirm the adoption-hardening checklist and scope cut for v0.4.0: (a) run a dead-code scan (vulture/ruff) and TODO audit to zero; (b) verify tests assert behavior — add tooling or targeted fixes where tests only check line existence; (c) fresh independent review pass by a separate agent under the Codecraft gate; (d) pause native macOS write support until the distribution bridge ships; (e) define "pristine formatting/organization" concretely (formatter config committed, CI-enforced). Owner confirms the list is the bar, or amends it.
+Confirm the adoption-hardening checklist and scope cut.
+
+## Answer
+
+RESOLVED by owner (gateway-owner), 2026-11-21:
+
+- Quality bar accepted: dead-code scan/TODO audit to zero; tests verified to assert behavior (not line existence); independent agent review under the Codecraft gate; committed formatter config, CI-enforced formatting.
+- **Scope cut confirmed and tightened**: ONE OS (Windows) working properly first; all other-OS testing and macOS native write support pause until then. End state stays cross-platform.
