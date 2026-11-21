@@ -206,6 +206,22 @@ For **clicking/grinding disks, repeated disconnects, severe SMART failure, or ir
 
 ## Get started
 
+### Skill-level paths (no silent host changes)
+
+DriveRepair never silently installs software. Choose the lightest path that matches the job:
+
+1. **Beginner / read-only triage:** use an existing Python 3.10+ install and a **public-beta zipapp** (below). No editable source install and no `smartctl` required for basic image/scan workflows.
+2. **Operator / Qt workstation:** check prerequisites, then *optionally* approve package installs:
+   ```bash
+   python scripts/setup_host_environment.py
+   python scripts/setup_host_environment.py --install-desktop-qt --approve-install
+   ```
+   On Windows only, after reading the prompt intent:
+   ```bash
+   python scripts/setup_host_environment.py --install-smartctl-windows --approve-install
+   ```
+3. **Developer / full suite:** also approve `pytest` (`--install-pytest --approve-install`). A green local suite is **not** hardware qualification.
+
 ### Requirements
 
 - **Python 3.10+** on Windows or Linux (some read-only tools also work on macOS).
