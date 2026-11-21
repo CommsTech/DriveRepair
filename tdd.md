@@ -61,3 +61,16 @@ exit 2 — the fail-closed contract observed, not just designed.
   authoritative full-suite evidence and was rerun at the tip.
 - The Windows node run is recorded with its run-log id; CI (Gitea) status
   remains unqueryable (API 404), so pipeline-green is NOT_PROVEN, not assumed.
+
+## Cycle 2 — review-driven hardening (same day)
+
+**Source.** Independent review returned SEAL with two actionable advisories:
+non-finite counter guards and a missing merged-snapshot route test.
+
+**Red.** `test_nan_counter_is_ignored_not_crashing` failed with
+`ValueError: cannot convert float NaN to integer` inside the error-count sum.
+
+**Green.** Counter guard extended with `math.isfinite`; non-finite values are
+dropped from the counters dict (absent == unavailable, safer than present).
+Also added `test_merged_snapshot_warning_routes_to_rescue` (green on arrival).
+16/16 bounded tests OK; mypy and Ruff clean on touched files.
