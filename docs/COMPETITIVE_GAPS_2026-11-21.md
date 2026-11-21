@@ -1,7 +1,7 @@
 # DriveRepair vs SpinRite and competing recovery tools
 
 **Comparison date:** 2026-11-21  
-**DriveRepair baseline:** `0.3.3b38` (extends `0.3.3b37` source)  
+**DriveRepair baseline:** `0.3.3b39` (extends `0.3.3b38` source)  
 **SpinRite publicly confirmed:** 6.1 production; 6.2 under development (UEFI boot testing reported 2026-11-17; not a published production release).
 
 This document is a **gap list and roadmap**, not a claim that every SpinRite/Sentinel write mode should be enabled. Physical failures that need replacement or a recovery lab remain out of scope for software alone.
@@ -11,7 +11,7 @@ This document is a **gap list and roadmap**, not a claim that every SpinRite/Sen
 | SpinRite capability | DriveRepair today | Gap | Priority |
 |---|---|---|---|
 | Native high-speed IDE/SATA/AHCI drivers | OS-level device interfaces (Win32/POSIX) | **Major** — no proprietary bus drivers | P6 / hardware-adjacent |
-| Intensive DynaStat-class sector recovery | Bounded rereads + experimental consensus recovery | **Partial** | P3 |
+| Intensive DynaStat-class sector recovery | Latency-prioritized weak-region pass + optional SMART bookend | **Partial** — improved in b39 | P3 |
 | Full-drive read/rewrite refresh on SSDs | SSD physical refresh not offered (fail-closed) | **Major** — needs qualified opt-in design | P2 |
 | Five operating levels (inspect → intensive rewrite) | Separate scan / rescue / restricted HDD maintenance | **Partial** — unified planner added in b38 | P2 |
 | Temperature-aware cooling + resume | Power/temperature safeguards exist | **Partial** | P3 |
@@ -84,6 +84,7 @@ Making every **media type serviceable** is not the same as claiming every **phys
 | Unified maintenance *planner* (no silent SSD writes) | **Done** (`media_maintenance.py`) |
 | Outcome-first Repair guidance wiring | **Done** (Qt ready strip, profile, eligibility dialog) |
 | Manufacturer catalog coverage | **Improved** (10 sourced entries; still incomplete) |
+| P3 weak-region latency prioritization + SMART bookend | **Done** (`weak_region_recovery.py`; still no native AHCI) |
 | P1 hardware qualification on real dock/USB/ISO | **NOT_PROVEN** — operator evidence required |
 | SSD qualified refresh engine | **Not enabled** — planned op only |
 | Native AHCI/IDE drivers / DeepSpar-class control | **Out of band** |

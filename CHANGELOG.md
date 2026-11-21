@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.3b39 — 2026-11-21: Latency-aware weak-region recovery pass
+
+- Added `weak_region_recovery.py`: media-tuned read budgets, latency-prioritized suspect ranges, optional SMART bookend (soft WATCH only). Never authorizes patient writes.
+- `recheck-scan-errors` now uses the weak-region planner; `--aggressive` and `--observe-smart` expose higher rotational budgets and SMART delta observation without changing write policy.
+- Gap matrix updated: P3 partial close vs SpinRite/OpenSuperClone troubled-sector workflows. Hardware qualification and SSD refresh remain NOT_PROVEN / disabled.
+
 ## 0.3.3b38 — 2026-11-21: Competitive gap matrix and unified media-maintenance planner
 
 - Published DriveRepair vs SpinRite 6.1 and competing recovery-tool gap matrix (`docs/COMPETITIVE_GAPS_2026-11-21.md`) with prioritized closing order P1–P6.

@@ -190,6 +190,10 @@ def parser() -> argparse.ArgumentParser:
     recheck.add_argument('--expect-fingerprint', required=True)
     recheck.add_argument('--ack-read-stress', action='store_true',
                           help='Explicit consent to focused rereads on potentially failing media')
+    recheck.add_argument('--aggressive', action='store_true',
+                          help='Raise read/time budgets slightly for rotational media; still read-only')
+    recheck.add_argument('--observe-smart', action='store_true',
+                          help='Bookend the pass with read-only SMART snapshots (soft WATCH only)')
     recheck.add_argument('--json', action='store_true')
     # Guided workflow: scan and quarantine unreadable/unstable regions, then
     # investigate bounded error ranges and refresh only repeatably readable
@@ -2116,8 +2120,17 @@ def run(argv: list[str] | None = None) -> int:
             reread = select_external_device(args.device)
             assert_stable_identity(selected, reread)
             reader = open_device_readonly(selected)
+            health_probe = None
+            if args.observe_smart:
+                from .health import health_snapshot
+
+                def health_probe():
+                    return health_snapshot(selected)
             try:
-                result = recheck_errors(scan, selected.public(), reader)
+                result = recheck_errors(
+                    scan, selected.public(), reader,
+                    aggressive=bool(args.aggressive),
+                    health_probe=health_probe)
             finally:
                 reader.close()
             last = select_external_device(args.device)
