@@ -148,6 +148,19 @@ def plan_media_maintenance(device: dict | None, snapshot: dict | None = None, *,
     ))
 
     ops.append(MaintenanceOperation(
+        key='lost_partition_scan',
+        title='Scan for lost or orphaned partitions',
+        intent='Read MBR/GPT and boot signatures without rewriting tables',
+        media_classes=('hdd', 'cmr', 'smr', 'ssd', 'nvme', 'flash', 'sd', 'unknown', 'unknown_external'),
+        writes_patient=False,
+        enabled=bool(device),
+        risk='none',
+        spinrite_level_analogue=1,
+        next_step='Run scan-lost-partitions (CLI) or image first, then TestDisk for structural writes.',
+        blockers=() if device else ('Select a drive first.',),
+    ))
+
+    ops.append(MaintenanceOperation(
         key='weak_region_reread',
         title='Bounded reread of troubled sectors',
         intent='Retry slow/failed offsets without rewriting the medium',

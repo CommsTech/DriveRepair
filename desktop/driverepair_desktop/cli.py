@@ -313,6 +313,15 @@ def parser() -> argparse.ArgumentParser:
     )
     cmd.add_argument("--image", required=True)
     cmd.add_argument("--json", action="store_true")
+    lost = sub.add_parser(
+        'scan-lost-partitions',
+        help='READ-ONLY: hypothesize MBR/GPT and boot-signature partitions (never rewrites tables)',
+    )
+    lost_src = lost.add_mutually_exclusive_group(required=True)
+    lost_src.add_argument('--image', help='Regular-file disk image')
+    lost_src.add_argument('--device', help='External whole disk id')
+    lost.add_argument('--expect-fingerprint', help='Required with --device')
+    lost.add_argument('--json', action='store_true')
     cmd = sub.add_parser('evidence-image', help='Read-only SHA-256 image hash and redacted evidence report')
     cmd.add_argument('--image', required=True)
     cmd.add_argument('--output', required=True, help='NEW JSON evidence manifest path')
@@ -2103,6 +2112,37 @@ def run(argv: list[str] | None = None) -> int:
                 print('Notice: gui-legacy is deprecated; opening the Qt workstation.',file=sys.stderr)
             from .qtgui import launch
             launch()
+            return 0
+        if args.command == 'scan-lost-partitions':
+            from .lost_partitions import scan_lost_partitions
+            if args.device:
+                if not args.expect_fingerprint:
+                    raise ValueError('--expect-fingerprint is required with --device')
+                selected = select_external_device(args.device)
+                if selected.fingerprint[:12] != args.expect_fingerprint:
+                    raise RuntimeError('Drive identity does not match lost-partition scan request')
+                reader = open_device_readonly(selected)
+                try:
+                    result = scan_lost_partitions(
+                        reader.read_at,
+                        size_bytes=selected.size_bytes,
+                        sector_size=selected.sector_size)
+                finally:
+                    reader.close()
+                result['device'] = selected.public()
+            else:
+                image_path = os.path.abspath(args.image)
+                size_bytes = os.path.getsize(image_path)
+                image_reader = ImageReader(image_path)
+                try:
+                    result = scan_lost_partitions(
+                        image_reader.read_at,
+                        size_bytes=size_bytes,
+                        sector_size=512)
+                finally:
+                    image_reader.close()
+                result['image'] = image_path
+            print(json.dumps(result, indent=2))
             return 0
         if args.command == 'recheck-scan-errors':
             if not args.ack_read_stress:

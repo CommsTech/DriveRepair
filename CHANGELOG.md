@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.3b40 — 2026-11-21: Read-only lost-partition discovery
+
+- Added `lost_partitions.py` and `scan-lost-partitions` CLI: MBR, primary/backup GPT, and boot-signature probes. Never rewrites partition tables.
+- Media-maintenance planner exposes a lost-partition scan operation for outcome-first routing toward imaging/TestDisk.
+- Gap matrix P4 partially addressed (discovery only; RAID/deep NTFS/file preview still open).
+
 ## 0.3.3b39 — 2026-11-21: Latency-aware weak-region recovery pass
 
 - Added `weak_region_recovery.py`: media-tuned read budgets, latency-prioritized suspect ranges, optional SMART bookend (soft WATCH only). Never authorizes patient writes.
