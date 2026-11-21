@@ -1372,17 +1372,23 @@ def launch():
 
         def explain_repair_eligibility(self):
             from .repair_readiness import ui_repair_readiness
+            from .media_maintenance import plan_media_maintenance, outcome_goal_for_job
+            from .dependencies import smartctl_path
             d=self.selected() or {}
             snap=self._health_by_device.get(d.get('identity_hint'))
             allowed, reason=ui_repair_readiness(d,'carequick',snapshot=snap)
+            plan=plan_media_maintenance(d, snap,
+                goal=outcome_goal_for_job(self.job_box.currentData(), 'fix'),
+                smartctl_available=bool(smartctl_path()), platform=sys.platform)
             info=QMessageBox(self)
-            info.setWindowTitle('HDD repair readiness')
+            info.setWindowTitle('What DriveRepair can do for this drive')
             info.setIcon(QMessageBox.Information if allowed else QMessageBox.Warning)
             from .repair_routes import choose_repair_route
             route=choose_repair_route(d,snap)
-            info.setText('Guarded HDD maintenance may be reviewed' if allowed
-                         else 'Drive-aware repair recommendation')
-            info.setInformativeText(route.explanation+'\n\n'+reason+'\n\n'
+            info.setText(plan.primary.title if plan.primary.enabled else
+                         ('Guarded HDD maintenance may be reviewed' if allowed
+                          else 'Drive-aware recovery recommendation'))
+            info.setInformativeText(plan.summary+'\n\n'+route.explanation+'\n\n'+reason+'\n\n'
                 'All media types can have logical filesystem problems. On Windows, '
                 'DriveRepair can review NTFS/FAT/exFAT repair with explicit backup consent. '
                 'A controller or NAND failure cannot be healed by a magnetic rewrite. '
@@ -1444,6 +1450,8 @@ def launch():
                 return
             from .media_profiles import identify_profile
             from .repair_strategy import advise
+            from .media_maintenance import plan_media_maintenance, outcome_goal_for_job
+            from .dependencies import smartctl_path
             key=d.get('identity_hint')
             snap=self._health_by_device.get(key) or {}
             try:
@@ -1466,8 +1474,15 @@ def launch():
                 labels={'scan':'read-only surface test', 'rescue':'save an image',
                         'filesystem':'repair NTFS/FAT/exFAT with approval',
                         'hdd_region':'guarded HDD region maintenance (if verified)'}
-                self.profile_note.setText('Detected: ' + title +
-                    '\nSuggested: ' + profile.recovery_method +
+                maint=plan_media_maintenance(d, snap,
+                    goal=outcome_goal_for_job(self.job_box.currentData()),
+                    smartctl_available=bool(smartctl_path()), platform=sys.platform)
+                alts='; '.join(op.title for op in maint.alternatives[:2] if op.enabled)
+                self.profile_note.setText(
+                    'Outcome: ' + maint.summary +
+                    '\nDetected: ' + title +
+                    '\nNext: ' + maint.primary.next_step +
+                    (('\nAlso available: ' + alts) if alts else '') +
                     '\nSupported workflows: ' + ', '.join(labels[m] for m in methods))
                 self.media_pipeline.set_policy(profile.kind,decision.can_attempt_hdd_refresh)
                 if self.job_box.currentData() in {'carequick','carefull','careresume'}:
@@ -1475,11 +1490,13 @@ def launch():
                     plan=choose_maintenance(model=str(d.get('model') or ''),
                         bus=str(d.get('bus') or ''), snapshot=snap,
                         mode='full' if self.job_box.currentData()=='carefull' else 'quick')
-                    self.auto_plan_note.setText(f'Automatic plan · {plan.title}. {plan.explanation}')
+                    self.auto_plan_note.setText(
+                        f'Media plan · {maint.primary.title}. Intensity · {plan.title}. {plan.explanation}')
                 self.profile_note.setToolTip('Classification: '+profile.confidence+'. '+
                     'USB is a transport, not a physical medium. '+
                     '; '.join(str(x) for x in snap.get('native_factors',[]))+'. '+profile.maintenance_note+
-                    '\nRecommendation: '+decision.label+'; '+'; '.join(decision.reasons))
+                    '\nRecommendation: '+decision.label+'; '+'; '.join(decision.reasons)+
+                    '\nPlanner: '+maint.primary.key+' ('+maint.media_class+')')
             except (ValueError,TypeError):
                 self.profile_note.setText('Unverified drive geometry — read-only rescue recommended.')
                 self.media_pipeline.set_policy('unknown',False)
@@ -2186,11 +2203,30 @@ def launch():
                     self.start.setEnabled(False)
                 self.start.setToolTip(route.explanation)
             # Keyboard start obeys exactly the same readiness decision.
-            # Keyboard start obeys exactly the same readiness decision.
             self.start_shortcut.setEnabled(enabled)
             # When a repair is ineligible, expose the non-destructive next step
             # without a cryptic failed worker run. No source write is performed.
             self.rescue_instead.setVisible(False)  # Restore is a separate workspace
+            # Outcome-first ready strip: lead with the media plan when a drive is selected.
+            if self.selected() and kind in {
+                    'carequick','carefull','careresume','winfsrepair',
+                    'scanquick','scanfull','rescue','rescuefull'}:
+                try:
+                    from .media_maintenance import plan_media_maintenance, outcome_goal_for_job
+                    from .dependencies import smartctl_path
+                    selected=self.selected() or {}
+                    maint=plan_media_maintenance(
+                        selected,
+                        self._health_by_device.get(selected.get('identity_hint')),
+                        goal=outcome_goal_for_job(kind),
+                        smartctl_available=bool(smartctl_path()),
+                        platform=sys.platform)
+                    if advice and advice != maint.summary:
+                        advice=maint.summary+' · '+advice
+                    else:
+                        advice=maint.summary
+                except (ValueError,TypeError,ImportError):
+                    pass
             self.ready_note.setText(advice)
             self.start.setToolTip(advice)
             self.device_box.setEnabled(not running and bool(self._devices))

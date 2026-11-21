@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_updated": "2026-11-19",
+  "catalog_updated": "2026-11-21",
   "description": "Manufacturer-backed model classification; never write authorization or an individual-health assessment",
   "models": [
     {
@@ -39,12 +39,74 @@
       "source_type": "manufacturer_datasheet"
     },
     {
+      "manufacturer": "Seagate",
+      "model": "ST2000DM008",
+      "match": "exact",
+      "medium": "hdd",
+      "recording": "cmr",
+      "rpm": 7200,
+      "capacity_gb": 2000,
+      "source_url": "https://www.seagate.com/products/enterprise-drives/desktop-hdd/",
+      "source_type": "manufacturer_product_specification",
+      "workload_tb_per_year_max_exclusive": 55
+    },
+    {
+      "manufacturer": "Western Digital",
+      "model": "WD10SPZX",
+      "match": "exact",
+      "medium": "hdd",
+      "recording": "smr",
+      "rpm": 5400,
+      "capacity_gb": 1000,
+      "source_url": "https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/internal-drives/wd-blue-mobile-hdd/data-sheet-wd-blue-mobile-5479-700001.pdf",
+      "source_type": "manufacturer_datasheet"
+    },
+    {
+      "manufacturer": "Western Digital",
+      "model": "WD40EFAX",
+      "match": "exact",
+      "medium": "hdd",
+      "recording": "cmr",
+      "rpm": 5400,
+      "capacity_gb": 4000,
+      "source_url": "https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/internal-drives/wd-red-hdd/data-sheet-wd-red-hdd-2879-800002.pdf",
+      "source_type": "manufacturer_datasheet"
+    },
+    {
       "manufacturer": "SanDisk",
       "model": "SDSSDH3",
       "match": "family_prefix",
       "medium": "ssd",
       "recording": null,
       "source_url": "https://www.sandisk.com/products/ssd/internal-ssd/sandisk-ultra-3d-sata-iii-ssd",
+      "source_type": "manufacturer_product_specification"
+    },
+    {
+      "manufacturer": "Samsung",
+      "model": "MZ-77E",
+      "match": "family_prefix",
+      "medium": "ssd",
+      "recording": null,
+      "source_url": "https://semiconductor.samsung.com/consumer-storage/ssd/870evo/",
+      "source_type": "manufacturer_product_specification"
+    },
+    {
+      "manufacturer": "Crucial",
+      "model": "CT500MX500SSD1",
+      "match": "exact",
+      "medium": "ssd",
+      "recording": null,
+      "source_url": "https://www.crucial.com/ssd/mx500",
+      "source_type": "manufacturer_product_specification",
+      "endurance_tbw": 180
+    },
+    {
+      "manufacturer": "Samsung",
+      "model": "MZ-V8V",
+      "match": "family_prefix",
+      "medium": "nvme",
+      "recording": null,
+      "source_url": "https://semiconductor.samsung.com/consumer-storage/ssd/980/",
       "source_type": "manufacturer_product_specification"
     }
   ]

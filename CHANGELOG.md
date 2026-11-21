@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3b38 — 2026-11-21: Competitive gap matrix and unified media-maintenance planner
+
+- Published DriveRepair vs SpinRite 6.1 and competing recovery-tool gap matrix (`docs/COMPETITIVE_GAPS_2026-11-21.md`) with prioritized closing order P1–P6.
+- Added outcome-first media-maintenance planner (`media_maintenance.py`) mapping inspect / filesystem repair / rescue / guarded HDD refresh / verification / research-only flash refresh to media class. Patient writes remain fail-closed; SSD refresh requires an explicit lab environment flag; SpinRite Level-5 analogue stays disabled.
+- Qt Repair workspace leads with planner outcome summaries (ready strip + drive profile + eligibility dialog) instead of SMART-first copy.
+- Expanded sourced manufacturer model catalog (HDD/SSD/NVMe) for advisory classification only — never write authorization.
+- Regression coverage for planner routing, catalog size, and fail-closed solid-state refresh. Hardware boot, dock writes and qualified SSD refresh remain NOT_PROVEN.
+
 ## 0.3.3b37 — 2026-11-21: Cross-media repair UX and Windows USB stick flashing candidate
 
 - Windows boot-media wizard now offers serial-less USB sticks when physical-drive enumeration and geometry are present; the modifying worker still requires Get-Disk online/non-system verification, matching model/geometry, exact target confirmation, Windows volume locks and full readback.
