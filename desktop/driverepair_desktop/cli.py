@@ -2513,3 +2513,7 @@ def run(argv: list[str] | None = None) -> int:
 
 def main() -> None:
     raise SystemExit(run())
+
+
+if __name__ == "__main__":  # python -m driverepair_desktop.cli
+    main()
