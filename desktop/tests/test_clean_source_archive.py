@@ -44,3 +44,15 @@ def test_refuse_to_package_inside_the_repo():
     tool = _loader()
     with pytest.raises(ValueError, match='outside the repository'):
         tool.build_archive(REPO, REPO / 'would_recurse.zip')
+
+
+def test_git_worktree_pointer_is_never_shipped():
+    """A worktree has a *file* named .git; it must not expose the gitdir path."""
+    tool = _loader()
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        (root / '.git').write_text('gitdir: /sensitive/checkout/paths\n')
+        (root / 'README.md').write_text('synthetic')
+        shipped = [str(relative) for _, relative in tool.source_members(root)]
+        assert 'README.md' in shipped
+        assert '.git' not in shipped

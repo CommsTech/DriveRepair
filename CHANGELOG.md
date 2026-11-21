@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.3b36 — 2026-11-21: Evidence-first agent QA and release gates (engineering source)
+
+- Added Gitea release-hygiene CI and clean-source packaging checks; active docs and executable version metadata now agree. No missing platform job can count as success.
+- Added explicit native Windows Qt and real QEMU BIOS/UEFI qualification workflow, separate from Ubuntu CI. The QEMU test has no attached disk, checks guest GUI launch over serial, and writes per-firmware evidence and ISO SHA-256. Hardware boot remains NOT_PROVEN until run.
+- Propagated DriveRepair GRUB menu configuration to both live-build BIOS and UEFI recipe directories, and synchronized portable boot-kit assets. Structural ISO checks require xorriso; firmware and physical boot still require real tests.
+- Added opt-in Windows USB dock SMART QA results using `/dev/pdN`, without storing full serial numbers or granting repair authorization.
+- Eliminated numerical scoring of uncalibrated vendor ATA 187 raw counters; an isolated warning cannot imply either 82/100 or 100/100 drive reliability.
+- Added independent artifact-bound promotion evidence validation, short agent navigation and reviewer guidance, and native Qt synthetic SSD/HDD route regression tests.
+- **No real HP boot or Windows dock writes were performed.** The project is not hardware-qualified for public physical repair.
+
+
 ## 0.3.3b35 — 2026-11-20: Live session/Windows repair routing and archive verification UX (experimental)
 
 - Added DriveRepair-branded GRUB menu for normal graphical live boot, `nomodeset` compatibility graphics, and text-only troubleshooting, using live-build's resolved kernel/initrd paths. No OS installer entry. This is a RECIPE ONLY until a rebuilt ISO passes physical BIOS/UEFI and HP tests.

@@ -1194,8 +1194,11 @@ def launch():
                 debug_trace(f'Debug tracking ON — {debug_log_path}\n')
                 self.setWindowTitle(self.windowTitle() + ' [DEBUG]')
             self.select_goal('scanquick')
-            QTimer.singleShot(100,self.refresh_devices)
-            QTimer.singleShot(1700,self._announce_missing_dependencies)
+            # Native Qt CI uses an empty synthetic inventory and must NEVER
+            # enumerate actual disks or prompt to install dependencies.
+            if os.environ.get('DRIVEREPAIR_QT_TEST_NO_DEVICES') != '1':
+                QTimer.singleShot(100,self.refresh_devices)
+                QTimer.singleShot(1700,self._announce_missing_dependencies)
 
         def _announce_missing_dependencies(self):
             # One launch-time notice, not an installer or a blocking prerequisite

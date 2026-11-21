@@ -42,7 +42,8 @@ mkdir -p config/package-lists \
   config/includes.chroot/etc/lightdm/lightdm.conf.d \
   config/includes.chroot/usr/share/driverepair \
   config/bootloaders/grub-pc \
-  config/includes.chroot/etc/systemd/system
+  config/bootloaders/grub-efi \
+  config/includes.chroot/etc/systemd/system/graphical.target.wants
 cat > config/package-lists/driverepair.list.chroot <<'EOF'
 python3
 python3-pyside6.qtcore
@@ -108,6 +109,42 @@ EOF
 # Use the SAME GRUB configuration for PC BIOS and EFI; dynamic kernel paths
 # are substituted by live-build at binary stage. Never ship a Debian-only menu.
 cp -- "$REPO/scripts/driverepair-grub.cfg" config/bootloaders/grub-pc/grub.cfg
+cp -- "$REPO/scripts/driverepair-grub.cfg" config/bootloaders/grub-efi/grub.cfg
+# A QEMU-only serial marker makes an actual graphical boot observable to CI.
+# On real machines this service exits without opening any serial port.
+cat > config/includes.chroot/usr/local/bin/driverepair-vm-boot-check <<'EOF'
+#!/bin/sh
+if ! grep -Eiq '(qemu|kvm)' /sys/class/dmi/id/sys_vendor 2>/dev/null || [ ! -c /dev/ttyS0 ]; then
+  exit 0
+fi
+for attempt in $(seq 1 45); do
+  if systemctl is-active --quiet lightdm.service &&
+     pgrep -u driverepair -f 'python3? -m driverepair_desktop.*gui' >/dev/null 2>&1; then
+    printf 'DRIVEREPAIR_LIVE_READY:GUI_STARTED\n' > /dev/ttyS0
+    exit 0
+  fi
+  sleep 2
+done
+printf 'DRIVEREPAIR_LIVE_FAIL:GUI_NOT_RUNNING\n' > /dev/ttyS0
+exit 1
+EOF
+chmod 0755 config/includes.chroot/usr/local/bin/driverepair-vm-boot-check
+cat > config/includes.chroot/etc/systemd/system/driverepair-vm-boot-check.service <<'EOF'
+[Unit]
+Description=DriveRepair VM-only graphical boot readiness signal
+After=display-manager.service
+Wants=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/driverepair-vm-boot-check
+TimeoutStartSec=110
+
+[Install]
+WantedBy=graphical.target
+EOF
+ln -s ../driverepair-vm-boot-check.service \
+  config/includes.chroot/etc/systemd/system/graphical.target.wants/driverepair-vm-boot-check.service
 cat > config/includes.chroot/etc/lightdm/lightdm.conf.d/50-driverepair-live.conf <<'EOF'
 [Seat:*]
 autologin-user=driverepair

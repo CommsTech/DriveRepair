@@ -40,6 +40,17 @@ cargo test --features "std,alloc" --lib -- --skip test_ata_port_io_read_register
     exit 1
 }
 
+echo "Checking DriveRepair release metadata (Python 3.11+)..."
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON=python3
+elif command -v python >/dev/null 2>&1; then
+    PYTHON=python
+else
+    echo "Error: Python 3.11+ is required for release metadata checks."
+    exit 1
+fi
+"$PYTHON" scripts/check_release_hygiene.py || exit 1
+
 echo "All pre-push checks passed!"
 exit 0
 

@@ -26,7 +26,7 @@ EXCLUDED_EXTENSIONS = frozenset({
     '.zip', '.pyz', '.whl', '.iso', '.img', '.exe', '.dll', '.so', '.dylib',
     '.rlib', '.rmeta', '.o', '.a', '.pdb', '.pyc', '.pyo', '.efi', '.log',
 })
-EXCLUDED_FILENAMES = frozenset({'.coverage', 'coverage.xml', 'Thumbs.db', '.DS_Store'})
+EXCLUDED_FILENAMES = frozenset({'.git', '.coverage', 'coverage.xml', 'Thumbs.db', '.DS_Store'})
 
 
 def source_members(root: Path):

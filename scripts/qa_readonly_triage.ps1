@@ -14,7 +14,8 @@ param(
     [string[]]$Devices = @(),
     [int]$Samples = 24,
     [string]$OutputDir = "$env:USERPROFILE\dr_results",
-    [string]$PythonExe = ''
+    [string]$PythonExe = '',
+    [string]$SmartctlExe = 'smartctl'
 )
 
 $ErrorActionPreference = 'Continue'
@@ -83,7 +84,23 @@ try {
         } catch {
             $status = 'unparsed-output'
         }
-        $summary += [pscustomobject]@{ Device = $device; Status = $status; File = $target }
+        # Separate read-only SMART bridge command-compatibility evidence.
+        # Does not authorize a maintenance write; reports omit raw serials.
+        $smartResult = Join-Path $OutputDir "$name.smart.json"
+        $smartStatus = 'UNAVAILABLE'
+        if ($device -match '^windows:PhysicalDrive[0-9]{1,3}$') {
+            $probeTool = Join-Path $repoRoot 'scripts/qa_smart_probe.py'
+            if (Test-Path $probeTool) {
+                & $interpreter $probeTool --device $device --smartctl $SmartctlExe --output $smartResult
+                if (Test-Path $smartResult) {
+                    try {
+                        $smartStatus = (Get-Content $smartResult -Raw | ConvertFrom-Json).status
+                    } catch { $smartStatus = 'UNREADABLE' }
+                }
+            }
+        }
+        $summary += [pscustomobject]@{ Device = $device; Status = $status; File = $target;
+                                     SmartProbeStatus = $smartStatus; SmartProbeFile = $smartResult }
     }
 
     $summary | Format-Table -AutoSize | Out-String | Write-Host

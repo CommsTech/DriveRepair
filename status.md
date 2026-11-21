@@ -1,3 +1,5 @@
-**0.3.3b13 + post-b13 beta hardening (unreleased source).** Image-first public candidate `.pyz` is in `docs/releases/0.3.3b13/`. Engineering wheel/pyz remain experimental — not public hardware-repair qualified.
+**0.3.3b36** engineering snapshot (2026-11-21): NOT hardware-qualified for public physical repair or bootable media.
 
-Artifacts: `DriveRepair-0.3.3b13-public-beta.pyz`, patch, source zip, handoff. See `docs/BETA_HARDENING_HANDOFF.md` and `docs/RELEASE_STATUS.md`.
+Version follows `desktop/pyproject.toml`. `docs/RELEASE_STATUS.md` records current release gates; historical b13/b18 artifacts and engineering notes remain in `docs/` and `CHANGELOG.md`.
+
+Before promotion: verified BIOS+UEFI boot, HP laptop boot and workstation launch, Windows native Qt UI, independently verified sacrificial USB-dock hardware operations, and artifact-bound evidence. A synthetic test pass is not hardware qualification.
