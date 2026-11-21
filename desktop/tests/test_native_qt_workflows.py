@@ -70,13 +70,22 @@ class NativeQtRepairRouteTests(unittest.TestCase):
         self.win.update_action_state()
         self.assertEqual(self.win.job_box.currentData(), 'carequick')
         self.assertFalse(self.win.start.isEnabled())
-        self.assertIn('HDD repair blocked', self.win.start.text())
+        self.assertIn('filesystem repair above', self.win.start.text())
         self.assertFalse(self.win.start_shortcut.isEnabled())
         self.assertIsNone(self.win.proc)
         route = choose_repair_route(self.win.selected(),
                                     self.win._health_by_device.get('fake-ssd'))
         self.assertEqual(route.action, 'filesystem')
         self.assertFalse(route.hdd_region_write_candidate)
+
+    def test_ssd_operator_can_explicitly_select_windows_filesystem_repair(self):
+        from unittest.mock import patch
+        self.synthetic('SanDisk SSD 500GB', 'fake-ssd', {'reported_medium':'ssd'})
+        self.win.select_goal('carequick')
+        with patch('driverepair_desktop.qtgui.sys.platform', 'win32'):
+            self.win.resolve_repair_next()
+        self.assertEqual(self.win.job_box.currentData(), 'winfsrepair')
+        self.assertIsNone(self.win.proc)  # selection never runs CHKDSK
 
     def test_hdd_ui_review_does_not_begin_a_write(self):
         from driverepair_desktop.repair_routes import choose_repair_route

@@ -783,7 +783,8 @@ def _run_extras(args) -> int:
     elif args.command == 'health':
         selected = select_external_device(args.device)
         latest = select_external_device(args.device)
-        if latest.fingerprint != selected.fingerprint:
+        from .devices import same_readonly_patient
+        if not same_readonly_patient(selected, latest):
             raise RuntimeError('Patient device changed before SMART query')
         # Preserve the health command's original fallback hooks for CLI/API
         # compatibility. Use an independent native Windows media query before

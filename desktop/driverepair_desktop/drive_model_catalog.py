@@ -36,6 +36,25 @@ def catalog_entries() -> tuple[dict, ...]:
     return tuple(entries)
 
 
+def published_model_guidance(model_name: str) -> dict | None:
+    """Return sourced manufacturer specifications, NOT a life-expectancy guess.
+
+    Many manufacturers publish workload or endurance ratings, not a maximum
+    power-on-hour lifetime. Missing service-hour specifications stay unknown.
+    """
+    matches = match_catalog_models(model_name)
+    if len(matches) != 1:
+        return None
+    row = matches[0]
+    return {
+        'manufacturer': row['manufacturer'], 'model': row['model'],
+        'source_url': row['source_url'],
+        'rated_power_on_hours': row.get('rated_power_on_hours'),
+        'workload_tb_per_year_max_exclusive': row.get('workload_tb_per_year_max_exclusive'),
+        'endurance_tbw': row.get('endurance_tbw'),
+    }
+
+
 def match_catalog_models(model_name: str) -> tuple[dict, ...]:
     """Match complete OEM model tokens, allowing a vendor prefix and suffix.
 

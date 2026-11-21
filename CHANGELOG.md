@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3b37 — 2026-11-21: Cross-media repair UX and Windows USB stick flashing candidate
+
+- Windows boot-media wizard now offers serial-less USB sticks when physical-drive enumeration and geometry are present; the modifying worker still requires Get-Disk online/non-system verification, matching model/geometry, exact target confirmation, Windows volume locks and full readback.
+- Windows operator can explicitly select filesystem repair (NTFS/exFAT/FAT) on HDD, SSD, NVMe and USB storage instead of being stranded on an HDD-only maintenance screen. Magnetic-region maintenance is still rotational-only.
+- Sourced vendor model specifications shown without requesting invented service-hour lifetime limits; Seagate ST1000LM048 listed annual workload is not a replacement deadline.
+- Read-only Windows SMART preflight tolerates a missing serial from one enumeration path when the exact physical-drive ID, geometry, model and transport still agree; all write gates remain strict.
+- Media capability advice, regression coverage and hardware qualification checklist added. USB bootability and physical Windows repairs remain unverified until tested on disposable hardware.
+
 ## 0.3.3b36 — 2026-11-21: Evidence-first agent QA and release gates (engineering source)
 
 - Added Gitea release-hygiene CI and clean-source packaging checks; active docs and executable version metadata now agree. No missing platform job can count as success.

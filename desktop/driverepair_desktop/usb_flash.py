@@ -64,10 +64,28 @@ def flash_confirmation_state(*, device_selected: bool, typed_confirmation: str,
     return True, 'Ready: all three confirmations complete. Flashing will ERASE the selected USB.'
 
 
+def eligible_flash_targets(devices: list[Device], image_size: int) -> list[Device]:
+    """Display candidates, not a write permit. Windows USB sticks often lack serials.
+
+    The CLI independently enforces Get-Disk, boot/system exclusions, live
+    identity, ISO location, volume locks and the destructive confirmation.
+    Serial-less Linux disks stay ineligible until a stronger platform-specific
+    identity check is implemented.
+    """
+    return [d for d in devices if d.bus.strip().lower() == 'usb'
+            and d.size_bytes >= image_size and d.size_bytes > 0
+            and d.sector_size in (512, 1024, 2048, 4096)
+            and (bool(d.serial.strip()) or (
+                sys.platform == 'win32' and
+                bool(re.fullmatch(r'windows:PhysicalDrive\d+', d.id)) and
+                d.path == rf'\\.\PhysicalDrive{d.id.rsplit("PhysicalDrive", 1)[-1]}'))]
+
+
 def validate_target(device: Device, image_size: int, *, expect_fingerprint: str,
                     typed_confirmation: str) -> None:
-    if not (device.bus.strip().lower() == 'usb' and device.id and device.serial.strip()):
-        raise PermissionError('USB flashing requires an external USB disk with a hardware serial')
+    if not eligible_flash_targets([device], 1):
+        raise PermissionError('USB flashing requires a verified whole USB disk; '
+                              'serial-less targets require Windows Get-Disk verification')
     if device.sector_size not in (512, 1024, 2048, 4096):
         raise PermissionError('USB logical sector geometry is unsupported')
     if device.size_bytes < image_size or image_size <= 0:
