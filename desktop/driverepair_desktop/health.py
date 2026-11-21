@@ -8,6 +8,7 @@ HealthStatus fallback may be used — it is NOT a substitute for SMART attribute
 from __future__ import annotations
 
 import json
+import math
 import re
 import subprocess
 import sys
@@ -436,6 +437,7 @@ def windows_storage_reliability(device: Device,
     counters = {
         name: raw.get(name) for name in counter_names
         if type(raw.get(name)) in {int, float} and not isinstance(raw.get(name), bool)
+        and math.isfinite(raw.get(name))
     }
     if not counters:
         return None

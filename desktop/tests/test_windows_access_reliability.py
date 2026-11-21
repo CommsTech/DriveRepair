@@ -89,6 +89,33 @@ class WindowsReliabilityTests(unittest.TestCase):
         self.assertFalse(advice.can_attempt_hdd_refresh)
         self.assertIn('Rescue', advice.label)
 
+    def test_nan_counter_is_ignored_not_crashing(self):
+        """Non-finite counter values must not raise or masquerade as errors."""
+        with mock.patch('driverepair_desktop.health.sys.platform', 'win32'):
+            report = windows_storage_reliability(
+                self.device,
+                run=self.runner(self.payload(ReadErrorsCorrected=float('nan'),
+                                             Temperature=float('nan'))))
+        self.assertEqual(report['status'], 'windows_reliability_limited')
+        self.assertEqual(media_from_smart(report), 'UNKNOWN')
+        self.assertNotIn('ReadErrorsCorrected',
+                         report['windows_storage_reliability']['counters'])
+        self.assertNotIn('Temperature',
+                         report['windows_storage_reliability']['counters'])
+
+    def test_merged_snapshot_warning_routes_to_rescue(self):
+        """A warning supplement over a weak snapshot must keep rescue routing."""
+        base = {'status': 'unknown', 'device': self.device.public()}
+        from driverepair_desktop.health import supplement_windows_reliability
+        with mock.patch('driverepair_desktop.health.sys.platform', 'win32'):
+            merged = supplement_windows_reliability(
+                self.device, base,
+                run=self.runner(self.payload(ReadErrorsUncorrected=7)))
+        self.assertEqual(merged['status'], 'windows_reliability_warning')
+        advice = advise(model=self.device.model, bus=self.device.bus, snapshot=merged)
+        self.assertFalse(advice.can_attempt_hdd_refresh)
+        self.assertIn('Rescue', advice.label)
+
     def test_counter_identity_mismatch_stays_unavailable(self):
         with mock.patch('driverepair_desktop.health.sys.platform', 'win32'):
             report = windows_storage_reliability(
