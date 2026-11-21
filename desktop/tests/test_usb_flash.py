@@ -60,6 +60,14 @@ class USBFlashTests(unittest.TestCase):
         self._gate = patch('driverepair_desktop.usb_flash.assert_windows_external_write_gate')
         self._gate.start()
         self.addCleanup(self._gate.stop)
+        # The writer flow is platform-independent once validation passes; on
+        # platforms without a native writer (e.g. darwin), run it through the
+        # Linux branch against the Linux-shaped synthetic identity so the
+        # write/verification contract stays tested on every OS.
+        if not (sys.platform == 'win32' or sys.platform.startswith('linux')):
+            self._plat = patch('driverepair_desktop.usb_flash.sys.platform', 'linux')
+            self._plat.start()
+            self.addCleanup(self._plat.stop)
 
     def test_hybrid_gate_and_explicit_consent(self):
         self.assertEqual(inspect_hybrid_iso(self.image)['bytes'],144005)
@@ -125,6 +133,17 @@ class USBFlashTests(unittest.TestCase):
             self.run_flash(disk)
         self.assertNotIsInstance(ctx.exception, PermissionError)
         self.assertTrue(disk.closed)
+
+    def test_unsupported_platform_refused_before_open(self):
+        """Platforms without a native writer fail closed before any handle."""
+        disk=FakeDisk(self.device.size_bytes)
+        with (patch('driverepair_desktop.usb_flash.sys.platform', 'darwin'),
+              patch('driverepair_desktop.usb_flash.assert_windows_external_write_gate')):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.run_flash(disk)
+        self.assertIn('Windows and Linux only', str(ctx.exception))
+        self.assertEqual(disk.write_calls, 0)
+        self.assertFalse(disk.closed)
 
     def test_stop_boundary_fails_not_success(self):
         disk=FakeDisk(self.device.size_bytes)
