@@ -5,9 +5,6 @@ repeatable read is not a checksum-verified recovered file or repaired medium.
 """
 from __future__ import annotations
 
-from .guided_repair import investigate_failed_ranges
-
-
 def checked_ranges(scan: dict, device: dict, *, maximum: int = 32) -> list[dict]:
     if not isinstance(scan, dict) or not isinstance(device, dict):
         raise ValueError('Missing previous scan and current device identity')
@@ -43,26 +40,27 @@ def checked_ranges(scan: dict, device: dict, *, maximum: int = 32) -> list[dict]
     return accepted
 
 
-def recheck_errors(scan: dict, device: dict, reader, *, max_reads: int = 96,
-                   max_elapsed_seconds: float = 75.0) -> dict:
-    ranges = checked_ranges(scan, device)
-    info = investigate_failed_ranges(reader, ranges,
-        sector=int(device['sector_size']), max_regions=len(ranges),
-        max_reads=max_reads, max_elapsed_seconds=max_elapsed_seconds,
-        max_probe_bytes=65536)
-    unresolved = info['unresolved_regions']
-    # Never use a success status for remediation: only a read-only follow-up.
-    return {'status': 'read_only_suspect_recheck_completed',
-            'device': {'identity_hint': device['identity_hint'], 'model': device.get('model')},
-            'scan_regions_considered': len(ranges),
-            'original_read_failures': scan.get('read_error_chunks'),
-            'repeatably_readable_ranges': info['consistent_regions'],
-            'unresolved_ranges': unresolved,
-            'read_calls': info['read_calls'],
-            'remaining_unchecked': bool(info.get('budget_exhausted')) or
-                                   bool(scan.get('read_error_ranges_truncated')),
-            'patient_writes': 0,
-            'verified_files': 0,
-            'message': 'Rechecked prior failed addresses without repeating the full scan. '
-                       'No source sectors were repaired or written. To save data use Rescue to image; '
-                       'repeatability does not prove original bytes.'}
+def recheck_errors(scan: dict, device: dict, reader, *, max_reads: int | None = None,
+                   max_elapsed_seconds: float | None = None,
+                   snapshot: dict | None = None,
+                   aggressive: bool = False,
+                   health_probe=None) -> dict:
+    """Latency-prioritized read-only follow-up; never writes the patient."""
+    from .weak_region_recovery import run_weak_region_pass
+
+    # Preserve legacy callers that still expect the historical status string
+    # while exposing the richer weak-region plan metadata.
+    report = run_weak_region_pass(
+        scan, device, reader,
+        snapshot=snapshot,
+        aggressive=aggressive,
+        health_probe=health_probe,
+        max_reads=max_reads,
+        max_elapsed_seconds=max_elapsed_seconds,
+    )
+    report['status'] = 'read_only_suspect_recheck_completed'
+    report['message'] = (
+        'Rechecked prior failed addresses without repeating the full scan. '
+        'No source sectors were repaired or written. To save data use Rescue to image; '
+        'repeatability does not prove original bytes.')
+    return report
