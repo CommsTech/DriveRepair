@@ -1,4 +1,4 @@
-# DriveRepair release status — v0.3.3b37 (2026-11-21)
+# DriveRepair release status — v0.3.3b38 (2026-11-21)
 
 **Status: development / guarded testing, not a hardware-qualified public physical-repair release.** The source is an engineering tree; public image-only and guarded physical-repair distributions must be built separately. The latest Python tests do not demonstrate real physical HDD repair, Windows USB flashing, correct native Qt layout, or BIOS/UEFI bootability.
 
@@ -7,6 +7,13 @@
 - `python scripts/build_desktop.py --public-beta --no-wheel`: public image-first zipapp; in-place physical writes disabled by embedded distribution policy.
 - `python scripts/build_desktop.py --repair-beta --no-wheel`: guarded beta with guided, journaled HDD-targeted writes. Only for sacrificial hardware. Requires independent evidence of rotational HDD, SMART health, stable identity/serial, explicit consent, exclusive OS access, separate journal and postverification.
 - Source/engineering CLI: includes advanced experimental commands; do not distribute as a qualified public repair product.
+
+## b38 competitive-gap tranche (decision layer)
+
+- Published gap matrix vs SpinRite 6.1 / Sentinel / Victoria / OpenSuperClone / R-Studio / Disk Drill: `docs/COMPETITIVE_GAPS_2026-11-21.md`.
+- Unified media-aware maintenance *planner* (`media_maintenance.py`): outcome-first HDD / SSD / NVMe / flash routing. SSD physical refresh remains fail-closed unless an explicit lab flag is set; Level-5 analogue stays disabled.
+- Qt Repair workspace surfaces planner summaries before dense SMART telemetry.
+- Manufacturer model catalog expanded with additional sourced HDD/SSD/NVMe entries (still advisory only).
 
 ## Engineering and test evidence
 
