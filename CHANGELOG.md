@@ -9,6 +9,7 @@
 - Removed implicit on-device CHKDSK redirection for blocked HDD techniques, including silent Windows SSD-first selection, so operator intent remains explicit. No raw-write gate was weakened.
 - Corrected Windows SMART paths to smartmontools `/dev/pdN` aliases (instead of raw Win32 paths), with identity/path cross-checks, and updated all primary, SAT and SMART-log probes. This is a suspected cause of status-bit-1 failures but requires a Windows dock retest.
 - Corrected SMART parse-error guidance: exit status bit 0 is smartctl CLI/device-type rejection, not proof of bridge hardware hiding SMART.
+- Added read-only `inspect-windows-access` diagnostics and structured WinError 5/elevation results before Windows scans. When SMART is unavailable, DriveRepair can also report exact-disk Windows Storage reliability counters as weaker telemetry; neither path becomes a SMART pass or bypasses physical-write gates.
 - Added determinate file-count progress for cold-storage baseline hashing, with fail-closed archive-list drift detection; no image or source write.
 - All live boot, hardware write and Secure Boot capabilities remain unverified on target hardware.
 

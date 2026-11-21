@@ -10,6 +10,7 @@ import ctypes
 from ctypes import wintypes
 import struct
 import sys
+from typing import Callable
 
 IOCTL_STORAGE_QUERY_PROPERTY = 0x002D1400
 IOCTL_DISK_GET_LENGTH_INFO = 0x0007405C
@@ -22,6 +23,7 @@ BUS_NAMES = {
     1: 'SCSI', 3: 'ATA', 4: '1394', 7: 'USB', 8: 'RAID', 10: 'SAS', 11: 'SATA',
     12: 'SD', 13: 'MMC', 17: 'NVMe', 18: 'SCM', 19: 'UFS',
 }
+ERROR_ACCESS_DENIED = 5
 
 
 def _string(data: bytes, offset: int) -> str | None:
@@ -132,3 +134,109 @@ def probe_physicaldrive(number: int) -> dict:
         return info
     finally:
         kernel.CloseHandle(handle)
+
+
+def windows_is_elevated() -> bool | None:
+    """Return the current Windows administrator-token state, when available.
+
+    This is an operator hint, not a write authorization. Some storage policies
+    and filter drivers deny raw access even to an administrator, so callers
+    must still test the selected PhysicalDrive handle.
+    """
+    if sys.platform != 'win32':
+        return None
+    try:
+        shell32 = ctypes.WinDLL('shell32')
+        shell32.IsUserAnAdmin.argtypes = []
+        shell32.IsUserAnAdmin.restype = ctypes.c_int
+        return bool(shell32.IsUserAnAdmin())
+    except (AttributeError, OSError, TypeError):
+        return None
+
+
+def _windows_error_code(error: BaseException) -> int | None:
+    value = getattr(error, 'winerror', None)
+    if type(value) is int:
+        return value
+    value = getattr(error, 'errno', None)
+    return value if type(value) is int else None
+
+
+def windows_access_failure(number: int, error: BaseException,
+                          *, elevated: bool | None = None) -> dict:
+    """Create a redacted, actionable report for a failed read-only open."""
+    code = _windows_error_code(error)
+    if elevated is None:
+        elevated = windows_is_elevated()
+    if code == ERROR_ACCESS_DENIED:
+        return {
+            'status': 'raw_access_denied',
+            'raw_read_access': 'denied',
+            'error_code': ERROR_ACCESS_DENIED,
+            'error': 'WinError 5 (ERROR_ACCESS_DENIED)',
+            'administrator_token': elevated,
+            'elevation_required': True,
+            'writes_performed': False,
+            'next_steps': [
+                'Run DriveRepair from an elevated Administrator session.',
+                'Close applications using the volume and check security/filter-driver policy.',
+                'If access remains denied, use a trusted read-only recovery environment or another adapter.',
+            ],
+            'notes': ('Raw access is a prerequisite for a physical-disk scan or repair. '
+                      'No scan or patient write was attempted.'),
+        }
+    return {
+        'status': 'raw_access_failed',
+        'raw_read_access': 'unknown',
+        'error_code': code,
+        'error': f'{type(error).__name__}: {str(error)[:240]}',
+        'administrator_token': elevated,
+        'elevation_required': elevated is False,
+        'writes_performed': False,
+        'next_steps': [
+            'Retry the read-only preflight after reconnecting the selected disk.',
+            'Do not bypass the Windows storage or identity checks.',
+        ],
+        'notes': 'Raw access could not be established; no scan or patient write was attempted.',
+    }
+
+
+def windows_access_preflight(device, *, probe: Callable[[int], dict] | None = None) -> dict:
+    """Probe one selected PhysicalDrive with read-only access only.
+
+    A successful descriptor query does not authorize writes; it only proves
+    that the current process can reach the selected raw handle at this moment.
+    """
+    if sys.platform != 'win32':
+        raise RuntimeError('Windows raw-access preflight is Windows-only')
+    import re
+    from .devices import Device
+    if not isinstance(device, Device):
+        raise TypeError('Windows access preflight requires a selected Device')
+    match = re.fullmatch(r'windows:PhysicalDrive(\d+)', device.id)
+    expected = rf'\\.\PhysicalDrive{match.group(1)}' if match else ''
+    if not match or device.path.casefold() != expected.casefold():
+        raise ValueError('Selected Windows device identity/path mismatch')
+    number = int(match.group(1))
+    elevated = windows_is_elevated()
+    try:
+        info = (probe or probe_physicaldrive)(number)
+    except (OSError, ValueError, TypeError) as exc:
+        return {
+            'operation': 'windows_access_preflight',
+            'device': device.public(),
+            **windows_access_failure(number, exc, elevated=elevated),
+        }
+    return {
+        'operation': 'windows_access_preflight',
+        'device': device.public(),
+        'status': 'read_only_access_available',
+        'raw_read_access': 'available',
+        'administrator_token': elevated,
+        'elevation_required': elevated is not True,
+        'writes_performed': False,
+        'descriptor': info,
+        'notes': ('Read-only PhysicalDrive access succeeded. This does not grant write authority; '
+                  'physical writes still require the independent Windows external-disk gate, '
+                  'exclusive volume locks, identity confirmation, journal and acknowledgements.'),
+    }

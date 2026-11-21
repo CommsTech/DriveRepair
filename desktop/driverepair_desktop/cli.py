@@ -139,6 +139,9 @@ def parser() -> argparse.ArgumentParser:
     win_probe = sub.add_parser('inspect-windows-disk', help='READ-ONLY: native Win32 disk properties without PowerShell (NOT write authority)')
     win_probe.add_argument('--number', type=int, required=True)
     win_probe.add_argument('--json', action='store_true')
+    win_access = sub.add_parser('inspect-windows-access', help='READ-ONLY: diagnose PhysicalDrive access, elevation and health prerequisites')
+    win_access.add_argument('--device', required=True)
+    win_access.add_argument('--json', action='store_true')
     ata_probe = sub.add_parser('inspect-windows-ata', help='READ-ONLY: ATA IDENTIFY through a compatible Windows SAT bridge; health remains unknown')
     ata_probe.add_argument('--number', type=int, required=True)
     ata_probe.add_argument('--json', action='store_true')
@@ -790,6 +793,7 @@ def _run_extras(args) -> int:
             result = supplement_inconclusive_smart(selected, health_snapshot(selected))
         except RuntimeError as exc:
             from .native_media import windows_native_snapshot
+            from .health import supplement_windows_reliability
             native = windows_native_snapshot(selected)
             coarse = windows_storage_health(selected)
             if native is not None:
@@ -797,11 +801,17 @@ def _run_extras(args) -> int:
                 if coarse and coarse.get('status') in {'failure_reported', 'windows_health_warning'}:
                     native['status'] = coarse['status']
                     native['windows_storage'] = coarse.get('windows_storage')
-                result = native
+                supplemented = supplement_windows_reliability(selected, native)
+                if supplemented is None:
+                    raise RuntimeError('Windows reliability fallback returned no snapshot')
+                result = supplemented
             elif coarse is not None:
                 coarse['smart_unavailable_reason'] = str(exc)
                 coarse.setdefault('notes', 'Windows HealthStatus only; not SMART attributes or a write permit.')
-                result = coarse
+                supplemented = supplement_windows_reliability(selected, coarse)
+                if supplemented is None:
+                    raise RuntimeError('Windows reliability fallback returned no snapshot')
+                result = supplemented
             else:
                 result = {'status': 'unknown', 'device': selected.public(),
                           'reason': str(exc),
@@ -2055,6 +2065,21 @@ def run(argv: list[str] | None = None) -> int:
             from .host_capabilities import inspect_readonly
             print(json.dumps(inspect_readonly(args.device),indent=2))
             return 0
+        if args.command == 'inspect-windows-access':
+            from .dependencies import smartctl_path
+            from .windows_native import windows_access_preflight
+            selected = select_external_device(args.device)
+            access = windows_access_preflight(selected)
+            result = {
+                **access,
+                'smartctl_available': bool(smartctl_path()),
+                'health': try_health_snapshot(selected),
+                'writes_performed': False,
+                'notes': (str(access.get('notes') or '') + ' '
+                          'This command performs read-only prerequisite checks only.'),
+            }
+            print(json.dumps(result, indent=2) if args.json else result, flush=True)
+            return 0 if access.get('status') == 'read_only_access_available' else 2
         if args.command == 'inspect-windows-ata':
             from .ata_identity import inspect_windows_sat
             print(json.dumps(inspect_windows_sat(args.number), indent=2))
@@ -2221,7 +2246,53 @@ def run(argv: list[str] | None = None) -> int:
             size = device.size_bytes
             sector = device.sector_size
             context = {"device": device.public()}
-            reader = open_device_readonly(device)
+            if sys.platform == 'win32':
+                from .windows_native import windows_access_failure, windows_access_preflight
+                access = windows_access_preflight(device)
+                if access.get('status') != 'read_only_access_available':
+                    blocked = {
+                        'status': 'blocked_windows_raw_access',
+                        'device': device.public(),
+                        'scan_performed': False,
+                        'writes_performed': False,
+                        'access_preflight': access,
+                        'next_step': ('Run inspect-windows-access from an elevated Administrator '
+                                      'session, then retry. Do not bypass identity or access gates.'),
+                    }
+                    if args.json:
+                        print(json.dumps(blocked, indent=2))
+                    else:
+                        print('Scan blocked before opening the patient: ' +
+                              str((access.get('error') or access.get('notes') or 'raw access unavailable')),
+                              file=sys.stderr)
+                    return 2
+                try:
+                    reader = open_device_readonly(device)
+                except PermissionError as exc:
+                    number = int(device.id.rsplit('PhysicalDrive', 1)[-1])
+                    blocked = {
+                        'status': 'blocked_windows_raw_access',
+                        'device': device.public(),
+                        'scan_performed': False,
+                        'writes_performed': False,
+                        'access_preflight': {
+                            'operation': 'windows_access_preflight',
+                            'device': device.public(),
+                            **windows_access_failure(
+                                number, exc,
+                                elevated=access.get('administrator_token'),
+                            ),
+                        },
+                        'next_step': 'Retry the read-only preflight after stabilizing Windows raw access.',
+                    }
+                    if args.json:
+                        print(json.dumps(blocked, indent=2))
+                    else:
+                        print('Scan blocked before opening the patient: ' +
+                              str(exc), file=sys.stderr)
+                    return 2
+            else:
+                reader = open_device_readonly(device)
         else:
             image = os.path.abspath(args.image)
             reader = ImageReader(image)

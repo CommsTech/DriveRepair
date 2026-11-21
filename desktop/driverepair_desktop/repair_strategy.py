@@ -63,6 +63,13 @@ def advise(*, model: str = '', bus: str = '', media_type: str = '',
         return RepairAdvice('stabilize_connection', 'Stabilize the cable, dock or bus; then rescue', False,
                             ('Transport errors detected; rewrites risk corrupting otherwise readable data.',),
                             profile.kind, 'transport_warning')
+    if (snap.get('windows_reliability_status') == 'windows_reliability_warning' or
+            snap.get('status') == 'windows_reliability_warning'):
+        return RepairAdvice(
+            'rescue_replace', 'Rescue data and investigate Windows reliability warnings', False,
+            ('Windows Storage reliability counters report errors or high temperature. '
+             'They are weaker than ATA SMART and do not qualify an in-place refresh.',),
+            profile.kind, 'native_reliability_warning')
     temp = snap.get('temperature_c')
     if isinstance(temp, (int, float)) and not isinstance(temp, bool) and temp >= 55:
         return RepairAdvice('cool_rescue', 'Cool drive and prioritize rescue', False,

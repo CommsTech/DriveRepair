@@ -375,6 +375,123 @@ def windows_storage_health(device: Device,
     }
 
 
+def windows_storage_reliability(device: Device,
+                                run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> dict | None:
+    """Read Windows Storage reliability counters for exactly one PhysicalDrive.
+
+    These are useful native observations when ATA SMART is unavailable, but
+    they are not an ATA SMART pass and never authorize patient writes. The
+    selected Get-Disk number is matched to exactly one Get-PhysicalDisk object
+    before the counter query is made; ambiguous or mismatched results stay
+    unavailable.
+    """
+    if not sys.platform.startswith('win'):
+        return None
+    match = re.fullmatch(r'windows:PhysicalDrive(\d+)', device.id)
+    if not match:
+        return None
+    number = int(match.group(1))
+    script = (
+        f'$d = Get-Disk -Number {number} -ErrorAction Stop; '
+        '$p = @(Get-PhysicalDisk -ErrorAction Stop | Where-Object { '
+        '($_.DeviceId -eq [string]$d.Number) -or '
+        '($d.UniqueId -and $_.UniqueId -and $_.UniqueId -eq $d.UniqueId) }); '
+        'if ($p.Count -ne 1) { throw "Physical disk identity is not unique" }; '
+        '$c = Get-StorageReliabilityCounter -PhysicalDisk $p[0] -ErrorAction Stop; '
+        '[pscustomobject]@{ DiskNumber=[int]$d.Number; '
+        'PhysicalDeviceId=[string]$p[0].DeviceId; '
+        'Temperature=$c.Temperature; TemperatureMax=$c.TemperatureMax; '
+        'ReadErrorsCorrected=$c.ReadErrorsCorrected; ReadErrorsTotal=$c.ReadErrorsTotal; '
+        'ReadErrorsUncorrected=$c.ReadErrorsUncorrected; '
+        'WriteErrorsCorrected=$c.WriteErrorsCorrected; WriteErrorsTotal=$c.WriteErrorsTotal; '
+        'WriteErrorsUncorrected=$c.WriteErrorsUncorrected; Wear=$c.Wear; '
+        'PowerOnHours=$c.PowerOnHours; LoadUnloadCycleCount=$c.LoadUnloadCycleCount; '
+        'StartStopCycleCount=$c.StartStopCycleCount } | ConvertTo-Json -Compress'
+    )
+    try:
+        proc = run(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command', script],
+            capture_output=True, timeout=12, check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0 or not proc.stdout:
+        return None
+    try:
+        raw = json.loads(proc.stdout.decode('utf-8-sig'))
+    except (ValueError, UnicodeError, AttributeError):
+        return None
+    if not isinstance(raw, dict) or raw.get('DiskNumber') != number:
+        return None
+    if str(raw.get('PhysicalDeviceId') or '').strip() not in {str(number), ''}:
+        # The PowerShell query selected the disk by number, but a contradictory
+        # returned DeviceId is evidence of a stale/ambiguous storage mapping.
+        return None
+    counter_names = (
+        'Temperature', 'TemperatureMax', 'ReadErrorsCorrected', 'ReadErrorsTotal',
+        'ReadErrorsUncorrected', 'WriteErrorsCorrected', 'WriteErrorsTotal',
+        'WriteErrorsUncorrected', 'Wear', 'PowerOnHours', 'LoadUnloadCycleCount',
+        'StartStopCycleCount',
+    )
+    counters = {
+        name: raw.get(name) for name in counter_names
+        if type(raw.get(name)) in {int, float} and not isinstance(raw.get(name), bool)
+    }
+    if not counters:
+        return None
+    error_count = sum(
+        int(counters.get(name) or 0)
+        for name in ('ReadErrorsCorrected', 'ReadErrorsTotal',
+                     'ReadErrorsUncorrected', 'WriteErrorsCorrected',
+                     'WriteErrorsTotal', 'WriteErrorsUncorrected')
+        if isinstance(counters.get(name), (int, float))
+    )
+    hot = (isinstance(counters.get('Temperature'), (int, float)) and
+           counters['Temperature'] >= 55)
+    status = ('windows_reliability_warning' if error_count > 0 or hot
+              else 'windows_reliability_limited')
+    return {
+        'status': status,
+        'source': 'windows_storage_reliability',
+        'device': device.public(),
+        'windows_storage_reliability': {
+            'disk_number': number,
+            'identity_verified': True,
+            'counters': counters,
+        },
+        'smartctl_exit_status': None,
+        'smart_status_passed': None,
+        'reported_medium': 'unknown',
+        'temperature_c': counters.get('Temperature'),
+        'nvme': {},
+        'ata_selected_raw_attributes': [],
+        'notes': (
+            'Windows Storage reliability counters are read-only driver telemetry, not ATA SMART. '
+            'A limited result is not a health pass; error or temperature warnings require rescue '
+            'and connection/drive investigation. No self-test, erase, remap, refresh or repair was started.'
+        ),
+    }
+
+
+def supplement_windows_reliability(device: Device, snapshot: dict | None,
+                                   *, run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> dict | None:
+    """Attach native reliability telemetry without promoting it to SMART."""
+    reliability = windows_storage_reliability(device, run=run)
+    if reliability is None:
+        return snapshot
+    if snapshot is None:
+        return reliability
+    merged = dict(snapshot)
+    merged['windows_storage_reliability'] = reliability['windows_storage_reliability']
+    merged['windows_reliability_status'] = reliability['status']
+    if (snapshot.get('status') in {'unknown', 'windows_health_limited',
+                                   'windows_native_unverified'} and
+            reliability['status'] == 'windows_reliability_warning'):
+        merged['status'] = reliability['status']
+    merged['notes'] = str(snapshot.get('notes') or '') + ' ' + reliability['notes']
+    return merged
+
+
 def supplement_inconclusive_smart(device: Device, snapshot: dict) -> dict:
     """Use native Windows identification when a SMART reply lacks media type.
 
@@ -431,7 +548,7 @@ def try_health_snapshot(device: Device,
             if coarse and coarse.get('status') in {'failure_reported','windows_health_warning'}:
                 native['status'] = coarse['status']
                 native['windows_storage'] = coarse.get('windows_storage')
-            return native
+            return supplement_windows_reliability(device, native, run=run)
         # Linux live recovery has an additional, non-SMART observation source:
         # sysfs. It may help choose a conservative rescue profile but must
         # NEVER qualify any HDD for physical writes (native_hdd_corrob=False).
@@ -446,7 +563,7 @@ def try_health_snapshot(device: Device,
         coarse = windows_storage_health(device, run=run)
         if coarse is not None:
             coarse['smart_unavailable_reason'] = str(exc)
-        return coarse
+        return supplement_windows_reliability(device, coarse, run=run)
 
 
 def media_from_smart(snapshot: dict | None) -> str:
@@ -461,6 +578,10 @@ def media_from_smart(snapshot: dict | None) -> str:
     if status == "windows_health_limited":
         # Windows Storage HealthStatus lacks SMART attributes. Even when it says
         # 'Healthy', do not imply the medium passed an actual media-health check.
+        return "UNKNOWN"
+    if status == "windows_reliability_warning":
+        return "WARN"
+    if status == "windows_reliability_limited":
         return "UNKNOWN"
     attrs = {
         int(item.get("id")): item.get("raw_value")
